@@ -132,7 +132,7 @@ Yes—agents are normal Python classes, so you can instantiate or subclass them 
 **Is Pydantic mandatory?**  
 You don't need to import it directly; AgentLib uses it internally for validation generated from your function signatures.  However, you can use Pydantic models directly by passing them to the tool decorator, or you can pass a model generator function.
 
-**What about concurrency?**
+**What about concurrency?**  
 AgentLib doesn't implement concurrency internally, but it's thread-safe, allowing you to safely use it in multi-threaded applications—which is exactly what we do in production. It also works well with gevent. We'll consider adding async/await support based on our own production needs or community intrest.
 
 
