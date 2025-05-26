@@ -15,7 +15,6 @@
 - [How It Works](#how-it-works)
 - [Supported LLM Providers](#supported-llm-providers)
 - [Installation](#installation)
-- [Roadmap](#roadmap)
 - [FAQ](#faq)
 - [Contributing](#contributing)
 - [License](#license)
@@ -60,7 +59,8 @@ pip install git+https://github.com/jacobsparts/agentlib.git
 export GOOGLE_API_KEY=sk-...
 
 # 3. Run the minimal agent
-python examples/todo_agent.py
+python examples/todo_agent.py # First run builds a todo list and writes to sqlite
+python examples/todo_agent.py # Second run retrieves todo items
 ```
 
 Or copy–paste the snippet below into a new file:
