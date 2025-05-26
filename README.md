@@ -41,7 +41,7 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 
 • **Python-native agent classes** – subclass `BaseAgent`, add methods, you’re done.  
 • **Decorator-based tool registry** – function signature & docstring ⇒ tool schema; Pydantic validation happens behind the scenes.  
-• **Runtime tool mutation** – Dynamically adjust tool parameters, enums, or availability at any step, improving agent focus and performance by presenting only relevant options.
+• **Runtime tool mutation** – Dynamically adjust tool parameters, enums, or availability at any step, improving agent focus and performance by presenting only relevant options. 
 • **Clean separation** – LLM orchestration lives in the core; your business logic lives in agents and tools.  
 • **Conversation management** – tracks multi-turn context and system prompts for you.  
 • **Provider-agnostic** – OpenAI, Google, X.AI, OpenRouter, or roll your own.  
