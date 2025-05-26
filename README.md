@@ -42,8 +42,8 @@ print(agent.run("What is the factorial of 20?"))
 
 ## Why AgentLib?
 
-AgentLib was forged in a real business fire-drill: sudden tariff changes demanded an adaptive pricing system immediately.
-To iterate at the speed required, and to ensure the power, flexibility, and simplicity we needed, we built from first principles. This clean-slate approach resulted in a disciplined, minimal codebase that went straight into production.
+AgentLib was born from necessity during a business crisis—sudden tariff changes required an adaptive pricing system immediately. We needed to iterate at unprecedented speed, so we built from first principles: a minimal foundation that went straight into production.
+
 The result:
 
 * **Production-proven.** Powers our live dynamic-pricing, product-classification, and customer-support automations.  
