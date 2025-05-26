@@ -1,5 +1,12 @@
 # AgentLib
 
+*A lightweight library for crafting and shipping LLM agents quickly, powered by Python signatures and Pydantic under the hood.*
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+&nbsp;
+![Python 3.9‒3.12](https://img.shields.io/badge/python-3.9‒3.12-blue)
+&nbsp;
+
 ```python
 from agentlib import BaseAgent
 
@@ -17,13 +24,6 @@ agent = FactorialAgent()
 print(agent.run("What is the factorial of 20?"))
 # Output: 2432902008176640000
 ```
-
-*A lightweight library for crafting and shipping LLM agents quickly, powered by Python signatures and Pydantic under the hood.*
-
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-&nbsp;
-![Python 3.9‒3.12](https://img.shields.io/badge/python-3.9‒3.12-blue)
-&nbsp;
 
 <!--ts-->
 ## Table of Contents
