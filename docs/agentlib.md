@@ -97,13 +97,24 @@ The `@BaseAgent.tool` decorator supports three methods for defining parameter ty
 
 ### Conversation Flow
 
-An agent follows this flow:
-1. Receive a user message
-2. Process the message through the LLM
-3. The LLM either responds directly or calls a tool
-4. If a tool is called, its result is added to the conversation
-5. Steps 2-4 repeat until `self.complete = True`
-6. The final response is returned to the caller
+An agent using the default `run()` method follows this flow:
+
+1. **User message**: The agent receives a user message via `agent.run(message)`
+2. **LLM processing**: The message is processed by the LLM with available tools
+3. **Tool execution**: The LLM is required to call one or more tools (no direct text responses)
+4. **Tool result**: The tool's return value is added to the conversation
+5. **Loop continuation**: Steps 2-4 repeat until a tool sets `self.complete = True`
+6. **Direct return**: When `self.complete = True`, the final tool's return value is passed directly back to the user without further LLM processing. This response is also appended to the conversation for future context.
+
+This design gives developers precise control over the final response structure and format.
+
+### Key Behaviors
+
+- **Chat mode**: `agent.chat(message)` provides direct LLM responses without tool-calling loops
+- **Context retention**: Agent instances maintain conversation state across multiple `run()` calls automatically
+- **Custom control flow**: Override `run()` for preprocessing, custom loops, or entirely different interaction patterns
+- **Inheritance support**: Create base classes that inherit from BaseAgent with custom `run()` methods for reuse across agent types
+- **Typical pattern**: Use completion tools like `respond_to_user(message)` that set `self.complete = True` for formatted text responses
 
 ## 4. Building Agents Step-by-Step
 
