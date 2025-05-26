@@ -1,5 +1,23 @@
 # AgentLib
 
+```python
+from agentlib import BaseAgent
+
+class FactorialAgent(BaseAgent):
+    model = "google/gemini-2.5-flash"
+    system = "You are a factorial calculation assistant. Use the tool to fulfill user requests."
+    
+    @BaseAgent.tool
+    def factorial(self, number: int = "Number to calculate factorial for"):
+        """Return the factorial of the input number."""
+        self.complete = True  # Marks conversation done
+        return 1 if number == 0 else number * self.factorial(number - 1)
+
+agent = FactorialAgent()
+print(agent.run("What is the factorial of 20?"))
+# Output: 2432902008176640000
+```
+
 *A lightweight library for crafting and shipping LLM agents quickly, powered by Python signatures and Pydantic under the hood.*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -38,7 +56,7 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 
 ## Features
 
-• **Python-native agent classes** – subclass `BaseAgent`, add methods, you’re done.  
+• **Python-native agent classes** – subclass `BaseAgent`, add methods, you're done.  
 • **Decorator-based tool registry** – function signature & docstring ⇒ tool schema; Pydantic validation happens behind the scenes.  
 • **Runtime tool mutation** – Dynamically adjust tool parameters, enums, or availability at any step, improving agent focus and performance by presenting only relevant options.  
 • **Clean separation** – LLM orchestration lives in the core; your business logic lives in agents and tools.  
@@ -94,7 +112,7 @@ google/gemini-2.5-flash: In=342, Out=54, Rsn=61, Cost=$0.000
 ## How It Works
 
 1. **Define tools** with ordinary Python functions.  
-2. A metaclass decorator captures each function’s signature & docstring, generating a JSON schema with Pydantic.  
+2. A metaclass decorator captures each function's signature & docstring, generating a JSON schema with Pydantic.  
 3. At runtime the agent builds a prompt that exposes available tools to the LLM.  
 4. The LLM selects a tool; AgentLib routes calls, validates inputs/outputs, and appends results to the conversation.  
 5. The cycle repeats until `agent.complete` is `True` or max turns are reached.  
