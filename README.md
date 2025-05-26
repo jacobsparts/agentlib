@@ -1,80 +1,148 @@
 # AgentLib
 
-A lightweight framework for building LLM-powered agents with first-class tool support.
+*A lightweight library for crafting and shipping LLM agents quickly, powered by Python signatures and Pydantic under the hood.*
 
-## Overview
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+&nbsp;
+![Python 3.9‒3.12](https://img.shields.io/badge/python-3.9‒3.12-blue)
+&nbsp;
 
-AgentLib makes it easy to create AI agents that can:
-- Maintain conversation context
-- Use tools to perform actions
-- Integrate with various LLM providers
-- Handle multi-turn interactions
+<!--ts-->
+## Table of Contents
+- [Why AgentLib?](#why-agentlib)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [How It Works](#how-it-works)
+- [Supported LLM Providers](#supported-llm-providers)
+- [Installation](#installation)
+- [Roadmap](#roadmap)
+- [FAQ](#faq)
+- [Contributing](#contributing)
+- [License](#license)
+<!--te-->
+
+---
+
+## Why AgentLib?
+
+AgentLib grew out of a real business fire-drill: sudden tariff changes forced us to roll out an adaptive pricing system *immediately*.  
+Existing agent frameworks were powerful but felt heavy for rapid iteration.  
+So we distilled the essentials into ~1 kLOC of disciplined Python and put it straight into production.  
+The result:
+
+* **Production-proven.** Powers our live dynamic-pricing, product-classification, and customer-support automations.  
+* **Fast iteration.** New tools or model swaps are often a one-line change.  
+* **Minimal deps.** Only `pydantic` (v1 & v2) and `python-dotenv`.  
+
+Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in minimalist agent design.
+
+---
 
 ## Features
 
-- **Simple Agent Creation**: Define agents with minimal boilerplate
-- **Tool Registration System**: Add capabilities with simple decorators
-- **LLM Integration**: Support for multiple providers (OpenAI, Google, X.AI, etc.)
-- **Conversation Management**: Built-in handling of multi-turn interactions
-- **Type Validation**: Automatic validation of tool inputs and outputs
+• **Python-native agent classes** – subclass `BaseAgent`, add methods, you’re done.  
+• **Decorator-based tool registry** – function signature & docstring ⇒ tool schema; Pydantic validation happens behind the scenes.  
+• **Runtime tool mutation** – tweak parameters or add tools without restarting the app.  
+• **Clean separation** – LLM orchestration lives in the core; your business logic lives in agents and tools.  
+• **Conversation management** – tracks multi-turn context and system prompts for you.  
+• **Provider-agnostic** – OpenAI, Google, X.AI, OpenRouter, or roll your own.  
+• **Tool call emulation** – Enables both native and emulated tool calls with built-in validation and retry, bypassing inconsistent or poor constrained output performance.
 
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/jacobstoner/agentlib.git
-cd agentlib
-
-# Install in development mode
-pip install -e .
-```
+---
 
 ## Quick Start
+
+```bash
+# 1. Install
+pip install git+https://github.com/jacobsparts/agentlib.git
+
+# 2. Set an API key (example: Google Gemini)
+export GOOGLE_API_KEY=sk-...
+
+# 3. Run the minimal agent
+python examples/todo_agent.py
+```
+
+Or copy–paste the snippet below into a new file:
 
 ```python
 from agentlib import BaseAgent
 import hashlib
 
 class HashAgent(BaseAgent):
-    model = 'google/gemini-2.5-flash'
-    system = "You are a hashing assistant. Use the tool when needed to fulfill the user's request."
+    model = "google/gemini-2.5-flash"
+    system = "You are a hashing assistant. Use the tool to fulfill user requests."
 
     @BaseAgent.tool
     def sha256(self, text: str = "Text to hash"):
         """Return the SHA-256 hex digest of the input text."""
-        self.complete = True
+        self.complete = True                 # marks conversation done
         return hashlib.sha256(text.encode()).hexdigest()
 
 agent = HashAgent()
 print(agent.run("What is the SHA-256 of hello world?"))
 ```
 
-## Documentation
+Expected output:
 
-For detailed usage instructions, see the [tutorial](docs/agentlib.md).
+```
+b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+google/gemini-2.5-flash: In=342, Out=54, Rsn=61, Cost=$0.000
+```
 
-For a complete example, check out the [Todo Agent](examples/todo_agent.py).
+---
+
+## How It Works
+
+1. **Define tools** with ordinary Python functions.  
+2. A metaclass decorator captures each function’s signature & docstring, generating a JSON schema with Pydantic.  
+3. At runtime the agent builds a prompt that exposes available tools to the LLM.  
+4. The LLM selects a tool (or answers directly); AgentLib routes calls, validates inputs/outputs, and appends results to the conversation.  
+5. The cycle repeats until `agent.complete` is `True` or max turns are reached.
+
+---
 
 ## Supported LLM Providers
 
-AgentLib supports multiple LLM providers through API keys:
+| Provider | Env var key        |
+|----------|--------------------|
+| OpenAI   | `OPENAI_API_KEY`   |
+| Google   | `GOOGLE_API_KEY`   |
+| X.AI     | `XAI_API_KEY`      |
+| OpenRouter | `OPENROUTER_API_KEY` |
 
-- OpenAI
-- Google
-- X.AI
-- OpenRouter
+Add more chat completions compatible endpoints with `register_provider` and `register_model`.  See `llm_registry.py` for details.
 
-### Setting Up API Keys
+---
 
-1. Copy the `.env.example` file to `.env`
-2. Add your API keys to the `.env` file
+## Installation
 
 ```bash
-cp .env.example .env
-# Edit .env with your API keys
+pip install git+https://github.com/jacobsparts/agentlib.git
 ```
 
+AgentLib supports Python 3.9+ on Linux.  Untested on macOS and Windows.
+
+---
+
+## FAQ
+
+**Can I compose agents?**  
+Yes—agents are normal Python classes, so you can instantiate or subclass them inside each other.
+
+**Is Pydantic mandatory?**  
+You don't need to import it directly; AgentLib uses it internally for validation generated from your function signatures.  However, you can use Pydantic models directly by passing them to the tool decorator, or you can pass a model generator function.
+
+
+---
+
+## Contributing
+
+Issues, feature requests, and pull requests are welcome.  
+
+---
 
 ## License
 
-Released under the MIT License. See the [LICENSE](LICENSE) file for details.
+AgentLib is released under the MIT License.  
+See [LICENSE](LICENSE) for the full text.
