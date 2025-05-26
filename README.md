@@ -33,19 +33,20 @@ pip install -e .
 
 ```python
 from agentlib import BaseAgent
+import hashlib
 
-class SimpleAgent(BaseAgent):
+class HashAgent(BaseAgent):
     model = 'google/gemini-2.5-flash'
-    system = "You are a helpful assistant."
+    system = "You are a hashing assistant. Use the tool when needed to fulfill the user's request."
 
     @BaseAgent.tool
-    def get_data(self, query: str = "The search query"):
-        """Retrieve information."""
-        return f"Results for: {query}"
+    def sha256(self, text: str = "Text to hash"):
+        """Return the SHA-256 hex digest of the input text."""
+        self.complete = True
+        return hashlib.sha256(text.encode()).hexdigest()
 
-# Use the agent
-agent = SimpleAgent()
-response = agent.run("Find information about Python")
+agent = HashAgent()
+print(agent.run("What is the SHA-256 of hello world?"))
 ```
 
 ## Documentation
