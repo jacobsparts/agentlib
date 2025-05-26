@@ -24,9 +24,8 @@
 
 ## Why AgentLib?
 
-AgentLib grew out of a real business fire-drill: sudden tariff changes forced us to roll out an adaptive pricing system *immediately*.  
-Existing agent frameworks were powerful but felt heavy for rapid iteration.  
-So we distilled the essentials into ~1 kLOC of disciplined Python and put it straight into production.  
+AgentLib was forged in a real business fire-drill: sudden tariff changes demanded an adaptive pricing system immediately.
+To iterate at the speed required, and to ensure the power, flexibility, and simplicity we needed, we built from first principles. This clean-slate approach resulted in a disciplined, minimal codebase that went straight into production.
 The result:
 
 * **Production-proven.** Powers our live dynamic-pricing, product-classification, and customer-support automations.  
