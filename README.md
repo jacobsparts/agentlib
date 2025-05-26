@@ -96,8 +96,9 @@ google/gemini-2.5-flash: In=342, Out=54, Rsn=61, Cost=$0.000
 1. **Define tools** with ordinary Python functions.  
 2. A metaclass decorator captures each function’s signature & docstring, generating a JSON schema with Pydantic.  
 3. At runtime the agent builds a prompt that exposes available tools to the LLM.  
-4. The LLM selects a tool (or answers directly); AgentLib routes calls, validates inputs/outputs, and appends results to the conversation.  
-5. The cycle repeats until `agent.complete` is `True` or max turns are reached.
+4. The LLM selects a tool; AgentLib routes calls, validates inputs/outputs, and appends results to the conversation.  
+5. The cycle repeats until `agent.complete` is `True` or max turns are reached.  
+6. An agent is typically *required* to make at least one tool call, until a tool marks complete--it's return value is then sent directly to the caller, bypassing a final agent response. This differs from the usual user-agent-tool-agent-user flow. The loop is simple and customizable via the run method. Agents can be called directly without tools using the chat method.  The run method can be invoked multiple times, retaining context.  
 
 ---
 
