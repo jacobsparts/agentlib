@@ -63,6 +63,7 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 • **Conversation management** – tracks multi-turn context and system prompts for you.  
 • **Provider-agnostic** – OpenAI, Google, X.AI, OpenRouter, or roll your own.  
 • **Tool call emulation** – Enables both native and emulated tool calls with built-in validation and retry, bypassing inconsistent or poor constrained output performance.
+• **Attachment system** - Inject named external data (files, JSON, etc.) into conversations as dynamic context, with automatic formatting and smart invalidation on content changes.  
 
 ---
 

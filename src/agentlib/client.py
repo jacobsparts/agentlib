@@ -11,6 +11,7 @@ from collections import defaultdict
 
 from .utils import throttle, JSON_INDENT, UsageTracker
 from .llm_registry import get_model_config
+from .conversation import Conversation
 
 logger = logging.getLogger('agentlib')
 
@@ -407,5 +408,4 @@ class LLMClient:
 
 
     def conversation(self, system_prompt):
-        from .conversation import Conversation
         return Conversation(self, system_prompt)
