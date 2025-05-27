@@ -15,13 +15,20 @@ class TaskProcessingAgent(Agent):
 
     def __init__(self):
         super().__init__()
-        self._init_db()
+        self.db_path = Path("tasks.db")
+        self._conn = None
+
+    @property
+    def conn(self):
+        """Get the database connection, initializing it if needed."""
+        if self._conn is None:
+            self._init_db()
+        return self._conn
 
     def _init_db(self):
         """Initialize the SQLite database and create the tasks table if it doesn't exist."""
-        self.db_path = Path("tasks.db")
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        self._conn = sqlite3.connect(self.db_path)
+        cursor = self._conn.cursor()
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,8 +38,7 @@ class TaskProcessingAgent(Agent):
             created_at TEXT NOT NULL
         )
         ''')
-        conn.commit()
-        conn.close()
+        self._conn.commit()
 
     @Agent.tool
     def schedule_new_task(self,
@@ -42,9 +48,8 @@ class TaskProcessingAgent(Agent):
         """Schedules a new task with the given details and persists it to the database."""
         self.complete = True
         
-        # Connect to the database
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        # Use the persistent connection
+        cursor = self.conn.cursor()
         
         # Insert the task into the database
         created_at = datetime.datetime.now().isoformat()
@@ -56,8 +61,7 @@ class TaskProcessingAgent(Agent):
         )
         
         task_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+        self.conn.commit()
         
         _due = f" due {date}" if date else ''
         resp = f"Task '{description}'{_due} with {priority} priority has been scheduled and saved to database with ID {task_id}."
@@ -66,11 +70,9 @@ class TaskProcessingAgent(Agent):
     @Agent.tool
     def get_all_tasks(self):
         """Retrieves all tasks from the database."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        cursor = self.conn.cursor()
         cursor.execute("SELECT id, description, date, priority, created_at FROM tasks ORDER BY id DESC")
         tasks = cursor.fetchall()
-        conn.close()
         
         if not tasks:
             return "No tasks found in the database."
@@ -86,11 +88,9 @@ class TaskProcessingAgent(Agent):
     @Agent.tool
     def get_tasks_by_priority(self, priority: Literal["high", "medium", "low"] = "The priority to filter by."):
         """Retrieves tasks with the specified priority."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        cursor = self.conn.cursor()
         cursor.execute("SELECT id, description, date, priority, created_at FROM tasks WHERE priority = ? ORDER BY id DESC", (priority,))
         tasks = cursor.fetchall()
-        conn.close()
         
         if not tasks:
             return f"No tasks with {priority} priority found in the database."
@@ -108,11 +108,9 @@ class TaskProcessingAgent(Agent):
         """Retrieves tasks scheduled for the specified date."""
         date_str = str(date)
         
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        cursor = self.conn.cursor()
         cursor.execute("SELECT id, description, date, priority, created_at FROM tasks WHERE date = ? ORDER BY id DESC", (date_str,))
         tasks = cursor.fetchall()
-        conn.close()
         
         if not tasks:
             return f"No tasks scheduled for {date} found in the database."
