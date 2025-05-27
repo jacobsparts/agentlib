@@ -202,7 +202,7 @@ def main():
             print("Agent:", agent.run(msg))
 
         # For the summary, we can use chat since it doesn't require tool execution
-        msg = "Give me a plaintext summary list of today's requests."
+        msg = "Give me a summary of today's requests. Respond directly with a plaintext list."
         print(f"User: {msg}\nAgent: {agent.chat(msg)}")
         print(f"\n----- Execute the script again to see the retrieval demo -----")
     
