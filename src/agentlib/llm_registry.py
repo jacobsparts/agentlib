@@ -62,10 +62,11 @@ get_model_config = registry.get_model_config
 register_provider("openai",
     host="api.openai.com",
     path="/v1/chat/completions",
-    tpm=10,
+    tpm=100,
     concurrency=30,
     timeout=300,
     tools=True,
+    api_type="completions",
 )
 register_model("openai","o4-mini",
     model="o4-mini",
@@ -94,25 +95,21 @@ register_model("openai","gpt-4.1-nano",
     output_cost=0.4,
 )
 
-# --- X.AI ---
-register_provider("xai",
-    host="api.x.ai",
-    path="/v1/chat/completions",
-    tpm=50,
-    concurrency=50,
+# --- Anthropic ---
+register_provider("anthropic",
+    host="api.anthropic.com",
+    path="/v1/messages",
+    tpm=100,
+    concurrency=30,
     timeout=300,
-    tools=True,
+    tools=False,
+    api_type="messages"
 )
-register_model("xai","grok-3",
-    model="grok-3",
-    input_cost=3.0,
+register_model("anthropic","claude-sonnet-4",
+    model="claude-sonnet-4-20250514",
+    input_cost=3.00,
+    cached_cost=0.3,
     output_cost=15.0,
-)
-register_model("xai","grok-3-mini",
-    model="grok-3-mini",
-    config={"reasoning_effort": "high"},
-    input_cost=0.30,
-    output_cost=0.50,
 )
 
 # --- Google ---
@@ -123,6 +120,7 @@ register_provider("google",
     concurrency=3,
     timeout=None,
     tools=False,
+    api_type="completions",
 )
 register_model("google","gemini-2.5-flash",
     model="gemini-2.5-flash-preview-05-20",
@@ -139,12 +137,35 @@ register_model("google","gemini-2.0-flash",
     output_cost=0.4,
 )
 
+# --- X.AI ---
+register_provider("xai",
+    host="api.x.ai",
+    path="/v1/chat/completions",
+    tpm=50,
+    concurrency=50,
+    timeout=300,
+    tools=True,
+    api_type="completions",
+)
+register_model("xai","grok-3",
+    model="grok-3",
+    input_cost=3.0,
+    output_cost=15.0,
+)
+register_model("xai","grok-3-mini",
+    model="grok-3-mini",
+    config={"reasoning_effort": "high"},
+    input_cost=0.30,
+    output_cost=0.50,
+)
+
 # --- OpenRouter ---
 register_provider("openrouter",
     host="openrouter.ai",
     path="/api/v1/chat/completions",
     timeout=300,
     tools=None,
+    api_type="completions",
 )
 lambda_config = {'provider': {'order': ['Lambda'], 'allow_fallbacks': False}}
 novita_config = {'provider': {'order': ['Novita'], 'allow_fallbacks': False}}

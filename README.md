@@ -125,6 +125,7 @@ google/gemini-2.5-flash: In=342, Out=54, Rsn=61, Cost=$0.000
 | Provider | Env var key        |
 |----------|--------------------|
 | OpenAI   | `OPENAI_API_KEY`   |
+| Anthropic | `ANTHROPIC_API_KEY`   |
 | Google   | `GOOGLE_API_KEY`   |
 | X.AI     | `XAI_API_KEY`      |
 | OpenRouter | `OPENROUTER_API_KEY` |

@@ -51,7 +51,7 @@ class UsageTracker:
             input_cost = prompt_tokens * (model_config.get('input_cost',0) / 1000000.0)
             cached_cost = cached_tokens * (model_config.get('cached_cost',0) / 1000000.0)
             output_cost = completion_tokens * (model_config.get('output_cost',0) / 1000000.0)
-            reasoning_cost =  reasoning_tokens * (model_config.get('reasoning_cost', model_config.get('output_cost',0)) / 1000000.0)
+            reasoning_cost = reasoning_tokens * ((model_config.get('reasoning_cost', model_config.get('output_cost')) or output_cost) / 1000000.0)
             if model_name.startswith('gemini-2.5-pro') and prompt_tokens > 200000:
                 input_cost *= 2
                 output_cost *= 1.5
