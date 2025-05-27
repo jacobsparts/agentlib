@@ -216,8 +216,6 @@ def main():
         ]:
                 print("User:", msg)
                 print("Agent:", agent.run(msg))
-        msg = "Give me a plaintext summary list of today's requests."
-        print(f"User: {msg}\nAgent: {agent.chat(msg)}")
 
 if __name__ == "__main__":
     main()

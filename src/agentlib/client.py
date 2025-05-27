@@ -24,54 +24,27 @@ class LLMClient:
     def __init__(self, model_name):
         self.model_name = model_name
         self.model_config = get_model_config(model_name)
-        if not self.model_config['api_type'] == "completions":
-            raise NotImplementedError(self.model_config['api_type'])
         self.timeout = self.model_config.get('timeout', 300)
         self.concurrency_lock = threading.BoundedSemaphore(self.model_config.get('concurrency',10))
 
-    @staticmethod
-    def _sleep_backoff(attempt, base=15):
-        """
-        Exponential back-off helper. Sleeps for `base * 2**attempt` seconds.
-        """
-        time.sleep(base * (2 ** attempt))
-
-    def prepare_message(self, m):
-        # Tool call emulation
-        if 'tool_calls' in m:
-            tool_calls_str = json.dumps({ "function_calls": [ {
-                "name": tc['function']['name'],
-                "arguments": json.loads(tc['function']['arguments']),
-            } for tc in m['tool_calls'] ] }, indent=JSON_INDENT)
-            return {'role': 'assistant', 'content': f"{m['content']}\n{tool_calls_str}".strip()}
-        elif m['role'] == 'tool':
-            return {'role': 'user', 'content': f"{m['name']}: {m['content']}"}
-        else:
-            return m
-
-    def _call(self, messages, tools=None):
-        if not self.model_config.get('tools'):
-            messages = [ self.prepare_message(msg) for msg in messages ]
+    def _call_completions(self, messages, tools):
         req = {
             "model": self.model_config['model'],
             "messages": messages,
             **self.model_config.get('config', {})
         }
         if tools:
-            assert self.model_config.get('tools'), f"{self.model_name} not configured for direct tool use"
             req.update({
                 "tools": tools,
                 "tool_choice": "required",
             })
-        api_key = self.model_config['api_key']
-        port = self.model_config.get('port', 443)
-        if port == 443:
+        if self.model_config['port'] == 443:
             conn = http.client.HTTPSConnection(self.model_config['host'], timeout=self.timeout)
         else:
-            conn = http.client.HTTPConnection(self.model_config['host'], port, timeout=self.timeout)
+            conn = http.client.HTTPConnection(self.model_config['host'], self.model_config['port'], timeout=self.timeout)
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {self.model_config['api_key']}",
         }
         body = json.dumps(req)
         try:
@@ -101,12 +74,52 @@ class LLMClient:
             if usage := response_json.get('usage'):
                 self.usage_tracker.log(self.model_name, usage)
             if not 'choices' in response_json:
-                print(response_json)
-            return response_json
+                raise Exception(f"choices missing from response: {response_json}")
+            return response_json['choices'][0]['message']
         finally:
             conn.close()
 
-    def _to_fn_def(self, tools):
+    def prepare_message(self, m):
+        # Tool call emulation
+        if 'tool_calls' in m:
+            tool_calls_str = json.dumps({ "function_calls": [ {
+                "name": tc['function']['name'],
+                "arguments": json.loads(tc['function']['arguments']),
+            } for tc in m['tool_calls'] ] }, indent=JSON_INDENT)
+            return {'role': 'assistant', 'content': f"{m['content']}\n{tool_calls_str}".strip()}
+        elif m['role'] == 'tool':
+            return {'role': 'user', 'content': f"{m['name']}: {m['content']}"}
+        else:
+            return m
+
+    def _call(self, messages, tools=None):
+        if not self.model_config.get('tools'):
+            messages = [ self.prepare_message(msg) for msg in messages ]
+        if self.model_config['api_type'] == "completions":
+            return self._call_completions(messages, tools)
+        else:
+            raise NotImplementedError(self.model_config['api_type'])
+
+    @staticmethod
+    def _sleep_backoff(attempt, base=15):
+        """
+        Exponential back-off helper. Sleeps for `base * 2**attempt` seconds.
+        """
+        time.sleep(base * (2 ** attempt))
+
+    def text_call(self, messages, retry=3, attempt=0):
+        try:
+            with self.concurrency_lock:
+                return self._call(messages)
+        except Exception as e:
+            err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
+            logger.error(f"text_call {type(e).__name__}: {err}")
+            if retry:
+                self._sleep_backoff(attempt)
+                return self.text_call(messages, retry-1, attempt+1)
+            raise
+
+    def tool_call_native(self, messages, tools, retry=5):
         _tools = []
         for name, tool in tools.items():
             schema = tool.model_json_schema()
@@ -119,29 +132,11 @@ class LLMClient:
                     'parameters': schema
                 }
             })
-        return _tools
-
-    def text_call(self, messages, retry=3, attempt=0):
-        try:
-            with self.concurrency_lock:
-                resp = self._call(messages)
-            return resp['choices'][0]['message']
-        except Exception as e:
-            err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
-            logger.error(f"text_call {type(e).__name__}: {err}")
-            if retry:
-                self._sleep_backoff(attempt)
-                return self.text_call(messages, retry-1, attempt+1)
-            raise
-
-    def tool_call_native(self, messages, tools, retry=5):
-        _tools = self._to_fn_def(tools)
         
         for attempt in range(retry + 1):
             try:
                 with self.concurrency_lock:
-                    resp = self._call(messages, _tools)
-                resp_msg = resp['choices'][0]['message']
+                    resp_msg = self._call(messages, _tools)
                 if not resp_msg.get("tool_calls"):
                     content = resp_msg.get('content', '')
                     err = f"tool_calls missing from response: {content[:1000]}{'...' if len(content) > 1000 else ''}"
@@ -235,7 +230,7 @@ class LLMClient:
             _messages.append({"role": "user", "content": instructions})
         try:
             with self.concurrency_lock:
-                resp = self._call(_messages)
+                resp_msg = self._call(_messages)
         except Exception as e:
             err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
             logger.error(f"tool_call_shim {type(e).__name__}: {err}")
@@ -244,7 +239,6 @@ class LLMClient:
                 return self.tool_call_shim(messages, tools, retry-1, attempt+1)
             raise
         try:
-            resp_msg = resp['choices'][0]['message']
             content = resp_msg['content']
             json_start_index = content.find('{')
             if json_start_index == -1:
