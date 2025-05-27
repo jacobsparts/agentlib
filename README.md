@@ -33,6 +33,7 @@ print(agent.run("What is the factorial of 20?"))
 - [How It Works](#how-it-works)
 - [Supported LLM Providers](#supported-llm-providers)
 - [Installation](#installation)
+- [Roadmap](#roadmap)
 - [FAQ](#faq)
 - [Contributing](#contributing)
 - [License](#license)
@@ -64,6 +65,8 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 • **Provider-agnostic** – OpenAI, Anthropic, Google, X.AI, OpenRouter, or roll your own.  
 • **Tool call emulation** – Enables both native and emulated tool calls with built-in validation and retry, bypassing inconsistent or poor constrained output performance.  
 • **Attachment system** - Inject named external data (files, JSON, etc.) into conversations as dynamic context, with automatic formatting and smart invalidation on content changes.  
+• **Multi-tool calls in a single LLM turn** – Execute multiple tools efficiently in one response.  
+• **Automatic retry with exponential back-off** – Built-in resilience for API failures and rate limits.  
 
 ---
 
@@ -142,6 +145,18 @@ pip install git+https://github.com/jacobsparts/agentlib.git
 ```
 
 AgentLib supports Python 3.9+ on Linux.  Untested on macOS and Windows.
+
+---
+
+## Roadmap
+
+• **Expanded documentation and richer examples** – More comprehensive guides and real-world use cases.  
+• **OpenAI Responses (JSON mode) API support** – Structured output generation with schema validation.  
+• **Vertex AI endpoint + OAuth 2.0 service-account auth** – Enterprise-grade Google Cloud integration (cleanup & release).  
+• **Native Google AI APIs** – Direct integration with non-OpenAI-compatible Google endpoints.  
+• **MCP tool integration** – Model Context Protocol support for enhanced tool capabilities.  
+• **async / await interface** – Asynchronous operation support for high-concurrency applications.  
+• **Context-window management and summarization primitives** – Intelligent conversation history management.  
 
 ---
 
