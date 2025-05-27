@@ -21,13 +21,15 @@ class BadRequestError(Exception): pass
 class LLMClient:
     usage_tracker = UsageTracker()
     
-    def __init__(self, model_name):
+    def __init__(self, model_name, native=None):
         self.model_name = model_name
         self.model_config = get_model_config(model_name)
         self.timeout = self.model_config.get('timeout', 300)
         self.concurrency_lock = threading.BoundedSemaphore(self.model_config.get('concurrency',10))
+        self.native = self.model_config.get('tools') if native is None else native
 
     def _call_completions(self, messages, tools):
+        # OpenAI Completions API-compatible format
         req = {
             "model": self.model_config['model'],
             "messages": messages,
@@ -80,13 +82,17 @@ class LLMClient:
             conn.close()
 
     def _call_messages(self, messages, tools):
+        # Anthropic Messages API-compatible format
         system_message = None
-        filtered_messages = []
+        _messages = []
         for msg in messages:
             if msg['role'] == 'system':
-                system_message = msg['content']
+                if system_message is None:
+                    system_message = msg['content']
+                else:
+                    _messages.append({**msg, 'role': 'user'})
             elif msg['role'] == 'tool':
-                filtered_messages.append({
+                _messages.append({
                     'role': 'user',
                     'content': [{
                         'type': 'tool_result',
@@ -94,13 +100,25 @@ class LLMClient:
                         'content': msg['content']
                     }]
                 })
-            elif 'tool_calls' in msg:
-                raise NotImplementedError("anthropic native tool calls unsupported")
+            elif msg['role'] == 'assistant' and 'tool_calls' in msg:
+                content = []
+                if text := msg['content']:
+                    assert isinstance(text, str)
+                    content.append({"type": "text", "text": text})
+                for row in msg['tool_calls']:
+                    tc = row['function']
+                    content.append({
+                        "type": "tool_use",
+                        "id": row['id'],
+                        "name": tc['name'],
+                        "input": json.loads(tc['arguments'])
+                    })
+                _messages.append({'role': 'assistant', 'content': content})
             else:
-                filtered_messages.append(msg)
+                _messages.append(msg)
         req = {
             "model": self.model_config['model'],
-            "messages": filtered_messages,
+            "messages": _messages,
             "max_tokens": self.model_config.get('config', {}).get('max_tokens', 4096),
             **{k: v for k, v in self.model_config.get('config', {}).items() if k != 'max_tokens'}
         }
@@ -154,6 +172,7 @@ class LLMClient:
                     content += content_block['text']
                 elif content_block['type'] == 'tool_use':
                     tool_calls.append({
+                        'id': content_block['id'],
                         'function': {
                             'name': content_block['name'],
                             'arguments': json.dumps(content_block['input'])
@@ -183,7 +202,7 @@ class LLMClient:
             return m
 
     def _call(self, messages, tools=None):
-        if not self.model_config.get('tools'):
+        if not self.native:
             messages = [ self.prepare_message(msg) for msg in messages ]
         if self.model_config['api_type'] == "completions":
             return self._call_completions(messages, tools)
@@ -381,7 +400,7 @@ class LLMClient:
     def call(self, messages, tools=None):
         if tools is None:
             return self.text_call(messages)
-        elif self.model_config.get('tools'):
+        elif self.native:
             return self.tool_call_native(messages, tools)
         else:
             return self.tool_call_shim(messages, tools)

@@ -8,6 +8,8 @@ from typing import Literal
 import pydantic
 from pydantic import BaseModel, Field, create_model
 
+from .client import LLMClient
+
 logger = logging.getLogger('agentlib')
 
 class AgentMeta(type):
@@ -114,8 +116,8 @@ class BaseAgent(metaclass=AgentMeta):
             return self._llm_client
         except AttributeError:
             assert hasattr(self, 'model'), "model must be defined"
-            from .client import LLMClient
-            self._llm_client = LLMClient(self.model)
+            native = self.native if hasattr(self, 'native') else None
+            self._llm_client = LLMClient(self.model, native=native)
             return self._llm_client
 
     @property

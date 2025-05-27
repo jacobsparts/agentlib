@@ -18,13 +18,6 @@ class TaskProcessingAgent(Agent):
         self.db_path = Path("tasks.db")
         self._conn = None
 
-    @property
-    def conn(self):
-        """Get the database connection, initializing it if needed."""
-        if self._conn is None:
-            self._init_db()
-        return self._conn
-
     def _init_db(self):
         """Initialize the SQLite database and create the tasks table if it doesn't exist."""
         self._conn = sqlite3.connect(self.db_path)
@@ -39,6 +32,13 @@ class TaskProcessingAgent(Agent):
         )
         ''')
         self._conn.commit()
+
+    @property
+    def conn(self):
+        """Get the database connection, initializing it if needed."""
+        if self._conn is None:
+            self._init_db()
+        return self._conn
 
     @Agent.tool
     def schedule_new_task(self,

@@ -102,7 +102,7 @@ register_provider("anthropic",
     tpm=100,
     concurrency=30,
     timeout=300,
-    tools=False,
+    tools=True,
     api_type="messages"
 )
 register_model("anthropic","claude-sonnet-4",
@@ -119,7 +119,7 @@ register_provider("google",
     tpm=5,
     concurrency=3,
     timeout=None,
-    tools=False,
+    tools=True,
     api_type="completions",
 )
 register_model("google","gemini-2.5-flash",
