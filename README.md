@@ -151,12 +151,10 @@ AgentLib supports Python 3.9+ on Linux.  Untested on macOS and Windows.
 ## Roadmap
 
 • **Expanded documentation and richer examples** – More comprehensive guides and real-world use cases.  
-• **OpenAI Responses (JSON mode) API support** – Structured output generation with schema validation.  
 • **Vertex AI endpoint + OAuth 2.0 service-account auth** – Enterprise-grade Google Cloud integration (cleanup & release).  
 • **Native Google AI APIs** – Direct integration with non-OpenAI-compatible Google endpoints.  
-• **MCP tool integration** – Model Context Protocol support for enhanced tool capabilities.  
-• **async / await interface** – Asynchronous operation support for high-concurrency applications.  
-• **Context-window management and summarization primitives** – Intelligent conversation history management.  
+• **MCP tool integration** – Model Context Protocol support for external tool calling.  
+• **Explicit context management API** – Expose methods for users to directly inspect and modify conversation history and state.  
 
 ---
 
