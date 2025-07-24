@@ -16,7 +16,7 @@ class FactorialAgent(BaseAgent):
     
     @BaseAgent.tool
     def factorial(self, number: int = "Number to calculate factorial for"):
-        """Return the factorial of the input number."""
+        """Calculates a factorial."""
         self.complete = True  # Marks conversation done
         return 1 if number == 0 else number * self.factorial(number - 1)
 

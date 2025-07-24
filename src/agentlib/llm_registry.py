@@ -94,6 +94,13 @@ register_model("openai","gpt-4.1-nano",
     input_cost=0.1,
     output_cost=0.4,
 )
+register_model("openai","o3",
+    model="o3",
+    input_cost=1.0,
+    output_cost=4.0,
+    config={"reasoning_effort": "medium", "service_tier": "flex"},
+    timeout=900,
+)
 
 # --- Anthropic ---
 register_provider("anthropic",
