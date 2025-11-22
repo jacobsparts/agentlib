@@ -3,6 +3,7 @@ assert sys.version_info >= (3, 8), "Requires Python 3.8+"
 import os
 import json
 import http.client
+import socket
 import urllib.parse
 import threading
 import time
@@ -43,6 +44,12 @@ class LLMClient:
             })
         if self.model_config['port'] == 443:
             conn = http.client.HTTPSConnection(self.model_config['host'], timeout=self.timeout)
+            conn.connect()
+            sock = conn.sock
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)     # 60 sec idle before keepalive
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)    # 10 sec between probes
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)       # 3 probes before giving up
         else:
             conn = http.client.HTTPConnection(self.model_config['host'], self.model_config['port'], timeout=self.timeout)
         headers = {
@@ -64,8 +71,7 @@ class LLMClient:
                 logger.info(response_data)
             if response.status == 429:
                 logger.warning("Throttled. Waiting 20s")
-                with throttle(self.model_config['host']):
-                    time.sleep(20)
+                time.sleep(20)
                 raise Exception("Throttled")
             if response.status == 400:
                 logger.debug(req)
@@ -155,8 +161,7 @@ class LLMClient:
                 logger.info(response_data)
             if response.status == 429:
                 logger.warning("Throttled. Waiting 20s")
-                with throttle(self.model_config['host']):
-                    time.sleep(20)
+                time.sleep(20)
                 raise Exception("Throttled")
             if response.status == 400:
                 logger.debug(req)
