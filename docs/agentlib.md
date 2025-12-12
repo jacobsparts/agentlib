@@ -30,8 +30,7 @@ class PricingAgent(BaseAgent):
     ):
         """Use this tool to set a price."""
         print(f"Reason: {reason}")
-        self.complete = True
-        return price
+        self.respond(price)
 
 if __name__ == "__main__":
     import random
@@ -103,8 +102,8 @@ An agent using the default `run()` method follows this flow:
 2. **LLM processing**: The message is processed by the LLM with available tools
 3. **Tool execution**: The LLM is required to call one or more tools (no direct text responses)
 4. **Tool result**: The tool's return value is added to the conversation
-5. **Loop continuation**: Steps 2-4 repeat until a tool sets `self.complete = True`
-6. **Direct return**: When `self.complete = True`, the final tool's return value is passed directly back to the user without further LLM processing. This response is also appended to the conversation for future context.
+5. **Loop continuation**: Steps 2-4 repeat until a tool calls `self.respond(value)`
+6. **Direct return**: When `self.respond(value)` is called, the value is passed directly back to the user without further LLM processing. This response is also appended to the conversation for future context.
 
 This design gives developers precise control over the final response structure and format.
 
@@ -114,7 +113,7 @@ This design gives developers precise control over the final response structure a
 - **Context retention**: Agent instances maintain conversation state across multiple `run()` calls automatically
 - **Custom control flow**: Override `run()` for preprocessing, custom loops, or entirely different interaction patterns
 - **Inheritance support**: Create base classes that inherit from BaseAgent with custom `run()` methods for reuse across agent types
-- **Typical pattern**: Use completion tools like `respond_to_user(message)` that set `self.complete = True` for formatted text responses
+- **Typical pattern**: Use completion tools like `respond_to_user(message)` that call `self.respond(message)` for formatted text responses
 
 ## 4. Building Agents Step-by-Step
 
@@ -160,15 +159,14 @@ def run(self, item_name, max_turns=5):
 ## 5. Control Flow and State Management
 
 ### Managing Completion
-Set `self.complete = True` when your agent has finished its task. This signals the run loop to return:
+Call `self.respond(value)` when your agent has finished its task. This signals the run loop to return the provided value:
 
 ```python
 @BaseAgent.tool
 def resolve_issue(self, solution: str = "The solution provided"):
     """Mark an issue as resolved."""
     # Implementation
-    self.complete = True
-    return "Issue resolved: " + solution
+    self.respond("Issue resolved: " + solution)
 ```
 
 ### Maintaining State
@@ -230,8 +228,7 @@ class PricingAgent(BaseAgent):
         """Use this tool to set a final price for the item."""
         print(f"Pricing rationale for {quality} quality: {reason}")
         self.pricing_history[self.current_item] = {'price': price, 'quality': quality}
-        self.complete = True
-        return f"Price for {quality} {self.current_item} set to ${price:.2f}"
+        self.respond(f"Price for {quality} {self.current_item} set to ${price:.2f}")
 
     def run(self, item, max_turns=5):
         self.current_item = item # Set instance variable for tools to use
@@ -256,7 +253,7 @@ agentlib provides a flexible framework for building LLM-powered agents:
 1. **Define your agent** by subclassing BaseAgent
 2. **Add tools** using the @BaseAgent.tool decorator
 3. **Manage state** with instance variables
-4. **Control flow** by setting self.complete
+4. **Control flow** with self.respond()
 5. **Handle errors** with specialized tools
 
 This foundation allows you to create sophisticated agents with minimal code while handling the complexity of LLM interactions for you. For advanced use cases, agentlib also supports agent composition, where one agent can use another agent as a tool.
