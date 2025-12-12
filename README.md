@@ -7,6 +7,8 @@
 ![Python 3.9‒3.12](https://img.shields.io/badge/python-3.9‒3.12-blue)
 &nbsp;
 
+> **🤖 AI-Assisted Development:** AgentLib is designed to work seamlessly with coding agents like Claude Code. Just add [`docs/LLM_GUIDE.md`](docs/LLM_GUIDE.md) to your context and start building.
+
 ```python
 from agentlib import BaseAgent
 
