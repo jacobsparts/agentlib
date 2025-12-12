@@ -181,6 +181,6 @@ class BaseAgent(metaclass=AgentMeta):
         self.usermsg(msg)
         return self.run_loop(max_turns=max_turns)
 
-    def respond(self, value):
+    def respond(self, value=None):
         self._complete_value = value
         raise _CompleteException()
