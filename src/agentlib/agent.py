@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field, create_model
 
 from .client import LLMClient
 
+class _CompleteException(BaseException):
+    pass
+
 logger = logging.getLogger('agentlib')
 
 class AgentMeta(type):
@@ -156,7 +159,14 @@ class BaseAgent(metaclass=AgentMeta):
             for tool_call in resp_msg["tool_calls"]:
                 function_name = tool_call['function']['name']
                 function_args = json.loads(tool_call['function']['arguments'])
-                tool_response = self.toolcall(function_name, function_args)
+                try:
+                    tool_response = self.toolcall(function_name, function_args)
+                except _CompleteException:
+                    pass
+                if hasattr(self, '_complete_value'):
+                    tool_response = self._complete_value
+                    self.complete = True
+                    del self._complete_value
                 if logger.isEnabledFor(logging.INFO):
                     logger.info(f"{function_name}: {tool_response}")
                 if not tool_response and not self.complete:
@@ -164,11 +174,13 @@ class BaseAgent(metaclass=AgentMeta):
                 self.toolmsg(tool_response or "Success", name=function_name, tool_call_id=tool_call.get('id',''))
                 if self.complete:
                     return tool_response
-            if self.complete:
-                break
         else:
             raise self.TurnLimitError(f"Turn limit of {max_turns} exceeded")
 
     def run(self, msg, max_turns=10):
         self.usermsg(msg)
         return self.run_loop(max_turns=max_turns)
+
+    def respond(self, value):
+        self._complete_value = value
+        raise _CompleteException()

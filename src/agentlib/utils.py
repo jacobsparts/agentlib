@@ -35,15 +35,17 @@ class UsageTracker:
             model_config = get_model_config(model_name)
             cached_tokens = (usage.get('prompt_tokens_details') or {}).get('cached_tokens',0)
             prompt_tokens = usage.get('prompt_tokens', 0) - cached_tokens
+            assert prompt_tokens >= 0, f"negative prompt token count: {usage}"
             reasoning_tokens = (usage.get('completion_tokens_details') or {}).get('reasoning_tokens',0)
             completion_tokens = usage.get('completion_tokens', 0)
-            if 'gemini' in model_name:
-                reasoning_tokens = max(usage.get('total_tokens', 0) - (prompt_tokens + completion_tokens), 0)
-            elif not 'grok' in model_name:
-                completion_tokens -= reasoning_tokens
-            if 'total_tokens' in usage:
-                if not prompt_tokens + cached_tokens + completion_tokens + reasoning_tokens == usage['total_tokens']:
-                    logger.warning("⚠️ Tokens don't add up", usage)
+            if total := usage.get('total_tokens'):
+                if reasoning_tokens > 0:
+                    completion_tokens = total - (prompt_tokens + cached_tokens + reasoning_tokens)
+                else:
+                    reasoning_tokens = total - (prompt_tokens + cached_tokens + completion_tokens)
+                    assert reasoning_tokens >= 0, f"negative reasoning token count: {usage}"
+                if not prompt_tokens + cached_tokens + completion_tokens + reasoning_tokens == total:
+                    logger.warning(f"⚠️ Tokens don't add up: {usage}")
             self.model_usage[model_name]['prompt_tokens'] += prompt_tokens
             self.model_usage[model_name]['cached_tokens'] += cached_tokens
             self.model_usage[model_name]['completion_tokens'] += completion_tokens
@@ -52,7 +54,7 @@ class UsageTracker:
             cached_cost = cached_tokens * ((model_config.get('cached_cost') or input_cost) / 1000000.0)
             output_cost = completion_tokens * (model_config.get('output_cost',0) / 1000000.0)
             reasoning_cost = reasoning_tokens * ((model_config.get('reasoning_cost', model_config.get('output_cost')) or output_cost) / 1000000.0)
-            if model_name.startswith('gemini-2.5-pro') and prompt_tokens > 200000:
+            if model_name.startswith('gemini') and prompt_tokens > 200000:
                 input_cost *= 2
                 output_cost *= 1.5
                 reasoning_cost *= 1.5
@@ -63,8 +65,8 @@ class UsageTracker:
             parts = [ part for part in [
                 f"In={usage['prompt_tokens']}" if usage['prompt_tokens'] else None,
                 f"Cached={usage['cached_tokens']}" if usage['cached_tokens'] else None,
-                f"Out={usage['completion_tokens']}" if usage['completion_tokens'] else None,
                 f"Rsn={usage['reasoning_tokens']}" if usage['reasoning_tokens'] else None,
+                f"Out={usage['completion_tokens']}" if usage['completion_tokens'] else None,
                 f"Cost=${usage['cost']:.3f}" if usage['cost'] else None
             ] if part ]
             if parts:

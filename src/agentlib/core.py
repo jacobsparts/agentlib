@@ -3,7 +3,8 @@ assert sys.version_info >= (3, 8), "Requires Python 3.8+"
 import logging
 
 logger = logging.getLogger('agentlib')
-logger.setLevel(logging.ERROR)
+handler = logging.StreamHandler()
+logger.addHandler(handler)
 
 import pydantic
 if pydantic.__version__ < '2':

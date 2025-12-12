@@ -140,8 +140,7 @@ def create_return(self,
                  reason: str = "Reason for return"):
     """Create a return request for an order."""
     # Implementation
-    self.complete = True
-    return "Return created successfully"
+    self.respond("Return created successfully")
 ```
 
 ### Step 3: Implement Run Logic (Optional)

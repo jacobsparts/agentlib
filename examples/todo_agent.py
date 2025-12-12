@@ -46,7 +46,6 @@ class TaskProcessingAgent(Agent):
                           date: Optional[datetime.date] = "Optional date for the task.",
                           priority: Literal["high", "medium", "low"] = "The priority of the task."):
         """Schedules a new task with the given details and persists it to the database."""
-        self.complete = True
         
         # Use the persistent connection
         cursor = self.conn.cursor()
@@ -64,8 +63,7 @@ class TaskProcessingAgent(Agent):
         self.conn.commit()
         
         _due = f" due {date}" if date else ''
-        resp = f"Task '{description}'{_due} with {priority} priority has been scheduled and saved to database with ID {task_id}."
-        return resp
+        self.respond(f"Task '{description}'{_due} with {priority} priority has been scheduled and saved to database with ID {task_id}.")
         
     @Agent.tool
     def get_all_tasks(self):
@@ -166,24 +164,23 @@ class TaskAgent(Agent):
         
     @Agent.tool
     def get_all_tasks(self):
-        """Retrieves all tasks from the database."""
-        return self.task_processing_agent.get_all_tasks()
-    
+        """Retrieves all tasks from the database and returns them to the user."""
+        self.respond(self.task_processing_agent.get_all_tasks())
+
     @Agent.tool
     def get_tasks_by_priority(self, priority: Literal["high", "medium", "low"] = "The priority to filter by."):
-        """Retrieves tasks with the specified priority."""
-        return self.task_processing_agent.get_tasks_by_priority(priority)
-    
+        """Retrieves tasks with the specified priority and returns them to the user."""
+        self.respond(self.task_processing_agent.get_tasks_by_priority(priority))
+
     @Agent.tool
     def get_tasks_by_date(self, date: datetime.date = "The date to filter by."):
-        """Retrieves tasks scheduled for the specified date."""
-        return self.task_processing_agent.get_tasks_by_date(date)
+        """Retrieves tasks scheduled for the specified date and returns them to the user."""
+        self.respond(self.task_processing_agent.get_tasks_by_date(date))
     
     @Agent.tool
     def complete(self, message: str = "Message to user"):
         """Reply to the user to indicate task completion."""
-        self.complete = True
-        return message
+        self.respond(message)
 
 
 def main():
@@ -200,7 +197,7 @@ def main():
             print("Agent:", agent.run(msg))
 
         # For the summary, we can use chat since it doesn't require tool execution
-        msg = "Give me a summary of today's requests. Respond directly with a plaintext list."
+        msg = "Summarize our conversation."
         print(f"User: {msg}\nAgent: {agent.chat(msg)}")
         print(f"\n----- Execute the script again to see the retrieval demo -----")
     
