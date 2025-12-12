@@ -17,8 +17,9 @@ class FactorialAgent(BaseAgent):
     @BaseAgent.tool
     def factorial(self, number: int = "Number to calculate factorial for"):
         """Calculates a factorial."""
-        self.complete = True  # Marks conversation done
-        return 1 if number == 0 else number * self.factorial(number - 1)
+        def fact(n):
+            return 1 if n == 0 else n * fact(n - 1)
+        self.respond(fact(number))  # Marks conversation done and returns result
 
 agent = FactorialAgent()
 print(agent.run("What is the factorial of 20?"))
@@ -97,8 +98,7 @@ class HashAgent(BaseAgent):
     @BaseAgent.tool
     def sha256(self, text: str = "Text to hash"):
         """Return the SHA-256 hex digest of the input text."""
-        self.complete = True                 # marks conversation done
-        return hashlib.sha256(text.encode()).hexdigest()
+        self.respond(hashlib.sha256(text.encode()).hexdigest())
 
 agent = HashAgent()
 print(agent.run("What is the SHA-256 of hello world?"))
