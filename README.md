@@ -153,9 +153,9 @@ AgentLib supports Python 3.9+ on Linux.  Untested on macOS and Windows.
 
 ## Roadmap
 
-• **Expanded documentation and richer examples** – More comprehensive guides and real-world use cases.
-• **Vertex AI endpoint + OAuth 2.0 service-account auth** – Enterprise-grade Google Cloud integration (cleanup & release).
-• **Native Google AI APIs** – Direct integration with non-OpenAI-compatible Google endpoints.
+• **Expanded documentation and richer examples** – More comprehensive guides and real-world use cases.  
+• **Vertex AI endpoint + OAuth 2.0 service-account auth** – Enterprise-grade Google Cloud integration (cleanup & release).  
+• **Native Google AI APIs** – Direct integration with non-OpenAI-compatible Google endpoints.  
 • **Explicit context management API** – Expose methods for users to directly inspect and modify conversation history and state.  
 
 ---
