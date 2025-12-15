@@ -259,14 +259,148 @@ if __name__ == "__main__":
         print(f"Result: {result}")
 ```
 
+## 8. MCP Integration with MCPAgent
+
+`MCPAgent` extends `BaseAgent` to support Model Context Protocol (MCP) servers. MCP servers expose tools that your agent can call, allowing integration with external systems, APIs, and services.
+
+### Basic Usage
+
+Define MCP servers as a class attribute:
+
+```python
+from agentlib import MCPAgent
+
+class BrowserAgent(MCPAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a browser automation assistant."
+    mcp_servers = [
+        ('browser', '/path/to/browser-mcp-server'),
+        ('api', 'http://localhost:3000/sse'),
+    ]
+
+    @MCPAgent.tool
+    def done(self, response: str = "Your response"):
+        """Send final response to user."""
+        self.respond(response)
+
+with BrowserAgent() as agent:
+    result = agent.run("Navigate to example.com and get the page title")
+```
+
+### Server Configuration
+
+Each entry in `mcp_servers` is a tuple of `(name, server)` or `(name, server, options)`:
+
+```python
+mcp_servers = [
+    # Stdio transport (command string, split on spaces)
+    ('fs', 'npx -y @mcp/server-filesystem /tmp'),
+
+    # SSE transport (detected by http:// or https://)
+    ('api', 'http://localhost:3000/sse'),
+
+    # With options
+    ('db', 'python db_server.py', {'timeout': 60.0}),
+    ('auth_api', 'https://api.example.com/mcp', {'headers': {'Authorization': 'Bearer xxx'}}),
+]
+```
+
+**Transport detection:**
+- URLs starting with `http://` or `https://` use SSE transport
+- Everything else uses stdio transport (command is split on spaces)
+
+**Common options:**
+- Stdio: `timeout`, `forward_stderr` (default: False), `env`
+- SSE: `timeout`, `headers`
+
+### How Tools Are Registered
+
+When an MCP server is connected, all its tools are automatically registered with a prefix:
+
+```python
+# If mcp_servers = [('browser', '/path/to/server')]
+# And the server exposes tools: navigate, screenshot, click
+
+# Your agent gets tools:
+#   browser_navigate
+#   browser_screenshot
+#   browser_click
+```
+
+The prefix prevents name collisions when using multiple MCP servers.
+
+### MCP Server Instructions
+
+MCP servers can provide instructions that guide how they should be used. These are automatically appended to your system prompt:
+
+```python
+class MyAgent(MCPAgent):
+    system = "You are a helpful assistant."
+    mcp_servers = [('browser', '/path/to/server')]
+
+# The actual system prompt becomes:
+# "You are a helpful assistant.
+#
+# MCP SERVER INSTRUCTIONS:
+# === browser ===
+# [Instructions from the browser MCP server]"
+```
+
+### Dynamic Connection
+
+You can also connect MCP servers at runtime:
+
+```python
+class MyAgent(MCPAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a helpful assistant."
+
+    @MCPAgent.tool
+    def done(self, response: str = "Response"):
+        self.respond(response)
+
+agent = MyAgent()
+agent.connect_mcp('browser', '/path/to/browser-server')
+agent.connect_mcp('api', 'http://localhost:3000/sse', {'headers': {'Auth': 'Bearer xxx'}})
+
+result = agent.run("Do something with the browser")
+
+agent.disconnect_mcp('browser')  # Remove a specific server
+agent.close()  # Clean up all connections
+```
+
+### Lifecycle Management
+
+Always close MCP connections when done:
+
+```python
+# Option 1: Context manager (recommended)
+with MyAgent() as agent:
+    result = agent.run("Do something")
+
+# Option 2: Explicit close
+agent = MyAgent()
+try:
+    result = agent.run("Do something")
+finally:
+    agent.close()
+```
+
+### Notes
+
+- Tools are cached when servers connect. If an MCP server dynamically adds/removes tools, disconnect and reconnect to refresh.
+- MCP errors are returned as strings (e.g., `"[MCP Error] Connection refused"`) so the LLM can handle them gracefully.
+- Server stderr is suppressed by default. Pass `{'forward_stderr': True}` in options to see server logs.
+
 ## Summary
 
 agentlib provides a flexible framework for building LLM-powered agents:
 
-1. **Define your agent** by subclassing BaseAgent
+1. **Define your agent** by subclassing BaseAgent (or MCPAgent for MCP support)
 2. **Add tools** using the @BaseAgent.tool decorator
 3. **Manage state** with instance variables
 4. **Control flow** with self.respond()
 5. **Handle errors** with specialized tools
+6. **Integrate external tools** via MCP servers using MCPAgent
 
 This foundation allows you to create sophisticated agents with minimal code while handling the complexity of LLM interactions for you. For advanced use cases, agentlib also supports agent composition, where one agent can use another agent as a tool.

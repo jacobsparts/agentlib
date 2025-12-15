@@ -214,6 +214,104 @@ response = agent.text()            # Get LLM response (text only)
 result = agent.run_loop(max_turns=5)  # Run tool loop
 ```
 
+## MCPAgent (MCP Integration)
+
+`MCPAgent` extends `BaseAgent` to connect to MCP (Model Context Protocol) servers.
+
+### Basic Structure
+
+```python
+from agentlib import MCPAgent
+
+class MyAgent(MCPAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a helpful assistant."
+    mcp_servers = [
+        ('fs', 'npx -y @mcp/server-filesystem /tmp'),
+        ('api', 'http://localhost:3000/sse'),
+        ('db', 'python db_server.py', {'timeout': 60.0}),
+    ]
+
+    @MCPAgent.tool
+    def done(self, response: str = "Response"):
+        """Send response to user."""
+        self.respond(response)
+```
+
+### mcp_servers Format
+
+```python
+mcp_servers = [
+    (name, server),              # Basic
+    (name, server, options),     # With options dict
+]
+```
+
+**Transport auto-detection:**
+- `http://` or `https://` → SSE transport
+- Anything else → Stdio transport (command split on spaces)
+
+**Options:**
+- Stdio: `timeout`, `forward_stderr` (default: False), `env`
+- SSE: `timeout`, `headers`
+
+### Tool Naming
+
+MCP tools are prefixed with server name:
+```python
+# mcp_servers = [('browser', '/path/to/server')]
+# Server exposes: navigate, click, screenshot
+# Agent gets: browser_navigate, browser_click, browser_screenshot
+```
+
+### Server Instructions
+
+MCP server instructions are auto-appended to system prompt:
+```
+{your system prompt}
+
+MCP SERVER INSTRUCTIONS:
+=== server_name ===
+{instructions from server}
+```
+
+### Runtime Methods
+
+```python
+agent = MyAgent()
+
+# Connect dynamically
+agent.connect_mcp('name', 'server_command_or_url')
+agent.connect_mcp('name', 'server', {'timeout': 30.0})
+
+# Disconnect
+agent.disconnect_mcp('name')
+
+# Clean up all
+agent.close()
+```
+
+### Lifecycle
+
+```python
+# Context manager (recommended)
+with MyAgent() as agent:
+    result = agent.run("Do something")
+
+# Manual
+agent = MyAgent()
+try:
+    result = agent.run("Do something")
+finally:
+    agent.close()
+```
+
+### Notes
+
+- Tools cached on connect; reconnect to refresh if server tools change
+- MCP errors returned as `"[MCP Error] ..."` strings
+- Server stderr suppressed by default
+
 ## Tips
 
 - `self.respond(value)` is required to exit the run loop and return a value
@@ -222,3 +320,4 @@ result = agent.run_loop(max_turns=5)  # Run tool loop
 - Instance variables persist across multiple `run()` calls
 - Override `run()` for custom preprocessing or control flow
 - Tools can call other agents for delegation patterns
+- Use `MCPAgent` to integrate external MCP tool servers
