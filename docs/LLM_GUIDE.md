@@ -72,25 +72,42 @@ class MyAgent(BaseAgent):
 
 ### Attachments
 
-Inject named content into conversations with automatic formatting and smart invalidation:
+Inject named text content into conversations with automatic formatting and smart invalidation:
 
 ```python
 # In custom run() method
 def run(self, filename, max_turns=5):
     with open(filename) as f:
-        content = f.read()
-    self.usermsg(f"Analyze: {filename}", attachments={filename: content})
+        self.attach(filename, f.read())
+    self.usermsg(f"Analyze: {filename}")
     return self.run_loop(max_turns=max_turns)
 
 # Or with structured data
-self.usermsg("Process this config", attachments={"config.json": {"key": "value"}})
+self.attach("config.json", {"key": "value"})
+self.usermsg("Process this config")
+
+# In tools
+@BaseAgent.tool
+def read_file(self, path: str = "File path"):
+    """Read a file."""
+    content = open(path).read()
+    self.attach(path, content)
+    return f"Read {len(content)} bytes"
+
+@BaseAgent.tool
+def clear_file(self, path: str = "File path"):
+    """Remove a file from context."""
+    self.detach(path)
+    return f"Cleared {path}"
 ```
 
 **Features:**
 - `usermsg()`/`toolmsg()` return `None` (side effect only)
+- `self.attach(name, content)` to attach data to a response
+- `self.detach(name)` to remove an attachment from context
 - Auto-formatted as `-------- BEGIN name --------` / `-------- END name ----------`
 - Dict/list values auto-serialized to JSON
-- Smart invalidation: same-key attachments with new content invalidate old ones (shown as `[Attachment: name]`)
+- Re-attach with the same name to update content
 
 ### Completion Control
 
@@ -184,12 +201,8 @@ def panic(self, reason: str = "Error description"):
 ### Message building:
 ```python
 def run(self):
-    parts = [
-        "-------- BEGIN context.txt --------",
-        self.load_context(),
-        "-------- END context.txt ----------"
-    ]
-    self.usermsg("\n\n".join(parts))
+    self.attach("context.txt", self.load_context())
+    self.usermsg("Process the context")
     return self.run_loop(max_turns=10)
 ```
 

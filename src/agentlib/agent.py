@@ -139,14 +139,28 @@ class BaseAgent(metaclass=AgentMeta):
         return self.conversation.llm()['content']
 
     def usermsg(self, *args, **kwargs):
-        return self.conversation.usermsg(*args, **kwargs)
+        attachments = getattr(self, '_attachments', {})
+        self._attachments = {}
+        return self.conversation.usermsg(*args, attachments=attachments, **kwargs)
 
     def chat(self, msg):
         self.usermsg(msg)
         return self.text()
 
+    def attach(self, name, content):
+        """Attach content to the current tool response."""
+        if not hasattr(self, '_attachments'):
+            self._attachments = {}
+        self._attachments[name] = content
+
+    def detach(self, name):
+        """Remove an attachment from the conversation context."""
+        self.attach(name, None)
+
     def toolmsg(self, *args, **kwargs):
-        return self.conversation.toolmsg(*args, **kwargs)
+        attachments = getattr(self, '_attachments', {})
+        self._attachments = {}
+        return self.conversation.toolmsg(*args, attachments=attachments, **kwargs)
 
     def run_loop(self, max_turns):
         self.complete = False

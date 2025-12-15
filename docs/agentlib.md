@@ -168,6 +168,20 @@ def resolve_issue(self, solution: str = "The solution provided"):
     self.respond("Issue resolved: " + solution)
 ```
 
+### Attachments in Tools
+Tools can attach named content to their responses using `self.attach()`:
+
+```python
+@BaseAgent.tool
+def read_file(self, path: str = "File path to read"):
+    """Read a file and return its contents."""
+    content = open(path).read()
+    self.attach(path, content)
+    return f"Read {len(content)} bytes from {path}"
+```
+
+Attachments are automatically formatted and included in the conversation context. Re-attach with the same name to update content, or use `self.detach(name)` to remove an attachment entirely. Note: attachments are for text content only, not binary data.
+
 ### Maintaining State
 Store information between turns using instance variables:
 
