@@ -49,8 +49,62 @@ class AgentMeta(type):
 
 
 class BaseAgent(metaclass=AgentMeta):
-    
+
     class TurnLimitError(Exception): pass
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+        # Auto-wrap user's __init__ to call _ensure_setup() automatically
+        user_init = cls.__dict__.get('__init__')  # Only this class's __init__, not inherited
+
+        if user_init:
+            def wrapped(self, *args, _user_init=user_init, **kwargs):
+                _user_init(self, *args, **kwargs)
+                self._ensure_setup()
+            cls.__init__ = wrapped
+        else:
+            def default_init(self):
+                self._ensure_setup()
+            cls.__init__ = default_init
+
+    # === HOOKS FOR MIXINS ===
+
+    def _ensure_setup(self):
+        """Hook for mixins to do lazy initialization. Override and call super()."""
+        pass
+
+    def _build_system_prompt(self):
+        """Hook for mixins to modify system prompt. Override and call super()."""
+        return getattr(self, 'system', '')
+
+    def _get_dynamic_toolspecs(self):
+        """Hook for mixins to add dynamic tools. Override and call super()."""
+        return {}
+
+    def _handle_toolcall(self, toolname, function_args):
+        """
+        Hook for mixins to intercept tool calls.
+        Return (True, result) if handled, (False, None) to pass to next handler.
+        """
+        return False, None
+
+    def _cleanup(self):
+        """Hook for mixins to clean up resources. Override and call super()."""
+        pass
+
+    # === RESOURCE MANAGEMENT ===
+
+    def close(self):
+        """Clean up resources. Call when done with agent, or use as context manager."""
+        self._cleanup()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
 
     def tool(_input=None, model=None): # decorator
         if has_decorator_parameters := model is not None:
@@ -100,15 +154,22 @@ class BaseAgent(metaclass=AgentMeta):
     @property
     def toolspecs(self):
         result = {}
-        for k,v in self.__class__._toolspec.items():
+        for k, v in self.__class__._toolspec.items():
             if type(v) is types.FunctionType:
                 if spec := v(self):
                     result[k] = spec
             else:
                 result[k] = v
+        # Merge dynamic tools from mixins
+        result.update(self._get_dynamic_toolspecs())
         return result
 
     def toolcall(self, toolname, function_args):
+        # Let mixins handle first
+        handled, result = self._handle_toolcall(toolname, function_args)
+        if handled:
+            return result
+        # Fall back to registered tools
         if func := self.__class__._toolimpl.get(toolname):
             return func(self, **function_args)
         raise KeyError(f"No tool '{toolname}' registered for class {self.__class__.__name__}")
@@ -128,8 +189,9 @@ class BaseAgent(metaclass=AgentMeta):
         try:
             return self._conversation
         except AttributeError:
-            assert hasattr(self, 'system'), "system must be defined"
-            self._conversation = self.llm_client.conversation(self.system)
+            system = self._build_system_prompt()
+            assert system, "system must be defined"
+            self._conversation = self.llm_client.conversation(system)
             return self._conversation
 
     def llm(self):

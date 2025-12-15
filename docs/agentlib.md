@@ -259,18 +259,18 @@ if __name__ == "__main__":
         print(f"Result: {result}")
 ```
 
-## 8. MCP Integration with MCPAgent
+## 8. MCP Integration with MCPMixin
 
-`MCPAgent` extends `BaseAgent` to support Model Context Protocol (MCP) servers. MCP servers expose tools that your agent can call, allowing integration with external systems, APIs, and services.
+`MCPMixin` adds Model Context Protocol (MCP) support to any agent via mixin composition. MCP servers expose tools that your agent can call, allowing integration with external systems, APIs, and services.
 
 ### Basic Usage
 
 Define MCP servers as a class attribute:
 
 ```python
-from agentlib import MCPAgent
+from agentlib import BaseAgent, MCPMixin
 
-class BrowserAgent(MCPAgent):
+class BrowserAgent(MCPMixin, BaseAgent):
     model = 'google/gemini-2.5-flash'
     system = "You are a browser automation assistant."
     mcp_servers = [
@@ -278,7 +278,7 @@ class BrowserAgent(MCPAgent):
         ('api', 'http://localhost:3000/sse'),
     ]
 
-    @MCPAgent.tool
+    @BaseAgent.tool
     def done(self, response: str = "Your response"):
         """Send final response to user."""
         self.respond(response)
@@ -334,7 +334,7 @@ The prefix prevents name collisions when using multiple MCP servers.
 MCP servers can provide instructions that guide how they should be used. These are automatically appended to your system prompt:
 
 ```python
-class MyAgent(MCPAgent):
+class MyAgent(MCPMixin, BaseAgent):
     system = "You are a helpful assistant."
     mcp_servers = [('browser', '/path/to/server')]
 
@@ -351,11 +351,11 @@ class MyAgent(MCPAgent):
 You can also connect MCP servers at runtime:
 
 ```python
-class MyAgent(MCPAgent):
+class MyAgent(MCPMixin, BaseAgent):
     model = 'google/gemini-2.5-flash'
     system = "You are a helpful assistant."
 
-    @MCPAgent.tool
+    @BaseAgent.tool
     def done(self, response: str = "Response"):
         self.respond(response)
 
@@ -396,11 +396,11 @@ finally:
 
 agentlib provides a flexible framework for building LLM-powered agents:
 
-1. **Define your agent** by subclassing BaseAgent (or MCPAgent for MCP support)
+1. **Define your agent** by subclassing BaseAgent (add MCPMixin for MCP support)
 2. **Add tools** using the @BaseAgent.tool decorator
 3. **Manage state** with instance variables
 4. **Control flow** with self.respond()
 5. **Handle errors** with specialized tools
-6. **Integrate external tools** via MCP servers using MCPAgent
+6. **Integrate external tools** via MCP servers using MCPMixin
 
 This foundation allows you to create sophisticated agents with minimal code while handling the complexity of LLM interactions for you. For advanced use cases, agentlib also supports agent composition, where one agent can use another agent as a tool.

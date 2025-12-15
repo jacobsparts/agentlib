@@ -214,16 +214,16 @@ response = agent.text()            # Get LLM response (text only)
 result = agent.run_loop(max_turns=5)  # Run tool loop
 ```
 
-## MCPAgent (MCP Integration)
+## MCPMixin (MCP Integration)
 
-`MCPAgent` extends `BaseAgent` to connect to MCP (Model Context Protocol) servers.
+`MCPMixin` adds MCP (Model Context Protocol) server support to any agent via mixin composition.
 
 ### Basic Structure
 
 ```python
-from agentlib import MCPAgent
+from agentlib import BaseAgent, MCPMixin
 
-class MyAgent(MCPAgent):
+class MyAgent(MCPMixin, BaseAgent):
     model = 'google/gemini-2.5-flash'
     system = "You are a helpful assistant."
     mcp_servers = [
@@ -232,7 +232,7 @@ class MyAgent(MCPAgent):
         ('db', 'python db_server.py', {'timeout': 60.0}),
     ]
 
-    @MCPAgent.tool
+    @BaseAgent.tool
     def done(self, response: str = "Response"):
         """Send response to user."""
         self.respond(response)
@@ -320,4 +320,4 @@ finally:
 - Instance variables persist across multiple `run()` calls
 - Override `run()` for custom preprocessing or control flow
 - Tools can call other agents for delegation patterns
-- Use `MCPAgent` to integrate external MCP tool servers
+- Use `MCPMixin` to integrate external MCP tool servers

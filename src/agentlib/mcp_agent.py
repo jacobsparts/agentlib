@@ -1,8 +1,10 @@
 """
-MCPAgent - BaseAgent with MCP server integration.
+MCPMixin - Mixin that adds MCP server integration to any agent.
 
 Example:
-    class MyAgent(MCPAgent):
+    from agentlib import BaseAgent, MCPMixin
+
+    class MyAgent(MCPMixin, BaseAgent):
         model = 'google/gemini-2.5-flash'
         system = "You are a helpful assistant."
         mcp_servers = [
@@ -25,25 +27,121 @@ Notes:
     - Call close() when done, or use as context manager.
 """
 
+import threading
 from pydantic import create_model, Field
 from typing import Optional, Any
 
-from .agent import BaseAgent
-from .mcp import MCPClient, create_stdio_client, create_sse_client, MCPError
+from .mcp import create_stdio_client, create_sse_client, MCPError
 
 
-class MCPAgent(BaseAgent):
-    """BaseAgent with MCP server integration."""
+class MCPMixin:
+    """Mixin that adds MCP server integration. Use with BaseAgent."""
 
     mcp_servers: list = []  # List of (name, server) or (name, server, options) tuples
 
-    def __init__(self):
-        self._mcp_clients: dict[str, MCPClient] = {}
-        self._mcp_tools: dict[str, tuple[MCPClient, str, dict]] = {}  # tool_name -> (client, orig_name, tool_def)
-        self._mcp_instructions: dict[str, str] = {}  # server_name -> instructions
+    # === HOOK IMPLEMENTATIONS ===
 
-        for server_def in self.mcp_servers:
-            self.connect_mcp(*server_def)
+    def _ensure_setup(self):
+        # Chain to next in MRO (might be another mixin or BaseAgent)
+        if hasattr(super(), '_ensure_setup'):
+            super()._ensure_setup()
+
+        # Fast path - already initialized
+        if getattr(self, '_mcp_initialized', False):
+            return
+
+        # Thread-safe double-checked locking (gevent compatible)
+        if not hasattr(self, '_mcp_lock'):
+            self._mcp_lock = threading.Lock()
+
+        with self._mcp_lock:
+            # Check again inside lock
+            if getattr(self, '_mcp_initialized', False):
+                return
+
+            self._mcp_clients: dict[str, Any] = {}
+            self._mcp_tools: dict[str, tuple[Any, str, dict]] = {}
+            self._mcp_instructions: dict[str, str] = {}
+
+            try:
+                for server_def in getattr(self, 'mcp_servers', []):
+                    self.connect_mcp(*server_def)
+                self._mcp_initialized = True
+            except:
+                # Rollback on failure
+                for client in self._mcp_clients.values():
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                self._mcp_clients = {}
+                self._mcp_tools = {}
+                self._mcp_instructions = {}
+                raise
+
+    def _build_system_prompt(self):
+        # Get base system prompt from chain
+        if hasattr(super(), '_build_system_prompt'):
+            system = super()._build_system_prompt()
+        else:
+            system = getattr(self, 'system', '')
+
+        instructions = getattr(self, '_mcp_instructions', {})
+        if instructions:
+            parts = [f"=== {n} ===\n{i}" for n, i in instructions.items()]
+            system += "\n\nMCP SERVER INSTRUCTIONS:\n" + "\n\n".join(parts)
+
+        return system
+
+    def _get_dynamic_toolspecs(self):
+        # Get specs from chain first
+        if hasattr(super(), '_get_dynamic_toolspecs'):
+            specs = super()._get_dynamic_toolspecs()
+        else:
+            specs = {}
+
+        for tool_name, (client, orig_name, tool_def) in getattr(self, '_mcp_tools', {}).items():
+            specs[tool_name] = self._make_mcp_spec(tool_name, tool_def)
+
+        return specs
+
+    def _handle_toolcall(self, toolname, function_args):
+        mcp_tools = getattr(self, '_mcp_tools', {})
+        if toolname in mcp_tools:
+            client, orig_name, _ = mcp_tools[toolname]
+            try:
+                result = client.call_tool(orig_name, function_args)
+                return True, self._format_mcp_result(result)
+            except MCPError as e:
+                return True, f"[MCP Error] {e}"
+
+        # Pass to next in chain
+        if hasattr(super(), '_handle_toolcall'):
+            return super()._handle_toolcall(toolname, function_args)
+        return False, None
+
+    def _cleanup(self):
+        # Clean up MCP connections
+        for client in getattr(self, '_mcp_clients', {}).values():
+            try:
+                client.close()
+            except Exception:
+                pass
+
+        if hasattr(self, '_mcp_clients'):
+            self._mcp_clients = {}
+        if hasattr(self, '_mcp_tools'):
+            self._mcp_tools = {}
+        if hasattr(self, '_mcp_instructions'):
+            self._mcp_instructions = {}
+        if hasattr(self, '_mcp_initialized'):
+            self._mcp_initialized = False
+
+        # Chain to next
+        if hasattr(super(), '_cleanup'):
+            super()._cleanup()
+
+    # === MCP-SPECIFIC METHODS ===
 
     def connect_mcp(self, name: str, server: str, options: Optional[dict] = None):
         """
@@ -89,7 +187,7 @@ class MCPAgent(BaseAgent):
             timeout=timeout,
             forward_stderr=forward_stderr
         )
-        self._register_mcp(name, client)
+        self._register_mcp_client(name, client)
 
     def connect_mcp_sse(
         self,
@@ -112,9 +210,9 @@ class MCPAgent(BaseAgent):
             headers=headers,
             timeout=timeout
         )
-        self._register_mcp(name, client)
+        self._register_mcp_client(name, client)
 
-    def _register_mcp(self, name: str, client: MCPClient):
+    def _register_mcp_client(self, name: str, client):
         """Register an MCP client and cache its tools and instructions."""
         self._mcp_clients[name] = client
 
@@ -155,61 +253,7 @@ class MCPAgent(BaseAgent):
         except Exception:
             pass
 
-    def close(self):
-        """Close all MCP connections."""
-        for client in self._mcp_clients.values():
-            try:
-                client.close()
-            except Exception:
-                pass
-        self._mcp_clients.clear()
-        self._mcp_tools.clear()
-        self._mcp_instructions.clear()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-        return False
-
-    @property
-    def conversation(self):
-        try:
-            return self._conversation
-        except AttributeError:
-            assert hasattr(self, 'system'), "system must be defined"
-            system = self.system
-            if self._mcp_instructions:
-                parts = [f"=== {n} ===\n{i}" for n, i in self._mcp_instructions.items()]
-                system += "\n\nMCP SERVER INSTRUCTIONS:\n" + "\n\n".join(parts)
-            self._conversation = self.llm_client.conversation(system)
-            return self._conversation
-
-    @property
-    def toolspecs(self):
-        specs = super().toolspecs.copy()
-        for tool_name, (client, orig_name, tool_def) in self._mcp_tools.items():
-            specs[tool_name] = self._make_spec(tool_name, tool_def)
-        return specs
-
-    def toolcall(self, toolname, function_args):
-        if toolname in self._mcp_tools:
-            client, orig_name, _ = self._mcp_tools[toolname]
-            try:
-                result = client.call_tool(orig_name, function_args)
-                return self._format_result(result)
-            except MCPError as e:
-                return f"[MCP Error] {e}"
-        return super().toolcall(toolname, function_args)
-
-    def _make_spec(self, tool_name: str, tool_def: dict) -> Any:
+    def _make_mcp_spec(self, tool_name: str, tool_def: dict) -> Any:
         """Convert MCP tool JSON Schema to Pydantic model."""
         schema = tool_def.get('inputSchema', {})
         props = schema.get('properties', {})
@@ -238,7 +282,7 @@ class MCPAgent(BaseAgent):
         model.__doc__ = tool_def.get('description', tool_name)
         return model
 
-    def _format_result(self, result: dict) -> str:
+    def _format_mcp_result(self, result: dict) -> str:
         """Format MCP tool result as string for conversation."""
         parts = []
         for item in result.get('content', []):
