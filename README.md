@@ -70,8 +70,8 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 • **Attachment system** – Inject files and data into conversations as dynamic context.  
 • **Multi-tool calls in a single LLM turn** – Execute multiple tools efficiently in one response.  
 • **Automatic retry with exponential back-off** – Built-in resilience for API failures and rate limits.  
-• **MCP integration** – Connect to Model Context Protocol servers for external tools and APIs.
-• **Shell & Python execution** – Give agents their own persistent bash shell or Python environment.
+• **MCP integration** – Connect to Model Context Protocol servers for external tools and APIs.  
+• **Shell & Python execution** – Give agents their own persistent bash shell or Python environment.  
 • **CLI builder** – Build interactive terminal assistants with markdown rendering and persistent history.  
 
 ---
@@ -122,7 +122,11 @@ google/gemini-2.5-flash: In=342, Out=54, Rsn=61, Cost=$0.000
 from agentlib import REPLMCPMixin, SubREPLResponseMixin
 from agentlib.cli import CLIAgent
 
-class DataExtractor(REPLMCPMixin, SubREPLResponseMixin, CLIAgent):
+class DataExtractor(
+    REPLMCPMixin,           # Python REPL with lightweight MCP client
+    SubREPLResponseMixin,   # Direct code execution response
+    CLIAgent,               # Interactive terminal interface
+):
     model = "google/gemini-2.5-flash"
     system = """You are a data extraction specialist. You scrape websites, pull tables
 from PDFs, and transform messy data into clean formats. You have browser automation
@@ -170,15 +174,6 @@ pip install git+https://github.com/jacobsparts/agentlib.git
 ```
 
 AgentLib supports Python 3.9+ on Linux.  Untested on macOS and Windows.
-
----
-
-## Roadmap
-
-• **Expanded documentation and richer examples** – More comprehensive guides and real-world use cases.  
-• **Vertex AI endpoint + OAuth 2.0 service-account auth** – Enterprise-grade Google Cloud integration (cleanup & release).  
-• **Native Google AI APIs** – Direct integration with non-OpenAI-compatible Google endpoints.  
-• **Explicit context management API** – Expose methods for users to directly inspect and modify conversation history and state.  
 
 ---
 
