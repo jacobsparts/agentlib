@@ -182,6 +182,24 @@ repl_mcp_servers = [
 ]
 ```
 
+### Configuration
+
+```python
+class MyAgent(REPLMCPMixin, BaseAgent):
+    repl_mcp_servers = [...]
+    repl_mcp_enumerate_tools = True  # Enumerate tools at setup (default: True)
+```
+
+Set `repl_mcp_enumerate_tools = False` to skip tool enumeration—useful when there are many MCP servers. Tools can still be discovered at runtime via `client.list_tools()`.
+
+Per-server override:
+```python
+repl_mcp_servers = [
+    ('fs', '/path/to/server'),                          # Uses global default
+    ('api', 'http://localhost/sse', {'enumerate_tools': False}),  # Skip for this server
+]
+```
+
 ### How Agent Uses MCP
 
 MCP clients available as REPL variables. Agent writes code:

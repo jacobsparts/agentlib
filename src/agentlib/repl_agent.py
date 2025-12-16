@@ -297,9 +297,12 @@ class REPLMCPMixin(SubREPLMixin):
         - Use client.list_tools() to see available tools
         - Use client.call_tool('name', {'arg': 'value'}) to invoke tools
         - Server instructions and tool definitions are added to the system prompt
+        - Set repl_mcp_enumerate_tools=False to skip tool enumeration globally
+        - Per-server: ('name', 'server', {'enumerate_tools': False})
     """
 
     repl_mcp_servers: list = []  # List of (name, server) or (name, server, options) tuples
+    repl_mcp_enumerate_tools: bool = True  # Enumerate tools at setup (can be overridden per-server)
 
     def _ensure_setup(self):
         # Chain to parent (sets up REPL)
@@ -371,15 +374,17 @@ class REPLMCPMixin(SubREPLMixin):
             if instructions and instructions != 'None':
                 self._repl_mcp_instructions[name] = instructions
 
-            # Get tools list
-            output = repl.execute(f"print(repr({name}.list_tools()))", timeout=10.0)
-            tools = self._parse_repl_repr(output)
-            if tools:
-                import ast
-                try:
-                    self._repl_mcp_tools[name] = ast.literal_eval(tools)
-                except (ValueError, SyntaxError):
-                    pass
+            # Get tools list (if enabled)
+            enumerate_tools = options.get('enumerate_tools', getattr(self, 'repl_mcp_enumerate_tools', True))
+            if enumerate_tools:
+                output = repl.execute(f"print(repr({name}.list_tools()))", timeout=10.0)
+                tools = self._parse_repl_repr(output)
+                if tools:
+                    import ast
+                    try:
+                        self._repl_mcp_tools[name] = ast.literal_eval(tools)
+                    except (ValueError, SyntaxError):
+                        pass
 
     def _parse_repl_repr(self, output: str) -> Optional[str]:
         """Parse repr() output from REPL, handling the output format."""

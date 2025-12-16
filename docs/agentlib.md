@@ -628,6 +628,26 @@ repl_mcp_servers = [
 ]
 ```
 
+### Tool Enumeration
+
+By default, tools are enumerated at setup and added to the system prompt. Disable this for faster startup when you have many MCP servers:
+
+```python
+class MyAgent(REPLMCPMixin, BaseAgent):
+    repl_mcp_servers = [...]
+    repl_mcp_enumerate_tools = False  # Skip tool enumeration globally
+```
+
+Per-server override:
+```python
+repl_mcp_servers = [
+    ('fs', '/path/to/server'),                          # Uses global default
+    ('api', 'http://localhost/sse', {'enumerate_tools': False}),  # Skip for this server
+]
+```
+
+When enumeration is disabled, the agent can still discover tools at runtime via `client.list_tools()` in the REPL.
+
 ### With python_execute_response
 
 For agents that compute results and return them directly, combine with `SubREPLResponseMixin`:
