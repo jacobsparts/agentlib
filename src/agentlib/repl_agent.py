@@ -73,6 +73,7 @@ class SubREPLMixin:
 
         # Add REPL instructions
         repl_instructions = """
+
 PYTHON EXECUTION:
 You have access to a persistent Python REPL via these tools:
 - python_execute: Run Python code. State (variables, imports, functions) persists.
@@ -210,7 +211,7 @@ class SubREPLResponseMixin(SubREPLMixin):
     def _build_system_prompt(self):
         system = super()._build_system_prompt()
         # Add info about the response tool
-        system += "\n- python_execute_response: Execute code and return output as your final response."
+        system += "\n- python_execute_response: Execute Python code and return ALL printed output directly to the user as your final response. The entire stdout (everything you print) becomes the user's response - format it cleanly for them using PLAINTEXT.\n  **Tip: MCP tool results can be parsed and formatted in the same script before returning.**"
         return system
 
     def _get_dynamic_toolspecs(self):
@@ -219,8 +220,8 @@ class SubREPLResponseMixin(SubREPLMixin):
         specs['python_execute_response'] = create_model(
             'PythonExecuteResponse',
             code=(str, Field(..., description="Python code to execute")),
-            preamble=(str, Field("", description="Optional text before the output")),
-            postamble=(str, Field("", description="Optional text after the output")),
+            preamble=(str, Field("", description="Optional additional text to display before the code output.")),
+            postamble=(str, Field("", description="Optional additional text to display after the code output.")),
             __doc__="Execute Python code and return the output as your final response to the user."
         )
 
@@ -236,19 +237,238 @@ class SubREPLResponseMixin(SubREPLMixin):
             output = self._get_repl().execute(code, timeout=timeout)
 
             if output.endswith(STILL_RUNNING):
-                # Timed out - return partial with note
+                # Timed out - return to agent so it can handle
                 clean = output[:-len(STILL_RUNNING)].strip()
-                self.respond(f"```\n{clean}\n```\n\n*(execution timed out)*")
-            else:
-                # Format response with optional preamble/postamble
-                parts = []
-                if preamble:
-                    parts.append(preamble)
-                parts.append(f"```\n{output.strip()}\n```")
-                if postamble:
-                    parts.append(postamble)
-                self.respond("\n\n".join(parts))
+                return True, f"{clean}\n\n[still running - code timed out]"
+
+            # Check for exceptions - return to agent so it can fix
+            if 'Traceback (most recent call last):' in output:
+                return True, output
+
+            # Success - format and respond to user
+            parts = []
+            if preamble:
+                parts.append(preamble)
+            parts.append(f"```\n{output.strip()}\n```")
+            if postamble:
+                parts.append(postamble)
+            self.respond("\n\n".join(parts))
 
             return True, None  # respond() handles the response
 
         return super()._handle_toolcall(toolname, function_args)
+
+
+class REPLMCPMixin(SubREPLMixin):
+    """
+    Mixin that sets up MCP clients in the REPL for lightweight MCP access.
+
+    Instead of exposing each MCP tool as an agent tool (token-heavy), this mixin
+    pre-instantiates MCP clients in the REPL. The agent uses python_execute to
+    interact with them directly.
+
+    Example:
+        from agentlib import BaseAgent, REPLMCPMixin
+
+        class MyAgent(REPLMCPMixin, BaseAgent):
+            model = 'google/gemini-2.5-flash'
+            system = "You are a helpful assistant."
+            repl_mcp_servers = [
+                ('fs', '/usr/bin/mcp-server-filesystem /tmp'),
+                ('api', 'http://localhost:3000/sse'),
+            ]
+
+            @BaseAgent.tool
+            def done(self, response: str = "Your response"):
+                self.respond(response)
+
+        with MyAgent() as agent:
+            # Agent can use python_execute to call:
+            #   fs.list_tools()
+            #   fs.call_tool('read_file', {'path': '/tmp/test.txt'})
+            result = agent.run("List files in /tmp using the fs MCP server")
+
+    For python_execute_response support, combine with SubREPLResponseMixin:
+        class MyAgent(REPLMCPMixin, SubREPLResponseMixin, BaseAgent):
+            repl_mcp_servers = [...]
+
+    Notes:
+        - MCP clients are available as variables in the REPL (e.g., `fs`, `api`)
+        - Use client.list_tools() to see available tools
+        - Use client.call_tool('name', {'arg': 'value'}) to invoke tools
+        - Server instructions and tool definitions are added to the system prompt
+    """
+
+    repl_mcp_servers: list = []  # List of (name, server) or (name, server, options) tuples
+
+    def _ensure_setup(self):
+        # Chain to parent (sets up REPL)
+        super()._ensure_setup()
+
+        # Fast path - already initialized MCP
+        if getattr(self, '_repl_mcp_initialized', False):
+            return
+
+        # Thread-safe initialization
+        with self._repl_lock:
+            if getattr(self, '_repl_mcp_initialized', False):
+                return
+
+            self._repl_mcp_servers_info: dict[str, dict] = {}
+            self._repl_mcp_instructions: dict[str, str] = {}
+            self._repl_mcp_tools: dict[str, list] = {}
+
+            try:
+                self._setup_mcp_in_repl()
+                self._repl_mcp_initialized = True
+            except Exception:
+                # Cleanup on failure
+                self._repl_mcp_servers_info = {}
+                self._repl_mcp_instructions = {}
+                self._repl_mcp_tools = {}
+                raise
+
+    def _setup_mcp_in_repl(self):
+        """Initialize MCP clients in the REPL."""
+        servers = getattr(self, 'repl_mcp_servers', [])
+        if not servers:
+            return
+
+        repl = self._get_repl()
+
+        # Import MCP client factory functions
+        repl.execute(
+            "from agentlib.mcp import create_stdio_client, create_sse_client",
+            timeout=10.0
+        )
+
+        for server_def in servers:
+            if len(server_def) == 2:
+                name, server = server_def
+                options = {}
+            else:
+                name, server, options = server_def
+
+            self._repl_mcp_servers_info[name] = {'server': server, 'options': options}
+
+            # Build connection code
+            if server.startswith('http://') or server.startswith('https://'):
+                # SSE transport
+                headers = options.get('headers', {})
+                timeout = options.get('timeout', 300.0)
+                code = f"{name} = create_sse_client({server!r}, headers={headers!r}, timeout={timeout!r})"
+            else:
+                # Stdio transport
+                forward_stderr = options.get('forward_stderr', False)
+                timeout = options.get('timeout', 300.0)
+                code = f"{name} = create_stdio_client({server.split()!r}, forward_stderr={forward_stderr!r}, timeout={timeout!r})"
+
+            repl.execute(code, timeout=30.0)
+
+            # Get instructions if available
+            output = repl.execute(f"print(repr({name}.instructions))", timeout=10.0)
+            instructions = self._parse_repl_repr(output)
+            if instructions and instructions != 'None':
+                self._repl_mcp_instructions[name] = instructions
+
+            # Get tools list
+            output = repl.execute(f"print(repr({name}.list_tools()))", timeout=10.0)
+            tools = self._parse_repl_repr(output)
+            if tools:
+                import ast
+                try:
+                    self._repl_mcp_tools[name] = ast.literal_eval(tools)
+                except (ValueError, SyntaxError):
+                    pass
+
+    def _parse_repl_repr(self, output: str) -> Optional[str]:
+        """Parse repr() output from REPL, handling the output format."""
+        lines = output.strip().split('\n')
+        # Skip any prompt/echo lines, get the actual output
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('>>>'):
+                return line
+        return None
+
+    def _build_system_prompt(self):
+        # Get base system prompt from chain (includes REPL instructions)
+        system = super()._build_system_prompt()
+
+        servers_info = getattr(self, '_repl_mcp_servers_info', {})
+        if not servers_info:
+            return system
+
+        # Add MCP context
+        mcp_parts = [
+            "",
+            "",
+            "MCP CLIENTS IN REPL:",
+            "=" * 40,
+            "The following MCP client instances are available in the Python REPL:",
+        ]
+
+        for name, info in servers_info.items():
+            mcp_parts.append(f"  - `{name}`: connected to {info['server']}")
+
+        mcp_parts.extend([
+            "",
+            "Usage:",
+            "  tools = client_name.list_tools()  # List available tools",
+            "  result = client_name.call_tool('tool_name', {'arg': 'value'})  # Call a tool",
+            "  # Result contains 'content' (list of items) and 'isError' (bool)",
+        ])
+
+        # Add tool documentation
+        tools_info = getattr(self, '_repl_mcp_tools', {})
+        if tools_info:
+            mcp_parts.append("")
+            mcp_parts.append("AVAILABLE MCP TOOLS:")
+            mcp_parts.append("=" * 40)
+            for name, tools in tools_info.items():
+                if tools:
+                    mcp_parts.append(f"\n--- {name} ---")
+                    for tool in tools:
+                        tool_name = tool.get('name', 'unknown')
+                        tool_desc = tool.get('description', 'No description')
+                        mcp_parts.append(f"  {tool_name}: {tool_desc}")
+                        if 'inputSchema' in tool and 'properties' in tool['inputSchema']:
+                            props = tool['inputSchema']['properties']
+                            if props:
+                                params = ', '.join(props.keys())
+                                mcp_parts.append(f"      Parameters: {params}")
+
+        # Add server instructions
+        instructions = getattr(self, '_repl_mcp_instructions', {})
+        if instructions:
+            mcp_parts.append("")
+            mcp_parts.append("MCP SERVER INSTRUCTIONS:")
+            mcp_parts.append("=" * 40)
+            for name, instr in instructions.items():
+                mcp_parts.append(f"\n--- {name} ---")
+                mcp_parts.append(instr)
+
+        return system + '\n'.join(mcp_parts)
+
+    def _cleanup(self):
+        # Close MCP clients in REPL
+        servers_info = getattr(self, '_repl_mcp_servers_info', {})
+        if servers_info and hasattr(self, '_repl') and self._repl is not None:
+            for name in servers_info:
+                try:
+                    self._repl.execute(f"{name}.close()", timeout=5.0)
+                except Exception:
+                    pass
+
+        # Reset state
+        if hasattr(self, '_repl_mcp_servers_info'):
+            self._repl_mcp_servers_info = {}
+        if hasattr(self, '_repl_mcp_instructions'):
+            self._repl_mcp_instructions = {}
+        if hasattr(self, '_repl_mcp_tools'):
+            self._repl_mcp_tools = {}
+        if hasattr(self, '_repl_mcp_initialized'):
+            self._repl_mcp_initialized = False
+
+        # Chain to parent (closes REPL)
+        super()._cleanup()

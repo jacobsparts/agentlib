@@ -70,7 +70,7 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 • **Attachment system** - Inject named text data (files, JSON, etc.) into conversations as dynamic context, with automatic formatting and smart invalidation on content changes. Tools can use `self.attach(name, content)` and `self.detach(name)` to manage attachments.  
 • **Multi-tool calls in a single LLM turn** – Execute multiple tools efficiently in one response.  
 • **Automatic retry with exponential back-off** – Built-in resilience for API failures and rate limits.  
-• **MCP integration** – Connect to Model Context Protocol servers via `MCPMixin`.  
+• **MCP integration** – Connect to Model Context Protocol servers via `MCPMixin` (tools as functions) or `REPLMCPMixin` (tools via code, more token-efficient).
 • **Shell & Python execution** – Give agents their own persistent bash shell or Python environment.  
 
 ---

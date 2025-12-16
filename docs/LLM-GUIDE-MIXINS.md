@@ -148,7 +148,76 @@ class MyAgent(SubREPLMixin, BaseAgent):
 
 **Direct access:** `agent.python_execute("print(1+1)")`
 
-**Variant:** `SubREPLResponseMixin` adds `python_execute_response(code, preamble, postamble)` - executes code and returns output as the agent's final response.
+**Variant:** `SubREPLResponseMixin` adds `python_execute_response(code, preamble, postamble)` - executes code and returns output as the agent's final response. If code throws an exception or times out, error returns to agent for retry.
+
+## REPLMCPMixin (Lightweight MCP)
+
+Alternative to `MCPMixin` that uses fewer tokens. MCP clients are pre-instantiated in the REPL; agent calls tools via code.
+
+```python
+from agentlib import BaseAgent, REPLMCPMixin
+
+class MyAgent(REPLMCPMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a helpful assistant."
+    repl_mcp_servers = [
+        ('fs', '/path/to/mcp-server-filesystem /tmp'),
+        ('api', 'http://localhost:3000/sse'),
+        ('db', 'python db_server.py', {'timeout': 60.0}),
+    ]
+
+    @BaseAgent.tool
+    def done(self, response: str = "Response"):
+        """Send response to user."""
+        self.respond(response)
+```
+
+### repl_mcp_servers Format
+
+Same as `mcp_servers` in MCPMixin:
+```python
+repl_mcp_servers = [
+    (name, server),              # Basic
+    (name, server, options),     # With options dict
+]
+```
+
+### How Agent Uses MCP
+
+MCP clients available as REPL variables. Agent writes code:
+```python
+# In python_execute:
+result = fs.call_tool('read_file', {'path': '/tmp/test.txt'})
+for item in result['content']:
+    if item['type'] == 'text':
+        print(item['text'])
+```
+
+### MCP Client Methods
+
+```python
+client.list_tools()                           # List available tools
+client.call_tool('name', {'arg': 'value'})    # Call a tool
+# Returns: {'content': [...], 'isError': bool}
+```
+
+### With python_execute_response
+
+Combine with `SubREPLResponseMixin` for direct output:
+```python
+class MyAgent(REPLMCPMixin, SubREPLResponseMixin, BaseAgent):
+    repl_mcp_servers = [...]
+```
+
+MRO handles diamond inheritance correctly—`SubREPLMixin` appears once.
+
+### MCPMixin vs REPLMCPMixin
+
+| Aspect | MCPMixin | REPLMCPMixin |
+|--------|----------|--------------|
+| Token usage | Higher (tool per MCP function) | Lower (tools via code) |
+| Agent complexity | Simpler (native function calls) | Requires writing code |
+| Best for | Simple MCP usage | Code-oriented agents |
 
 ## Combining Mixins
 
@@ -163,6 +232,16 @@ class PowerAgent(SubREPLMixin, SubShellMixin, MCPMixin, BaseAgent):
     @BaseAgent.tool
     def done(self, response: str = "Response"):
         self.respond(response)
+```
+
+**Lightweight MCP + direct response:**
+```python
+from agentlib import BaseAgent, REPLMCPMixin, SubREPLResponseMixin
+
+class DataAgent(REPLMCPMixin, SubREPLResponseMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "Query data and return formatted results."
+    repl_mcp_servers = [('db', 'python db_server.py')]
 ```
 
 **Mixin order:** List mixins before `BaseAgent`.

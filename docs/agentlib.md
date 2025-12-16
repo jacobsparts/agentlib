@@ -572,7 +572,110 @@ with CalcAgent() as agent:
 
 The `preamble` and `postamble` parameters let the agent wrap the code output with explanatory text.
 
-## 11. Combining Multiple Mixins
+**Error handling:** If the script throws an exception or times out, the error is returned to the agent (not the user) so it can fix the code and retry.
+
+## 11. Lightweight MCP with REPLMCPMixin
+
+`REPLMCPMixin` provides an alternative to `MCPMixin` that uses significantly fewer tokens. Instead of exposing each MCP tool as an agent function (which adds to the system prompt), it pre-instantiates MCP clients in the Python REPL. The agent calls MCP tools by writing Python code.
+
+### When to Use
+
+- **MCPMixin**: Best when you want the LLM to see MCP tools as native functions. Simpler for the agent but uses more tokens.
+- **REPLMCPMixin**: Best for token efficiency. The agent writes code to call MCP tools, which works well for agents that are already code-oriented.
+
+### Basic Usage
+
+```python
+from agentlib import BaseAgent, REPLMCPMixin
+
+class MyAgent(REPLMCPMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a helpful assistant."
+    repl_mcp_servers = [
+        ('fs', '/usr/bin/mcp-server-filesystem /tmp'),
+        ('api', 'http://localhost:3000/sse'),
+    ]
+
+    @BaseAgent.tool
+    def done(self, response: str = "Response"):
+        """Send response to user."""
+        self.respond(response)
+
+with MyAgent() as agent:
+    result = agent.run("List the files in /tmp")
+```
+
+### How It Works
+
+1. MCP clients are created as variables in the REPL (e.g., `fs`, `api`)
+2. Tool documentation is added to the system prompt (but not as individual functions)
+3. The agent uses `python_execute` to call MCP tools:
+
+```python
+# Agent writes code like:
+result = fs.call_tool('list_directory', {'path': '/tmp'})
+print(result)
+```
+
+### Server Configuration
+
+Same format as `MCPMixin`:
+
+```python
+repl_mcp_servers = [
+    ('name', 'command or url'),
+    ('name', 'command or url', {'timeout': 60.0}),
+]
+```
+
+### With python_execute_response
+
+For agents that compute results and return them directly, combine with `SubREPLResponseMixin`:
+
+```python
+from agentlib import BaseAgent, REPLMCPMixin, SubREPLResponseMixin
+
+class DataAgent(REPLMCPMixin, SubREPLResponseMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a data assistant. Use MCP servers via Python and return results."
+    repl_mcp_servers = [
+        ('db', 'python db_server.py'),
+    ]
+
+with DataAgent() as agent:
+    # Agent can call MCP tools and format results in one python_execute_response call
+    result = agent.run("Get all users from the database and format as a table")
+```
+
+Python's MRO handles the diamond inheritance correctly—`SubREPLMixin` appears only once.
+
+### MCP Client API in REPL
+
+The agent has access to these methods on each MCP client:
+
+```python
+# List available tools
+tools = client.list_tools()
+
+# Call a tool
+result = client.call_tool('tool_name', {'arg': 'value'})
+# result = {'content': [...], 'isError': False}
+
+# Access content
+for item in result['content']:
+    if item['type'] == 'text':
+        print(item['text'])
+```
+
+### System Prompt Additions
+
+`REPLMCPMixin` adds to the system prompt:
+- List of available MCP clients and their servers
+- Usage documentation for calling tools
+- Tool names and descriptions (compact format)
+- Server instructions (if provided by the server)
+
+## 12. Combining Multiple Mixins
 
 Mixins can be combined to create agents with multiple capabilities:
 
@@ -616,7 +719,9 @@ When combining mixins, your agent gets all tools from each:
 |-------|-------|
 | `SubShellMixin` | `shell_execute`, `shell_read`, `shell_interrupt` |
 | `SubREPLMixin` | `python_execute`, `python_read`, `python_interrupt` |
+| `SubREPLResponseMixin` | Above + `python_execute_response` |
 | `MCPMixin` | `{server}_{tool}` for each MCP server tool |
+| `REPLMCPMixin` | REPL tools + MCP clients in REPL (no per-tool functions) |
 
 ## Summary
 
@@ -628,8 +733,9 @@ agentlib provides a flexible framework for building LLM-powered agents:
 4. **Control flow** with self.respond()
 5. **Handle errors** with specialized tools
 6. **Add capabilities** with mixins:
-   - `MCPMixin` for MCP server integration
+   - `MCPMixin` for MCP server integration (tools as functions)
+   - `REPLMCPMixin` for lightweight MCP via code (more token-efficient)
    - `SubShellMixin` for bash shell execution
-   - `SubREPLMixin` for Python REPL execution
+   - `SubREPLMixin` / `SubREPLResponseMixin` for Python REPL execution
 
 This foundation allows you to create sophisticated agents with minimal code while handling the complexity of LLM interactions for you. For advanced use cases, agentlib also supports agent composition, where one agent can use another agent as a tool.

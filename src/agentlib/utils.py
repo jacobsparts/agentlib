@@ -5,7 +5,7 @@ from collections import defaultdict
 
 logger = logging.getLogger('agentlib')
 
-JSON_INDENT = 2
+JSON_INDENT = None
 
 throttle_lock = defaultdict(threading.BoundedSemaphore)
 throttle_last = defaultdict(float)
