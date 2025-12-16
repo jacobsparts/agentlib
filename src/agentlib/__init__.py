@@ -6,6 +6,7 @@ from .shell_agent import SubShellMixin
 from .repl_agent import SubREPLMixin, SubREPLResponseMixin, REPLMCPMixin
 from .subshell import SubShell, STILL_RUNNING
 from .subrepl import SubREPL
+from .cli import CLIMixin, CLIAgent
 
 __all__ = [
     "BaseAgent",
@@ -21,6 +22,9 @@ __all__ = [
     "BadRequestError",
     "register_provider",
     "register_model",
+    # CLI
+    "CLIMixin",
+    "CLIAgent",
 ]
 
 __version__ = "0.3.0"

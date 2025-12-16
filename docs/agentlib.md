@@ -722,6 +722,193 @@ When combining mixins, your agent gets all tools from each:
 | `SubREPLResponseMixin` | Above + `python_execute_response` |
 | `MCPMixin` | `{server}_{tool}` for each MCP server tool |
 | `REPLMCPMixin` | REPL tools + MCP clients in REPL (no per-tool functions) |
+| `CLIMixin` | CLI REPL loop, console output, history |
+
+## 13. Building Interactive CLI Assistants
+
+The `agentlib.cli` module provides composable components for building terminal-based interactive assistants with minimal code. It includes terminal rendering utilities (markdown, syntax highlighting, panels) and a `CLIMixin` that adds a full CLI REPL loop to any agent.
+
+### Quick Start with CLIAgent
+
+`CLIAgent` is a pre-composed class that combines `CLIMixin`, `SubREPLResponseMixin`, and `BaseAgent`:
+
+```python
+from agentlib.cli import CLIAgent
+
+class MyAssistant(CLIAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a helpful Python assistant."
+    welcome_message = "[bold]Python Helper[/bold]\nI can run code and answer questions."
+
+if __name__ == "__main__":
+    MyAssistant.main()
+```
+
+This gives you:
+- Markdown rendering with syntax highlighting
+- Panels for code and output display
+- SQLite-backed readline history
+- Multiline input support (Alt+Enter for newlines)
+- Graceful Ctrl+C/D handling
+
+### Configuration Options
+
+```python
+class MyAssistant(CLIAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are helpful."
+
+    # CLI-specific options
+    welcome_message = "[bold]Welcome![/bold]\nHow can I help?"  # Supports markup
+    cli_prompt = ">>> "                    # Input prompt (default: "> ")
+    history_db = "~/.myapp_history.db"     # History file (default: ~/.agentlib_cli_history.db)
+    max_turns = 20                         # Max agent iterations per message
+    thinking_message = "Processing..."     # Status while agent works
+
+    # Inherited from SubREPLMixin
+    repl_timeout = 30.0                    # Python execution timeout
+```
+
+### Welcome Message Markup
+
+The welcome message supports rich-style markup tags:
+
+```python
+welcome_message = """[bold]My Assistant[/bold]
+[dim]Version 1.0[/dim]
+
+[cyan]Features:[/cyan]
+- Run Python code
+- Answer questions
+"""
+```
+
+Available tags: `[bold]`, `[dim]`, `[italic]`, `[underline]`, `[strike]`, `[red]`, `[green]`, `[yellow]`, `[blue]`, `[magenta]`, `[cyan]`, `[white]`, `[gray]`. Close with `[/tag]` or `[/]`.
+
+### Customizing Tool Display with Hooks
+
+Override these methods to customize how tool calls and results are displayed:
+
+```python
+class VerboseAssistant(CLIAgent):
+    def on_tool_call(self, name, args):
+        """Called before each tool executes."""
+        self.console.clear_line()
+        self.console.print(f"[yellow]Calling: {name}[/yellow]")
+
+        if name == 'python_execute':
+            self.console.panel(args.get('code', ''), title="Code", border_style="blue")
+
+    def on_tool_result(self, name, result):
+        """Called after each tool returns."""
+        if result:
+            self.console.panel(str(result)[:1000], title="Output", border_style="green")
+
+    def format_response(self, response):
+        """Format the final response before display."""
+        # Default renders markdown; override for custom formatting
+        return response  # Return plain text instead
+```
+
+### Adding MCP Servers
+
+Combine with `REPLMCPMixin` to add MCP server access:
+
+```python
+from agentlib import REPLMCPMixin
+from agentlib.cli import CLIAgent
+
+class MCPAssistant(REPLMCPMixin, CLIAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are helpful."
+    repl_mcp_servers = [
+        ('fs', '/path/to/mcp-filesystem-server /tmp'),
+        ('api', 'http://localhost:3000/sse'),
+    ]
+
+MCPAssistant.main()
+```
+
+### Using CLIMixin Directly
+
+For more control, use `CLIMixin` with your own agent composition:
+
+```python
+from agentlib import BaseAgent, SubREPLResponseMixin
+from agentlib.cli import CLIMixin
+
+class CustomAgent(CLIMixin, SubREPLResponseMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are helpful."
+    welcome_message = "Hello!"
+
+    @BaseAgent.tool
+    def custom_tool(self, query: str = "User query"):
+        """A custom tool."""
+        return f"Processed: {query}"
+
+with CustomAgent() as agent:
+    agent.cli_run()
+```
+
+### Console Utilities
+
+The `Console` class is available for custom output:
+
+```python
+from agentlib.cli import Console, Panel, Markdown
+
+console = Console()
+
+# Print with markup
+console.print("[bold]Hello[/bold] [cyan]world[/cyan]")
+
+# Print a panel
+console.panel("Content here", title="My Panel", border_style="green")
+
+# Print markdown
+console.markdown("# Heading\nSome **bold** text")
+
+# Status message (no newline)
+console.status("Loading...")
+console.clear_line()  # Clear status
+```
+
+### Panel Border Styles
+
+Panels support these border colors: `cyan`, `blue`, `green`, `red`, `magenta`, `yellow`, `gray`, `white`.
+
+```python
+from agentlib.cli import Panel
+
+# Full-width panel
+p = Panel("Content", title="Title", border_style="blue")
+print(p.render())
+
+# Fit to content width
+p = Panel.fit("Short content", border_style="green")
+print(p.render())
+```
+
+### Terminal Utilities
+
+Additional utilities available from `agentlib.cli`:
+
+```python
+from agentlib.cli import (
+    render_markdown,      # Convert markdown to ANSI
+    highlight_python,     # Syntax highlight Python code
+    parse_markup,         # Convert [bold] tags to ANSI
+    strip_ansi,          # Remove ANSI codes from text
+    get_terminal_width,  # Get terminal width
+)
+
+# Render markdown to terminal
+print(render_markdown("# Hello\n**Bold** and *italic*"))
+
+# Highlight Python code
+print(highlight_python("def hello():\n    print('world')"))
+```
 
 ## Summary
 
@@ -737,5 +924,6 @@ agentlib provides a flexible framework for building LLM-powered agents:
    - `REPLMCPMixin` for lightweight MCP via code (more token-efficient)
    - `SubShellMixin` for bash shell execution
    - `SubREPLMixin` / `SubREPLResponseMixin` for Python REPL execution
+   - `CLIMixin` / `CLIAgent` for interactive terminal assistants
 
 This foundation allows you to create sophisticated agents with minimal code while handling the complexity of LLM interactions for you. For advanced use cases, agentlib also supports agent composition, where one agent can use another agent as a tool.

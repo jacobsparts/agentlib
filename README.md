@@ -7,7 +7,7 @@
 ![Python 3.9‒3.12](https://img.shields.io/badge/python-3.9‒3.12-blue)
 &nbsp;
 
-> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add [`docs/LLM-GUIDE.md`](docs/LLM-GUIDE.md) to your context and start building. Include [`docs/LLM-GUIDE-MIXINS.md`](docs/LLM-GUIDE-MIXINS.md) if using shell, REPL, or MCP features.
+> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add [`docs/LLM-GUIDE.md`](docs/LLM-GUIDE.md) to your context and start building. Include [`docs/LLM-GUIDE-MIXINS.md`](docs/LLM-GUIDE-MIXINS.md) if using shell, REPL, MCP, or CLI features.
 
 ```python
 from agentlib import BaseAgent
@@ -67,11 +67,12 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 • **Conversation management** – tracks multi-turn context and system prompts for you.  
 • **Provider-agnostic** – OpenAI, Anthropic, Google, X.AI, OpenRouter, or roll your own.  
 • **Tool call emulation** – Enables both native and emulated tool calls with built-in validation and retry, bypassing inconsistent or poor constrained output performance.  
-• **Attachment system** - Inject named text data (files, JSON, etc.) into conversations as dynamic context, with automatic formatting and smart invalidation on content changes. Tools can use `self.attach(name, content)` and `self.detach(name)` to manage attachments.  
+• **Attachment system** – Inject files and data into conversations as dynamic context.  
 • **Multi-tool calls in a single LLM turn** – Execute multiple tools efficiently in one response.  
 • **Automatic retry with exponential back-off** – Built-in resilience for API failures and rate limits.  
-• **MCP integration** – Connect to Model Context Protocol servers via `MCPMixin` (tools as functions) or `REPLMCPMixin` (tools via code, more token-efficient).
-• **Shell & Python execution** – Give agents their own persistent bash shell or Python environment.  
+• **MCP integration** – Connect to Model Context Protocol servers for external tools and APIs.
+• **Shell & Python execution** – Give agents their own persistent bash shell or Python environment.
+• **CLI builder** – Build interactive terminal assistants with markdown rendering and persistent history.  
 
 ---
 
@@ -114,6 +115,22 @@ Expected output:
 b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
 google/gemini-2.5-flash: In=342, Out=54, Rsn=61, Cost=$0.000
 ```
+
+### Build an Interactive CLI Assistant
+
+```python
+from agentlib.cli import CLIAgent
+
+class MyAssistant(CLIAgent):
+    model = "google/gemini-2.5-flash"
+    system = "You are a helpful Python assistant."
+    welcome_message = "[bold]Python Helper[/bold]\nI can run code and answer questions."
+
+if __name__ == "__main__":
+    MyAssistant.main()
+```
+
+This gives you a full terminal interface with markdown rendering, Python syntax highlighting, readline history, and more.
 
 ---
 
