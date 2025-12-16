@@ -750,15 +750,15 @@ The `agentlib.cli` module provides composable components for building terminal-b
 
 ### Quick Start with CLIAgent
 
-`CLIAgent` is a pre-composed class that combines `CLIMixin`, `SubREPLResponseMixin`, and `BaseAgent`:
+`CLIAgent` is a pre-composed class that combines `CLIMixin` and `BaseAgent`:
 
 ```python
 from agentlib.cli import CLIAgent
 
 class MyAssistant(CLIAgent):
     model = 'google/gemini-2.5-flash'
-    system = "You are a helpful Python assistant."
-    welcome_message = "[bold]Python Helper[/bold]\nI can run code and answer questions."
+    system = "You are a helpful assistant."
+    welcome_message = "[bold]My Assistant[/bold]\nHow can I help?"
 
 if __name__ == "__main__":
     MyAssistant.main()
@@ -770,6 +770,18 @@ This gives you:
 - SQLite-backed readline history
 - Multiline input support (Alt+Enter for newlines)
 - Graceful Ctrl+C/D handling
+
+Add mixins for additional capabilities:
+
+```python
+from agentlib import SubREPLResponseMixin
+from agentlib.cli import CLIAgent
+
+class CodeAssistant(SubREPLResponseMixin, CLIAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a Python assistant."
+    welcome_message = "[bold]Code Helper[/bold]\nI can run Python code."
+```
 
 ### Configuration Options
 
@@ -784,9 +796,6 @@ class MyAssistant(CLIAgent):
     history_db = "~/.myapp_history.db"     # History file (default: ~/.agentlib_cli_history.db)
     max_turns = 20                         # Max agent iterations per message
     thinking_message = "Processing..."     # Status while agent works
-
-    # Inherited from SubREPLMixin
-    repl_timeout = 30.0                    # Python execution timeout
 ```
 
 ### Welcome Message Markup
@@ -798,8 +807,8 @@ welcome_message = """[bold]My Assistant[/bold]
 [dim]Version 1.0[/dim]
 
 [cyan]Features:[/cyan]
-- Run Python code
 - Answer questions
+- Help with tasks
 """
 ```
 

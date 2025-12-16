@@ -15,16 +15,15 @@ Quick Start:
     if __name__ == "__main__":
         MyAssistant.main()
 
-For more control, use CLIMixin directly:
-    from agentlib import BaseAgent, SubREPLResponseMixin
-    from agentlib.cli import CLIMixin
+With Python execution:
+    from agentlib import SubREPLResponseMixin
+    from agentlib.cli import CLIAgent
 
-    class MyAssistant(CLIMixin, SubREPLResponseMixin, BaseAgent):
+    class CodeAssistant(SubREPLResponseMixin, CLIAgent):
         model = 'anthropic/claude-sonnet-4-5'
-        system = "You are helpful."
+        system = "You are a Python assistant."
 
-    with MyAssistant() as agent:
-        agent.cli_run()
+    CodeAssistant.main()
 """
 
 from .terminal import (
@@ -47,16 +46,14 @@ from .mixin import (
 
 # Import base classes for CLIAgent
 from ..core import BaseAgent
-from ..repl_agent import SubREPLResponseMixin
 
 
-class CLIAgent(CLIMixin, SubREPLResponseMixin, BaseAgent):
+class CLIAgent(CLIMixin, BaseAgent):
     """
-    Pre-composed CLI agent with Python REPL and response capabilities.
+    Base CLI agent with interactive terminal capabilities.
 
-    This is a convenience class that combines CLIMixin, SubREPLResponseMixin,
-    and BaseAgent. For most CLI applications, you just need to subclass this
-    and set a few attributes.
+    This is a convenience class that combines CLIMixin and BaseAgent. For most
+    CLI applications, subclass this and add mixins for the capabilities you need.
 
     Class Attributes:
         model: LLM model to use (e.g., 'anthropic/claude-sonnet-4-5')
@@ -65,48 +62,44 @@ class CLIAgent(CLIMixin, SubREPLResponseMixin, BaseAgent):
         cli_prompt: Input prompt string (default: "> ")
         history_db: Path to SQLite history file (default: ~/.agentlib_cli_history.db)
         max_turns: Maximum agent turns per user message (default: 20)
-        repl_timeout: Timeout for Python execution (default: 30.0)
 
     Example:
         from agentlib.cli import CLIAgent
 
         class MyAssistant(CLIAgent):
             model = 'anthropic/claude-sonnet-4-5'
-            system = "You are a helpful Python assistant."
-            welcome_message = "[bold]Python Helper[/bold]\\nI can run Python code for you."
-            history_db = "~/.myapp_history.db"
+            system = "You are a helpful assistant."
+            welcome_message = "[bold]My Assistant[/bold]"
 
         if __name__ == "__main__":
             MyAssistant.main()
 
-    For MCP integration, add REPLMCPMixin:
-        from agentlib import REPLMCPMixin
+    With Python REPL:
+        from agentlib import SubREPLResponseMixin
         from agentlib.cli import CLIAgent
 
-        class MCPAssistant(REPLMCPMixin, CLIAgent):
+        class CodeAssistant(SubREPLResponseMixin, CLIAgent):
+            model = 'anthropic/claude-sonnet-4-5'
+            system = "You are a Python assistant."
+
+    With MCP servers:
+        from agentlib import REPLMCPMixin, SubREPLResponseMixin
+        from agentlib.cli import CLIAgent
+
+        class MCPAssistant(REPLMCPMixin, SubREPLResponseMixin, CLIAgent):
             model = 'anthropic/claude-sonnet-4-5'
             system = "You are helpful."
-            repl_mcp_servers = [
-                ('fs', '/path/to/mcp-server'),
-            ]
-
-        MCPAssistant.main()
+            repl_mcp_servers = [('fs', '/path/to/mcp-server')]
     """
 
     # Default configuration - override in subclasses
     model: str = 'anthropic/claude-sonnet-4-5'
-    system: str = "You are a helpful assistant with Python execution capabilities."
-    welcome_message: str = (
-        "[bold]CLI Assistant[/bold]\n"
-        "I can execute Python code and help with various tasks."
-    )
+    system: str = "You are a helpful assistant."
+    welcome_message: str = "[bold]CLI Assistant[/bold]"
 
     @BaseAgent.tool
     def submit_response(self, response: str = "Your response to the user in markdown format"):
-        """
-        Send your final response to the user. Use markdown formatting.
-        Note: python_execute_response may be more efficient for computed results.
-        """
+        """Send your final response to the user. Use markdown formatting."""
         self.respond(response)
 
 

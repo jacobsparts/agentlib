@@ -270,7 +270,7 @@ Adds interactive CLI REPL functionality with terminal rendering, readline histor
 
 ### Quick Start with CLIAgent
 
-`CLIAgent` pre-composes `CLIMixin + SubREPLResponseMixin + BaseAgent`:
+`CLIAgent` pre-composes `CLIMixin + BaseAgent`:
 
 ```python
 from agentlib.cli import CLIAgent
@@ -282,6 +282,16 @@ class MyAssistant(CLIAgent):
 
 if __name__ == "__main__":
     MyAssistant.main()
+```
+
+Add mixins for additional capabilities:
+```python
+from agentlib import SubREPLResponseMixin
+from agentlib.cli import CLIAgent
+
+class CodeAssistant(SubREPLResponseMixin, CLIAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a Python assistant."
 ```
 
 ### Configuration
@@ -297,9 +307,6 @@ class MyAssistant(CLIAgent):
     history_db = "~/.myapp_history.db"         # SQLite history path
     max_turns = 20                             # Max iterations per message
     thinking_message = "Processing..."         # Status while working
-
-    # From SubREPLMixin
-    repl_timeout = 30.0
 ```
 
 ### Markup Tags

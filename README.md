@@ -119,18 +119,22 @@ google/gemini-2.5-flash: In=342, Out=54, Rsn=61, Cost=$0.000
 ### Build an Interactive CLI Assistant
 
 ```python
+from agentlib import REPLMCPMixin, SubREPLResponseMixin
 from agentlib.cli import CLIAgent
 
-class MyAssistant(CLIAgent):
+class DataExtractor(REPLMCPMixin, SubREPLResponseMixin, CLIAgent):
     model = "google/gemini-2.5-flash"
-    system = "You are a helpful Python assistant."
-    welcome_message = "[bold]Python Helper[/bold]\nI can run code and answer questions."
+    system = """You are a data extraction specialist. You scrape websites, pull tables
+from PDFs, and transform messy data into clean formats. You have browser automation
+via puppeteer and Python with pandas, pdfplumber, beautifulsoup4, and openpyxl."""
+    welcome_message = "[bold]Data Extractor[/bold]\nGive me a URL or file. I'll get you the data."
+    repl_mcp_servers = [
+        ('browser', 'npx -y @anthropic/mcp-server-puppeteer'),
+    ]
 
 if __name__ == "__main__":
-    MyAssistant.main()
+    DataExtractor.main()
 ```
-
-This gives you a full terminal interface with markdown rendering, Python syntax highlighting, readline history, and more.
 
 ---
 
