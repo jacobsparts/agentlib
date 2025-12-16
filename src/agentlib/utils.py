@@ -43,8 +43,7 @@ class UsageTracker:
                     completion_tokens = total - (prompt_tokens + cached_tokens + reasoning_tokens)
                 else:
                     reasoning_tokens = total - (prompt_tokens + cached_tokens + completion_tokens)
-                    assert reasoning_tokens >= 0, f"negative reasoning token count: {usage}"
-                if not prompt_tokens + cached_tokens + completion_tokens + reasoning_tokens == total:
+                if not prompt_tokens + cached_tokens + completion_tokens + reasoning_tokens == total or not completion_tokens >= 0 or not reasoning_tokens >= 0:
                     logger.warning(f"⚠️ Tokens don't add up: {usage}")
             self.model_usage[model_name]['prompt_tokens'] += prompt_tokens
             self.model_usage[model_name]['cached_tokens'] += cached_tokens

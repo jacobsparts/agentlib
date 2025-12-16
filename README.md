@@ -7,7 +7,7 @@
 ![Python 3.9‒3.12](https://img.shields.io/badge/python-3.9‒3.12-blue)
 &nbsp;
 
-> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add [`docs/LLM_GUIDE.md`](docs/LLM_GUIDE.md) to your context and start building.
+> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add [`docs/LLM-GUIDE.md`](docs/LLM-GUIDE.md) to your context and start building. Include [`docs/LLM-GUIDE-MIXINS.md`](docs/LLM-GUIDE-MIXINS.md) if using shell, REPL, or MCP features.
 
 ```python
 from agentlib import BaseAgent
@@ -70,7 +70,8 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 • **Attachment system** - Inject named text data (files, JSON, etc.) into conversations as dynamic context, with automatic formatting and smart invalidation on content changes. Tools can use `self.attach(name, content)` and `self.detach(name)` to manage attachments.  
 • **Multi-tool calls in a single LLM turn** – Execute multiple tools efficiently in one response.  
 • **Automatic retry with exponential back-off** – Built-in resilience for API failures and rate limits.  
-• **MCP integration** – Connect to Model Context Protocol servers via `MCPMixin`. Tools from MCP servers are automatically registered and callable.
+• **MCP integration** – Connect to Model Context Protocol servers via `MCPMixin`.  
+• **Shell & Python execution** – Give agents their own persistent bash shell or Python environment.  
 
 ---
 

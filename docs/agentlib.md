@@ -392,15 +392,244 @@ finally:
 - MCP errors are returned as strings (e.g., `"[MCP Error] Connection refused"`) so the LLM can handle them gracefully.
 - Server stderr is suppressed by default. Pass `{'forward_stderr': True}` in options to see server logs.
 
+## 9. Shell Execution with SubShellMixin
+
+`SubShellMixin` gives your agent access to a persistent bash shell. Commands run in an isolated subprocess with environment variables and working directory preserved across calls.
+
+### Basic Usage
+
+```python
+from agentlib import BaseAgent, SubShellMixin
+
+class DevAgent(SubShellMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a development assistant with shell access."
+
+    @BaseAgent.tool
+    def done(self, response: str = "Your response"):
+        self.respond(response)
+
+with DevAgent() as agent:
+    result = agent.run("Find all Python files and count total lines of code")
+```
+
+### Tools Provided to the Agent
+
+The mixin automatically registers three tools:
+
+| Tool | Parameters | Description |
+|------|------------|-------------|
+| `shell_execute` | `command`, `timeout=30` | Execute a bash command |
+| `shell_read` | `timeout=30` | Continue reading output from a running command |
+| `shell_interrupt` | (none) | Send SIGINT to stop a running command |
+
+### Configuration
+
+```python
+class MyAgent(SubShellMixin, BaseAgent):
+    shell_echo = False     # Prefix output with "$ command" (default: False)
+    shell_timeout = 30.0   # Default timeout in seconds (default: 30.0)
+```
+
+### How It Works
+
+1. **Persistent State**: Environment variables set with `export` and directory changes with `cd` persist across tool calls.
+2. **Streaming Output**: Output streams in real-time. If a command takes longer than the timeout, partial output is returned with `[still running]\n` appended.
+3. **Interrupt Support**: Long-running commands can be stopped with `shell_interrupt()`.
+
+### Handling Long-Running Commands
+
+When output ends with `[still running]\n`, the command hasn't finished:
+
+```python
+# The agent might receive:
+# "Processing file 1...\nProcessing file 2...\n[still running]\n"
+
+# The agent should then call shell_read() to get more output,
+# or shell_interrupt() to stop the command.
+```
+
+### Direct API Access
+
+You can also use the shell directly without going through the LLM:
+
+```python
+agent = DevAgent()
+output = agent.shell_execute("ls -la")
+print(output)
+agent.close()
+```
+
+Or use the underlying `SubShell` class directly:
+
+```python
+from agentlib import SubShell
+
+with SubShell(echo=True) as shell:
+    print(shell.execute("echo hello"))
+    shell.execute("export FOO=bar")
+    print(shell.execute("echo $FOO"))  # Prints: bar
+```
+
+## 10. Python Execution with SubREPLMixin
+
+`SubREPLMixin` gives your agent access to a persistent Python REPL. Variables, imports, and function definitions persist across calls.
+
+### Basic Usage
+
+```python
+from agentlib import BaseAgent, SubREPLMixin
+
+class DataAgent(SubREPLMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a data analysis assistant with Python execution."
+
+    @BaseAgent.tool
+    def done(self, response: str = "Your response"):
+        self.respond(response)
+
+with DataAgent() as agent:
+    result = agent.run("Calculate the mean and standard deviation of [1, 2, 3, 4, 5]")
+```
+
+### Tools Provided to the Agent
+
+| Tool | Parameters | Description |
+|------|------------|-------------|
+| `python_execute` | `code`, `timeout=30` | Execute Python code |
+| `python_read` | `timeout=30` | Continue reading output from running code |
+| `python_interrupt` | (none) | Send SIGINT to stop running code |
+
+### Configuration
+
+```python
+class MyAgent(SubREPLMixin, BaseAgent):
+    repl_echo = False      # Prefix output with ">>> code" (default: False)
+    repl_timeout = 30.0    # Default timeout in seconds (default: 30.0)
+```
+
+### How It Works
+
+1. **Persistent State**: Variables, imports, and function definitions persist across calls.
+2. **Isolated Process**: Code runs in a separate process, protecting the main application.
+3. **Streaming Output**: Output streams in real-time with `[still running]\n` for incomplete execution.
+4. **Clean Tracebacks**: Error tracebacks are filtered to show only relevant frames.
+
+### Example Session
+
+The agent can build up state across multiple calls:
+
+```python
+# Call 1: Import libraries
+python_execute("import pandas as pd\nimport numpy as np")
+
+# Call 2: Create data
+python_execute("df = pd.DataFrame({'a': [1, 2, 3], 'b': [4, 5, 6]})")
+
+# Call 3: Analyze (variables persist)
+python_execute("print(df.describe())")
+```
+
+### Direct API Access
+
+```python
+agent = DataAgent()
+output = agent.python_execute("print(sum(range(100)))")
+print(output)  # 4950
+agent.close()
+```
+
+Or use the underlying `SubREPL` class:
+
+```python
+from agentlib import SubREPL
+
+with SubREPL(echo=True) as repl:
+    repl.execute("x = 42")
+    repl.execute("def double(n): return n * 2")
+    print(repl.execute("print(double(x))"))  # 84
+```
+
+### SubREPLResponseMixin Variant
+
+For agents that compute results and return them directly, use `SubREPLResponseMixin` instead. It adds a fourth tool:
+
+| Tool | Parameters | Description |
+|------|------------|-------------|
+| `python_execute_response` | `code`, `preamble=""`, `postamble=""` | Execute code and return output as final response |
+
+```python
+from agentlib import BaseAgent, SubREPLResponseMixin
+
+class CalcAgent(SubREPLResponseMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a calculator. Compute results and return them directly."
+
+with CalcAgent() as agent:
+    # Agent can use python_execute_response to compute and respond in one step
+    result = agent.run("What is the sum of squares from 1 to 100?")
+```
+
+The `preamble` and `postamble` parameters let the agent wrap the code output with explanatory text.
+
+## 11. Combining Multiple Mixins
+
+Mixins can be combined to create agents with multiple capabilities:
+
+```python
+from agentlib import BaseAgent, MCPMixin, SubShellMixin, SubREPLMixin
+
+class PowerAgent(SubREPLMixin, SubShellMixin, MCPMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You have shell, Python, and MCP server access."
+    mcp_servers = [
+        ('fs', 'npx -y @mcp/server-filesystem /tmp'),
+    ]
+
+    @BaseAgent.tool
+    def done(self, response: str = "Response"):
+        self.respond(response)
+
+with PowerAgent() as agent:
+    result = agent.run("List files in /tmp, then analyze them with Python")
+```
+
+### Mixin Order
+
+**Important:** List mixins before `BaseAgent` in the class definition. The order determines method resolution:
+
+```python
+# Correct: mixins before BaseAgent
+class MyAgent(SubREPLMixin, SubShellMixin, MCPMixin, BaseAgent):
+    ...
+
+# Wrong: BaseAgent should be last
+class MyAgent(BaseAgent, SubShellMixin):  # Don't do this
+    ...
+```
+
+### Available Tools
+
+When combining mixins, your agent gets all tools from each:
+
+| Mixin | Tools |
+|-------|-------|
+| `SubShellMixin` | `shell_execute`, `shell_read`, `shell_interrupt` |
+| `SubREPLMixin` | `python_execute`, `python_read`, `python_interrupt` |
+| `MCPMixin` | `{server}_{tool}` for each MCP server tool |
+
 ## Summary
 
 agentlib provides a flexible framework for building LLM-powered agents:
 
-1. **Define your agent** by subclassing BaseAgent (add MCPMixin for MCP support)
+1. **Define your agent** by subclassing BaseAgent
 2. **Add tools** using the @BaseAgent.tool decorator
 3. **Manage state** with instance variables
 4. **Control flow** with self.respond()
 5. **Handle errors** with specialized tools
-6. **Integrate external tools** via MCP servers using MCPMixin
+6. **Add capabilities** with mixins:
+   - `MCPMixin` for MCP server integration
+   - `SubShellMixin` for bash shell execution
+   - `SubREPLMixin` for Python REPL execution
 
 This foundation allows you to create sophisticated agents with minimal code while handling the complexity of LLM interactions for you. For advanced use cases, agentlib also supports agent composition, where one agent can use another agent as a tool.
