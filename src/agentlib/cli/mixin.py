@@ -170,6 +170,11 @@ class CLIMixin:
         if not hasattr(self, '_cli_console'):
             self._cli_console = Console()
 
+        # Override patch approval if FilePatchMixin is present
+        if hasattr(self, '_patch_initialized') and not hasattr(self, '_cli_patch_approval_bound'):
+            self._prompt_patch_approval = self._cli_prompt_patch_approval
+            self._cli_patch_approval_bound = True
+
     @property
     def console(self) -> Console:
         """Get the console instance."""
@@ -342,3 +347,64 @@ class CLIMixin:
         """
         with cls(**init_kwargs) as agent:
             agent.cli_run()
+
+    # === PATCH APPROVAL UI ===
+
+    def _cli_prompt_patch_approval(
+        self,
+        preview_text: str,
+        preamble: str = "",
+        postamble: str = ""
+    ) -> tuple:
+        """
+        Interactive patch approval prompt for CLI.
+
+        Displays the preview and prompts user with options:
+        - [Y]es: Apply the patch
+        - [N]o: Reject the patch (prompts for comments)
+        - [A]lways: Apply and disable future previews
+
+        Returns:
+            Tuple of (approved, comments, disable_future_preview)
+        """
+        print()  # Blank line before preview
+
+        # Show preamble if provided
+        if preamble:
+            self.console.print(parse_markup(preamble))
+            print()
+
+        # Show preview in a panel
+        self.console.panel(preview_text, title="Patch Preview", border_style="yellow")
+
+        # Show postamble if provided
+        if postamble:
+            print()
+            self.console.print(parse_markup(postamble))
+
+        # Prompt for approval
+        print()
+        self.console.print("[bold]Apply this patch?[/bold]")
+        self.console.print("[dim][Y]es / [N]o / [A]lways (yes, don't ask again)[/dim]")
+
+        while True:
+            try:
+                response = input("> ").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                return False, "User cancelled", False
+
+            if response in ('y', 'yes', ''):
+                return True, "", False
+            elif response in ('n', 'no'):
+                # Ask for optional comments
+                self.console.print("[dim]Comments (optional, press Enter to skip):[/dim]")
+                try:
+                    comments = input("> ").strip()
+                except (KeyboardInterrupt, EOFError):
+                    comments = ""
+                return False, comments, False
+            elif response in ('a', 'always'):
+                self.console.print("[dim]Future patches will be auto-applied without preview.[/dim]")
+                return True, "", True
+            else:
+                self.console.print("[red]Please enter Y, N, or A[/red]")

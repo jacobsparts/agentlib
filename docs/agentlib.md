@@ -939,6 +939,145 @@ print(render_markdown("# Hello\n**Bold** and *italic*"))
 print(highlight_python("def hello():\n    print('world')"))
 ```
 
+## 14. File Patching with FilePatchMixin
+
+`FilePatchMixin` gives your agent the ability to add, update, and delete files using a context-based patch format. This is more efficient than rewriting entire files and provides clear visibility into changes.
+
+### Basic Usage
+
+```python
+from agentlib import BaseAgent, FilePatchMixin
+
+class CodeAssistant(FilePatchMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a coding assistant. Use apply_patch to modify files."
+
+    @BaseAgent.tool
+    def done(self, response: str = "Your response"):
+        """Send final response to user."""
+        self.respond(response)
+
+with CodeAssistant() as agent:
+    result = agent.run("Add a hello() function to main.py")
+```
+
+### Configuration
+
+```python
+class MyAgent(FilePatchMixin, BaseAgent):
+    patch_preview = None  # True, False, or None (default)
+```
+
+| Value | Behavior |
+|-------|----------|
+| `True` | Always require user approval before applying patches |
+| `False` | Auto-apply patches without preview/approval |
+| `None` | Agent decides per-call (default: preview=True) |
+
+### The Patch Format
+
+Patches are wrapped in begin/end markers with file operations inside:
+
+```
+*** Begin Patch
+*** Add File: path/to/new_file.py
++def hello():
++    print("Hello, world!")
+*** Update File: path/to/existing.py
+@@ def main():
+ def main():
+-    print("old")
++    print("new")
+*** Delete File: path/to/remove.py
+*** End Patch
+```
+
+**File Operations:**
+- `*** Add File: <path>` - Create a new file. All content lines must start with `+`.
+- `*** Update File: <path>` - Modify an existing file using hunks.
+- `*** Delete File: <path>` - Remove an existing file.
+
+**Hunk Format (for updates):**
+- Lines starting with ` ` (space) are context (unchanged)
+- Lines starting with `-` are removed
+- Lines starting with `+` are added
+- Use `@@` with optional context (e.g., function name) to locate the change
+- Use `*** End of File` to anchor changes at the end of a file
+
+### Tool Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `patch` | str | Patch text in the format above |
+| `preview` | bool | Request preview/approval (only when `patch_preview=None`) |
+| `preamble` | str | Optional text to display before the preview |
+| `postamble` | str | Optional text to display after the preview |
+
+### Preview and Approval Flow
+
+When preview is enabled:
+1. The patch is validated and a unified diff preview is generated
+2. `_prompt_patch_approval()` is called to get user approval
+3. If approved, the patch is applied; otherwise, rejection message is returned
+
+**Default behavior:** Auto-approve (for non-interactive use)
+
+**With CLIMixin:** Interactive terminal prompt with options:
+- `[Y]es` - Apply the patch
+- `[N]o` - Reject (with optional comments)
+- `[A]lways` - Apply and disable future previews
+
+### Combining with CLIMixin
+
+```python
+from agentlib import FilePatchMixin
+from agentlib.cli import CLIAgent
+
+class CodeEditor(FilePatchMixin, CLIAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a code editor. Use apply_patch to modify files."
+    welcome_message = "[bold]Code Editor[/bold]\nI can edit your files."
+
+if __name__ == "__main__":
+    CodeEditor.main()
+```
+
+When combined with `CLIMixin`, the approval prompt is automatically enhanced with an interactive UI.
+
+### Custom Approval Logic
+
+Override `_prompt_patch_approval()` for custom approval workflows:
+
+```python
+class MyAgent(FilePatchMixin, BaseAgent):
+    def _prompt_patch_approval(self, preview_text, preamble, postamble):
+        """
+        Custom approval logic.
+
+        Returns:
+            Tuple of (approved: bool, comments: str, disable_future_preview: bool)
+        """
+        # Example: auto-approve small patches, require approval for large ones
+        if preview_text.count('\n') < 20:
+            return True, "", False
+        # ... custom approval UI ...
+        return True, "", False
+```
+
+### Path Resolution
+
+Paths in patches are relative to the base path, which is determined by:
+1. `PWD` environment variable (if set)
+2. Directory containing the main script
+3. Current working directory (fallback)
+
+### Notes
+
+- The patch format is designed for context-based matching, making it resilient to line number changes
+- Unicode punctuation (smart quotes, em-dashes) is normalized during matching
+- Whitespace-insensitive matching is attempted if exact matching fails
+- Patches can span multiple files in a single operation
+
 ## Summary
 
 agentlib provides a flexible framework for building LLM-powered agents:
@@ -953,6 +1092,7 @@ agentlib provides a flexible framework for building LLM-powered agents:
    - `REPLMCPMixin` for lightweight MCP via code (more token-efficient)
    - `SubShellMixin` for bash shell execution
    - `SubREPLMixin` / `SubREPLResponseMixin` for Python REPL execution
+   - `FilePatchMixin` for efficient file editing with preview/approval
    - `CLIMixin` / `CLIAgent` for interactive terminal assistants
 
 This foundation allows you to create sophisticated agents with minimal code while handling the complexity of LLM interactions for you. For advanced use cases, agentlib also supports agent composition, where one agent can use another agent as a tool.

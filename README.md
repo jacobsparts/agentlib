@@ -73,6 +73,7 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 • **MCP integration** – Connect to Model Context Protocol servers for external tools and APIs.  
 • **Shell & Python execution** – Give agents their own persistent bash shell or Python environment.  
 • **CLI builder** – Build interactive terminal assistants with markdown rendering and persistent history.  
+• **Efficient file patching** – Context-based file editing with preview, approval workflow, and multi-file operations.  
 
 ---
 

@@ -396,3 +396,102 @@ from agentlib.cli import (
     Console,             # Output with markup
 )
 ```
+
+## FilePatchMixin (File Editing)
+
+Adds efficient file patching with context-based matching. Supports adding, updating, and deleting files.
+
+```python
+from agentlib import BaseAgent, FilePatchMixin
+
+class MyAgent(FilePatchMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a coding assistant."
+    patch_preview = None  # True=always, False=never, None=agent decides
+
+    @BaseAgent.tool
+    def done(self, response: str = "Response"):
+        self.respond(response)
+```
+
+### patch_preview Configuration
+
+| Value | Behavior |
+|-------|----------|
+| `True` | Always require user approval |
+| `False` | Auto-apply without approval |
+| `None` | Agent decides per-call (preview field in tool) |
+
+### Tool: apply_patch
+
+**Parameters:**
+- `patch` (str): Patch text in format below
+- `preview` (bool): Request approval (only when `patch_preview=None`)
+- `preamble` (str): Optional text before preview
+- `postamble` (str): Optional text after preview
+
+### Patch Format
+
+```
+*** Begin Patch
+*** Add File: path/to/new.py
++line 1
++line 2
+*** Update File: path/to/existing.py
+@@ def function_name():
+ context line
+-old line
++new line
+ context line
+*** Delete File: path/to/remove.py
+*** End Patch
+```
+
+**Operations:**
+- `*** Add File:` - Create file (all lines start with `+`)
+- `*** Update File:` - Modify file with hunks
+- `*** Delete File:` - Remove file
+
+**Hunk lines:**
+- ` ` (space) - Context (unchanged)
+- `-` - Remove line
+- `+` - Add line
+- `@@` - Locate change by context (e.g., function name)
+- `*** End of File` - Anchor at file end
+
+### Approval Hook
+
+```python
+def _prompt_patch_approval(self, preview_text, preamble, postamble):
+    """Override for custom approval UI.
+    Returns: (approved: bool, comments: str, disable_future_preview: bool)
+    """
+    return True, "", False  # Default: auto-approve
+```
+
+### With CLIMixin
+
+```python
+from agentlib import FilePatchMixin
+from agentlib.cli import CLIAgent
+
+class Editor(FilePatchMixin, CLIAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a code editor."
+```
+
+CLIMixin automatically provides interactive approval: `[Y]es / [N]o / [A]lways`
+
+### Path Resolution
+
+Paths are relative to base path (in order):
+1. `PWD` environment variable
+2. Directory of main script
+3. Current working directory
+
+### Notes
+
+- Context-based matching is resilient to line number changes
+- Unicode punctuation normalized during matching
+- Whitespace-insensitive matching as fallback
+- Multi-file patches in single operation
