@@ -214,14 +214,6 @@ response = agent.text()            # Get LLM response (text only)
 result = agent.run_loop(max_turns=5)  # Run tool loop
 ```
 
-## Mixins
-
-Mixins add specialized capabilities to agents. See [LLM-GUIDE-MIXINS.md](LLM-GUIDE-MIXINS.md) for details:
-
-- **MCPMixin** - MCP (Model Context Protocol) server integration
-- **SubShellMixin** - Persistent bash shell access
-- **SubREPLMixin** - Persistent Python REPL access
-
 ## Tips
 
 - `self.respond(value)` exits run loop and returns value
@@ -229,3 +221,16 @@ Mixins add specialized capabilities to agents. See [LLM-GUIDE-MIXINS.md](LLM-GUI
 - Instance variables persist across `run()` calls
 - Override `run()` for custom preprocessing
 - Use context manager (`with MyAgent() as agent:`) for automatic cleanup
+
+## Mixins
+
+Mixins add specialized capabilities to agents. See [LLM-GUIDE-MIXINS.md](LLM-GUIDE-MIXINS.md) for details:
+
+- **MCPMixin** - MCP (Model Context Protocol) server integration
+- **SubShellMixin** - Persistent bash shell access
+- **SubREPLMixin** - Persistent Python REPL access
+- **REPLMCPMixin** - Lightweight MCP alternative that uses fewer tokens by having agents call MCP tools via Python code
+- **CLIMixin/CLIAgent** - Interactive terminal REPL with rich formatting, readline history, and customizable hooks
+- **FilePatchMixin** - Context-based file patching for efficient code editing with optional approval workflows
+
+
