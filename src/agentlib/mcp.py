@@ -42,6 +42,7 @@ import errno
 import json
 import os
 import select
+import signal
 import socket
 import ssl
 import subprocess
@@ -220,6 +221,7 @@ class StdioTransport(Transport):
         self._lock = threading.Lock()  # Protects _closed and process
         self._send_lock = threading.Lock()
         self._recv_lock = threading.Lock()
+        self._process_group_created = False  # Track if we created a process group
 
     def connect(self) -> None:
         """Spawn the subprocess and set up non-blocking I/O."""
@@ -234,14 +236,18 @@ class StdioTransport(Transport):
             process_env.update(self.env)
 
         try:
+            # Create a new session to ensure subprocess and its children form a process group
+            # This allows us to kill the entire process group on cleanup
             self.process = subprocess.Popen(
                 self.command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=0,
-                env=process_env
+                env=process_env,
+                start_new_session=True  # Create new process group (Unix only)
             )
+            self._process_group_created = True
         except OSError as e:
             raise TransportError(f"Failed to start process: {e}") from e
 
@@ -254,15 +260,22 @@ class StdioTransport(Transport):
         except OSError as e:
             # Clean up process if non-blocking setup fails
             try:
-                self.process.terminate()
+                if self._process_group_created and self.process.pid:
+                    os.killpg(self.process.pid, signal.SIGTERM)
+                else:
+                    self.process.terminate()
                 self.process.wait(timeout=1)
-            except OSError:
+            except (subprocess.TimeoutExpired, OSError):
                 try:
-                    self.process.kill()
+                    if self._process_group_created and self.process.pid:
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                    else:
+                        self.process.kill()
                     self.process.wait()
-                except OSError:
+                except (OSError, ProcessLookupError):
                     pass
             self.process = None
+            self._process_group_created = False
             raise TransportError(f"Failed to set non-blocking I/O: {e}") from e
 
     def _set_nonblocking(self, fd: int) -> None:
@@ -493,6 +506,7 @@ class StdioTransport(Transport):
                 return
             self._closed = True
             process = self.process
+            process_group_created = self._process_group_created
             self.process = None
 
         if process is not None:
@@ -504,15 +518,46 @@ class StdioTransport(Transport):
                     except OSError:
                         pass
 
-            # Give the process a chance to exit gracefully
+            # Terminate the process and its children using process group if available
             try:
-                process.terminate()
+                if process_group_created and process.pid:
+                    # Kill the entire process group to ensure child processes are terminated
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except (OSError, ProcessLookupError):
+                        # Process group may already be gone
+                        pass
+                else:
+                    # Fall back to terminating just the parent process
+                    process.terminate()
+
+                # Wait for the process to exit
                 process.wait(timeout=PROCESS_TERMINATE_TIMEOUT)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                # Force kill if graceful termination times out
+                try:
+                    if process_group_created and process.pid:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    else:
+                        process.kill()
+                except (OSError, ProcessLookupError):
+                    # Process may already be dead
+                    pass
+                # Final wait to reap the zombie
+                try:
+                    process.wait(timeout=1)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
             except OSError:
                 pass
+
+    def __del__(self) -> None:
+        """Ensure subprocess cleanup even if close() is not explicitly called."""
+        try:
+            # Suppress any exceptions during cleanup to avoid issues during interpreter shutdown
+            self.close()
+        except Exception:
+            pass
 
 
 # ============================================================================
