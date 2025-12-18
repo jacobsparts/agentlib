@@ -1378,7 +1378,9 @@ class MCPClient:
     """
 
     # MCP Protocol version we implement
-    PROTOCOL_VERSION = "2024-11-05"
+    # We support both 2024-11-05 and 2025-11-25 - we send 2025-11-25 and accept either back
+    PROTOCOL_VERSION = "2025-11-25"
+    SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-11-25"}
 
     # Maximum cached responses to prevent unbounded memory growth
     MAX_PENDING_RESPONSES = 100
@@ -1479,10 +1481,9 @@ class MCPClient:
         message: dict[str, Any] = {
             "jsonrpc": JSONRPC_VERSION,
             "id": request_id,
-            "method": method
+            "method": method,
+            "params": params if params is not None else {}
         }
-        if params is not None:
-            message["params"] = params
 
         self.transport.send(message)
         return request_id
@@ -1821,9 +1822,9 @@ class MCPClient:
         server_version = result.get("protocolVersion")
         if server_version is None:
             raise ProtocolError("Server did not return protocolVersion in initialize response")
-        if server_version != self.PROTOCOL_VERSION:
+        if server_version not in self.SUPPORTED_PROTOCOL_VERSIONS:
             raise ProtocolError(
-                f"Protocol version mismatch: client supports {self.PROTOCOL_VERSION}, "
+                f"Protocol version mismatch: client supports {self.SUPPORTED_PROTOCOL_VERSIONS}, "
                 f"server returned {server_version}"
             )
 
@@ -1881,7 +1882,8 @@ class MCPClient:
         self._check_connected()
 
         # Check if server supports prompts (only call if capability advertised)
-        if not self.server_capabilities or not self.server_capabilities.get("prompts"):
+        # Note: An empty dict {} means the capability IS supported (just with no options)
+        if not self.server_capabilities or "prompts" not in self.server_capabilities:
             return []
 
         result = self._call("prompts/list", timeout=timeout)
@@ -1909,7 +1911,8 @@ class MCPClient:
         self._check_connected()
 
         # Check if server supports tools (only call if capability advertised)
-        if not self.server_capabilities or not self.server_capabilities.get("tools"):
+        # Note: An empty dict {} means the capability IS supported (just with no options)
+        if not self.server_capabilities or "tools" not in self.server_capabilities:
             return []
 
         result = self._call("tools/list", timeout=timeout)
@@ -1976,7 +1979,8 @@ class MCPClient:
         self._check_connected()
 
         # Check if server supports resources (only call if capability advertised)
-        if not self.server_capabilities or not self.server_capabilities.get("resources"):
+        # Note: An empty dict {} means the capability IS supported (just with no options)
+        if not self.server_capabilities or "resources" not in self.server_capabilities:
             return []
 
         result = self._call("resources/list", timeout=timeout)
