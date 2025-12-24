@@ -7,7 +7,7 @@
 ![Python 3.9‒3.12](https://img.shields.io/badge/python-3.9‒3.12-blue)
 &nbsp;
 
-> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add [`docs/LLM-GUIDE.md`](docs/LLM-GUIDE.md) to your context and start building. Include [`docs/LLM-GUIDE-MIXINS.md`](docs/LLM-GUIDE-MIXINS.md) if using shell, REPL, MCP, or CLI features.
+> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add [`docs/LLM-GUIDE.md`](docs/LLM-GUIDE.md) to your context and start building. Include [`docs/LLM-GUIDE-MIXINS.md`](docs/LLM-GUIDE-MIXINS.md) for shell, REPL, MCP, or CLI features. For the code-first REPLAgent paradigm, see [`docs/LLM-GUIDE-REPLAGENT.md`](docs/LLM-GUIDE-REPLAGENT.md).
 
 ```python
 from agentlib import BaseAgent
@@ -72,6 +72,7 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 • **Automatic retry with exponential back-off** – Built-in resilience for API failures and rate limits.  
 • **MCP integration** – Connect to Model Context Protocol servers for external tools and APIs.  
 • **Shell & Python execution** – Give agents their own persistent bash shell or Python environment.  
+• **Code-first agent paradigm** – REPLAgent lets the LLM write Python directly instead of JSON tool calls—ideal for code-heavy tasks.  
 • **CLI builder** – Build interactive terminal assistants with markdown rendering and persistent history.  
 • **Efficient file patching** – Context-based file editing with preview, approval workflow, and multi-file operations.  
 

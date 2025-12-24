@@ -259,7 +259,219 @@ if __name__ == "__main__":
         print(f"Result: {result}")
 ```
 
-## 8. MCP Integration with MCPMixin
+## 8. Code-First Agents with REPLAgent
+
+REPLAgent is a fundamentally different paradigm from tool-calling agents. Instead of the LLM selecting tools from JSON schemas, the LLM writes Python code directly and executes it in a persistent REPL environment.
+
+### Why REPLAgent?
+
+Tool-calling agents work well for structured operations, but some tasks are naturally code-oriented:
+- Data analysis and transformation
+- File manipulation and scripting
+- Complex computations
+- Tasks where the LLM needs to see output before deciding next steps
+
+REPLAgent excels here because:
+- **Natural for code tasks**: The LLM writes Python instead of describing operations through tool schemas
+- **Persistent state**: Variables, imports, and definitions survive across turns
+- **Exploratory workflow**: The LLM can run code, see output, and iterate
+- **Syntax error recovery**: Pure syntax errors are retried without polluting conversation history
+
+### Basic Usage
+
+```python
+from agentlib import REPLAgent
+
+class DataAgent(REPLAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a data analysis assistant."
+
+    @REPLAgent.tool
+    def read_csv(self, path: str = "Path to CSV file"):
+        """Read a CSV file and return its contents."""
+        import pandas as pd
+        return pd.read_csv(path).to_dict()
+
+result = DataAgent().run("Analyze sales.csv and tell me the top 3 products by revenue")
+```
+
+The key difference: the LLM's response IS Python code, not markdown or tool calls. The code runs directly in the REPL.
+
+### How It Works
+
+1. The LLM receives a system prompt describing the REPL environment
+2. The LLM writes Python code as its response (no markdown, no preamble)
+3. Code executes statement-by-statement in an isolated subprocess
+4. Output streams back to the LLM as REPL feedback
+5. Loop continues until `submit(result)` is called or max turns reached
+
+### Built-in Functions
+
+Every REPLAgent has these functions available in the REPL:
+
+| Function | Description |
+|----------|-------------|
+| `submit(result)` | Submit the final answer and end the task |
+| `respond(text)` | Same as submit, enabled when `interactive = True` |
+| `help(func)` | Get parameter descriptions for any tool |
+
+### Defining Tools
+
+Tools are defined the same way as BaseAgent, but they become callable Python functions in the REPL:
+
+```python
+class MyAgent(REPLAgent):
+    system = "You are a helpful assistant."
+
+    @REPLAgent.tool
+    def search(self, query: str = "Search query"):
+        """Search for information."""
+        return do_search(query)
+
+    @REPLAgent.tool
+    def save_file(self, path: str = "File path", content: str = "Content to write"):
+        """Save content to a file."""
+        Path(path).write_text(content)
+        return f"Saved {len(content)} bytes to {path}"
+```
+
+The LLM can then use these naturally in code:
+
+```python
+# LLM writes:
+results = search("python tutorials")
+for r in results[:3]:
+    print(r['title'])
+summary = "\n".join(r['title'] for r in results[:3])
+save_file("top_results.txt", summary)
+submit(f"Found {len(results)} results, saved top 3 to top_results.txt")
+```
+
+### Interactive Mode
+
+For CLI or chat-style agents, set `interactive = True` to enable `respond()` as a more natural alternative to `submit()`:
+
+```python
+class ChatAgent(REPLAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a helpful assistant."
+    interactive = True  # Enables respond() function
+
+# Now the LLM can use respond() instead of submit():
+# respond("Here's what I found...")
+```
+
+### Combining with Mixins
+
+REPLAgent works with the same mixins as BaseAgent:
+
+```python
+from agentlib import REPLAgent, MCPMixin
+from agentlib.cli import CLIMixin
+
+class PowerAgent(CLIMixin, MCPMixin, REPLAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a powerful assistant."
+    mcp_servers = [
+        ('browser', 'npx -y @anthropic/mcp-server-puppeteer'),
+    ]
+    welcome_message = "[bold]Power Agent[/bold]"
+    interactive = True
+
+if __name__ == "__main__":
+    PowerAgent.main()
+```
+
+MCP tools from connected servers become callable functions in the REPL alongside your defined tools.
+
+### Hooks for Customization
+
+REPLAgent provides hooks for customizing output handling:
+
+```python
+class CustomAgent(REPLAgent):
+    def on_repl_execute(self, code):
+        """Called at the start of each turn."""
+        print("Starting execution...")
+
+    def on_repl_chunk(self, chunk: str):
+        """Called for each chunk of output."""
+        pass  # Real-time streaming hook
+
+    def on_repl_output(self, output: str):
+        """Called after execution completes with full output."""
+        print(f"Output: {output[:100]}...")
+
+    def process_repl_output(self, output: str) -> str:
+        """Process/truncate output before sending to LLM."""
+        if len(output) > 10000:
+            return output[:5000] + "\n... (truncated) ..."
+        return output
+```
+
+### When to Use REPLAgent vs BaseAgent
+
+| Use REPLAgent when... | Use BaseAgent when... |
+|-----------------------|-----------------------|
+| Task is code-heavy | Task is structured operations |
+| LLM needs to iterate on output | Operations are well-defined |
+| Exploratory workflow | Predictable multi-step workflows |
+| Computing results | Calling APIs or services |
+
+### Complete Example: Data Analysis Agent
+
+```python
+from agentlib import REPLAgent
+
+class AnalysisAgent(REPLAgent):
+    model = 'google/gemini-2.5-flash'
+    system = """You are a data analysis assistant.
+    Write Python code to analyze data and answer questions.
+    Use pandas for data manipulation. Submit your final answer with submit()."""
+
+    @REPLAgent.tool
+    def load_data(self, path: str = "Path to data file"):
+        """Load data from a file (CSV, JSON, or Excel)."""
+        import pandas as pd
+        if path.endswith('.csv'):
+            return pd.read_csv(path)
+        elif path.endswith('.json'):
+            return pd.read_json(path)
+        elif path.endswith('.xlsx'):
+            return pd.read_excel(path)
+        raise ValueError(f"Unsupported format: {path}")
+
+if __name__ == "__main__":
+    agent = AnalysisAgent()
+    result = agent.run("""
+        Load sales_2024.csv and answer:
+        1. What's the total revenue?
+        2. Which product category has the highest sales?
+        3. What's the month-over-month growth trend?
+    """)
+    print(result)
+```
+
+The LLM might produce multiple turns of Python code:
+
+```python
+# Turn 1: Load and explore
+df = load_data("sales_2024.csv")
+df.head()
+df.info()
+
+# Turn 2: Answer questions
+total_revenue = df['revenue'].sum()
+top_category = df.groupby('category')['sales'].sum().idxmax()
+monthly = df.groupby('month')['revenue'].sum()
+growth = monthly.pct_change().mean() * 100
+submit(f"""Analysis Results:
+1. Total Revenue: ${total_revenue:,.2f}
+2. Top Category: {top_category}
+3. Average MoM Growth: {growth:.1f}%""")
+```
+
+## 9. MCP Integration with MCPMixin
 
 `MCPMixin` adds Model Context Protocol (MCP) support to any agent via mixin composition. MCP servers expose tools that your agent can call, allowing integration with external systems, APIs, and services.
 
@@ -408,7 +620,7 @@ finally:
 - MCP errors are returned as strings (e.g., `"[MCP Error] Connection refused"`) so the LLM can handle them gracefully.
 - Server stderr is suppressed by default. Pass `{'forward_stderr': True}` in options to see server logs.
 
-## 9. Shell Execution with SubShellMixin
+## 10. Shell Execution with SubShellMixin
 
 `SubShellMixin` gives your agent access to a persistent bash shell. Commands run in an isolated subprocess with environment variables and working directory preserved across calls.
 
@@ -487,7 +699,7 @@ with SubShell(echo=True) as shell:
     print(shell.execute("echo $FOO"))  # Prints: bar
 ```
 
-## 10. Python Execution with SubREPLMixin
+## 11. Python Execution with SubREPLMixin
 
 `SubREPLMixin` gives your agent access to a persistent Python REPL. Variables, imports, and function definitions persist across calls.
 
@@ -590,7 +802,7 @@ The `preamble` and `postamble` parameters let the agent wrap the code output wit
 
 **Error handling:** If the script throws an exception or times out, the error is returned to the agent (not the user) so it can fix the code and retry.
 
-## 11. Lightweight MCP with REPLMCPMixin
+## 12. Lightweight MCP with REPLMCPMixin
 
 `REPLMCPMixin` provides an alternative to `MCPMixin` that uses significantly fewer tokens. Instead of exposing each MCP tool as an agent function (which adds to the system prompt), it pre-instantiates MCP clients in the Python REPL. The agent calls MCP tools by writing Python code.
 
@@ -711,7 +923,7 @@ for item in result['content']:
 - Tool names and descriptions (compact format)
 - Server instructions (if provided by the server)
 
-## 12. Combining Multiple Mixins
+## 13. Combining Multiple Mixins
 
 Mixins can be combined to create agents with multiple capabilities:
 
@@ -760,7 +972,7 @@ When combining mixins, your agent gets all tools from each:
 | `REPLMCPMixin` | REPL tools + MCP clients in REPL (no per-tool functions) |
 | `CLIMixin` | CLI REPL loop, console output, history |
 
-## 13. Building Interactive CLI Assistants
+## 14. Building Interactive CLI Assistants
 
 The `agentlib.cli` module provides composable components for building terminal-based interactive assistants with minimal code. It includes terminal rendering utilities (markdown, syntax highlighting, panels) and a `CLIMixin` that adds a full CLI REPL loop to any agent.
 
@@ -955,7 +1167,7 @@ print(render_markdown("# Hello\n**Bold** and *italic*"))
 print(highlight_python("def hello():\n    print('world')"))
 ```
 
-## 14. File Patching with FilePatchMixin
+## 15. File Patching with FilePatchMixin
 
 `FilePatchMixin` gives your agent the ability to add, update, and delete files using a context-based patch format. This is more efficient than rewriting entire files and provides clear visibility into changes.
 
@@ -1098,12 +1310,15 @@ Paths in patches are relative to the base path, which is determined by:
 
 agentlib provides a flexible framework for building LLM-powered agents:
 
-1. **Define your agent** by subclassing BaseAgent
-2. **Add tools** using the @BaseAgent.tool decorator
+1. **Define your agent** by subclassing `BaseAgent` or `REPLAgent`
+2. **Add tools** using the `@BaseAgent.tool` or `@REPLAgent.tool` decorator
 3. **Manage state** with instance variables
-4. **Control flow** with self.respond()
+4. **Control flow** with `self.respond()` or `submit()`
 5. **Handle errors** with specialized tools
-6. **Add capabilities** with mixins:
+6. **Choose your paradigm**:
+   - `BaseAgent` for tool-calling workflows (JSON schemas, structured operations)
+   - `REPLAgent` for code-first workflows (LLM writes Python directly)
+7. **Add capabilities** with mixins:
    - `MCPMixin` for MCP server integration (tools as functions)
    - `REPLMCPMixin` for lightweight MCP via code (more token-efficient)
    - `SubShellMixin` for bash shell execution

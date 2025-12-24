@@ -154,12 +154,28 @@ def _build_docstring(tool_def):
     return '\n'.join(lines)
 
 
+def _unwrap_mcp_result(r):
+    """Extract the actual result from MCP content wrapper."""
+    import json
+    # MCP returns {"content": [{"type": "text", "text": "..."}]}
+    # The text field contains JSON that needs to be parsed
+    content = r.get('content', [])
+    if content and isinstance(content, list) and content[0].get('type') == 'text':
+        text = content[0].get('text', '')
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {'text': text}  # Return as text if not JSON
+    return r
+
+
 def _make_tool_method(tool_name, tool_def, formatter):
     """Create a tool method with docstring from MCP definition."""
     docstring = _build_docstring(tool_def)
 
     def method(self, **kwargs):
-        r = self._claude_client.call_tool(tool_name, kwargs)
+        raw = self._claude_client.call_tool(tool_name, kwargs)
+        r = _unwrap_mcp_result(raw)
         # Pass extra context to formatters that need it
         if tool_name == 'Bash':
             return formatter(r, kwargs.get('run_in_background', False))
@@ -191,14 +207,58 @@ class ClaudeMCPMixin:
             forward_stderr=False
         )
 
+        self._claude_tools = {}  # name -> tool_def
+
         # Fetch tool definitions and create methods
         for tool_def in self._claude_client.list_tools():
             name = tool_def['name']
             if name in FORMATTERS:
+                self._claude_tools[name] = tool_def
                 method = _make_tool_method(name, tool_def, FORMATTERS[name])
                 setattr(self, name, method.__get__(self, type(self)))
 
         self._claude_mcp_initialized = True
+
+    def _get_dynamic_toolspecs(self):
+        """Return Pydantic specs for Claude MCP tools."""
+        # Chain to parent first
+        if hasattr(super(), '_get_dynamic_toolspecs'):
+            specs = super()._get_dynamic_toolspecs()
+        else:
+            specs = {}
+
+        # Add our tools
+        from pydantic import create_model, Field
+        from typing import Optional
+
+        type_map = {
+            'string': str,
+            'integer': int,
+            'number': float,
+            'boolean': bool,
+            'array': list,
+            'object': dict,
+        }
+
+        for name, tool_def in getattr(self, '_claude_tools', {}).items():
+            schema = tool_def.get('inputSchema', {})
+            props = schema.get('properties', {})
+            required = set(schema.get('required', []))
+
+            fields = {}
+            for pname, pschema in props.items():
+                ptype = type_map.get(pschema.get('type', 'string'), str)
+                desc = pschema.get('description', '')
+                if pname in required:
+                    fields[pname] = (ptype, Field(..., description=desc))
+                else:
+                    fields[pname] = (Optional[ptype], Field(None, description=desc))
+
+            model = create_model(name, **fields)
+            model.__doc__ = tool_def.get('description', name)
+            specs[name] = model
+
+        return specs
 
     def _cleanup(self):
         if hasattr(self, '_claude_client'):
@@ -207,6 +267,8 @@ class ClaudeMCPMixin:
             except Exception:
                 pass
             self._claude_client = None
+        if hasattr(self, '_claude_tools'):
+            self._claude_tools = {}
         if hasattr(self, '_claude_mcp_initialized'):
             self._claude_mcp_initialized = False
 

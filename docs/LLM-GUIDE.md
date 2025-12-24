@@ -1,5 +1,7 @@
 # AgentLib Quick Reference
 
+> **Note:** This guide covers `BaseAgent` (tool-calling paradigm). For `REPLAgent` (code-first paradigm where LLM writes Python directly), see [LLM-GUIDE-REPLAGENT.md](LLM-GUIDE-REPLAGENT.md).
+
 ## Basic Agent Structure
 
 ```python
@@ -232,5 +234,9 @@ Mixins add specialized capabilities to agents. See [LLM-GUIDE-MIXINS.md](LLM-GUI
 - **REPLMCPMixin** - Lightweight MCP alternative that uses fewer tokens by having agents call MCP tools via Python code
 - **CLIMixin/CLIAgent** - Interactive terminal REPL with rich formatting, readline history, and customizable hooks
 - **FilePatchMixin** - Context-based file patching for efficient code editing with optional approval workflows
+
+## Alternative: REPLAgent
+
+For code-heavy tasks, consider `REPLAgent` instead of `BaseAgent`. The LLM writes Python code directly instead of making tool calls. See [LLM-GUIDE-REPLAGENT.md](LLM-GUIDE-REPLAGENT.md).
 
 

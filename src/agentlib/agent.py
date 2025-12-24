@@ -72,14 +72,23 @@ class BaseAgent(metaclass=AgentMeta):
 
     def _ensure_setup(self):
         """Hook for mixins to do lazy initialization. Override and call super()."""
-        pass
+        # Continue chain for cooperative inheritance with mixins after BaseAgent in MRO
+        if hasattr(super(), '_ensure_setup'):
+            super()._ensure_setup()
 
     def _build_system_prompt(self):
         """Hook for mixins to modify system prompt. Override and call super()."""
-        return getattr(self, 'system', '')
+        prompt = getattr(self, 'system', '')
+        # Continue chain for cooperative inheritance with mixins after BaseAgent in MRO
+        if hasattr(super(), '_build_system_prompt'):
+            prompt = super()._build_system_prompt() + prompt
+        return prompt
 
     def _get_dynamic_toolspecs(self):
         """Hook for mixins to add dynamic tools. Override and call super()."""
+        # Continue chain for cooperative inheritance with mixins after BaseAgent in MRO
+        if hasattr(super(), '_get_dynamic_toolspecs'):
+            return super()._get_dynamic_toolspecs()
         return {}
 
     def _handle_toolcall(self, toolname, function_args):

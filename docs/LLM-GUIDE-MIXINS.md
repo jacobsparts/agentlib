@@ -1,6 +1,8 @@
 # AgentLib Mixins Reference
 
-Mixins add specialized capabilities to agents. For core agent concepts, see [LLM-GUIDE.md](LLM-GUIDE.md).
+Mixins add specialized capabilities to agents. They work with both `BaseAgent` and `REPLAgent`.
+
+For core agent concepts, see [LLM-GUIDE.md](LLM-GUIDE.md). For REPLAgent, see [LLM-GUIDE-REPLAGENT.md](LLM-GUIDE-REPLAGENT.md).
 
 ## MCPMixin (MCP Integration)
 
@@ -263,6 +265,18 @@ class PowerAgent(SubREPLMixin, SubShellMixin, MCPMixin, BaseAgent):
         self.respond(response)
 ```
 
+**With REPLAgent:**
+```python
+from agentlib import REPLAgent, MCPMixin
+from agentlib.cli import CLIMixin
+
+class CodeAgent(CLIMixin, MCPMixin, REPLAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a coding assistant."
+    mcp_servers = [('browser', 'npx -y @anthropic/mcp-server-puppeteer')]
+    interactive = True
+```
+
 **Lightweight MCP + direct response:**
 ```python
 from agentlib import BaseAgent, REPLMCPMixin, SubREPLResponseMixin
@@ -273,7 +287,7 @@ class DataAgent(REPLMCPMixin, SubREPLResponseMixin, BaseAgent):
     repl_mcp_servers = [('db', 'python db_server.py')]
 ```
 
-**Mixin order:** List mixins before `BaseAgent`.
+**Mixin order:** List mixins before `BaseAgent` or `REPLAgent`.
 
 ## CLIMixin (Interactive Terminal)
 
