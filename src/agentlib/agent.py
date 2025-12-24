@@ -96,11 +96,16 @@ class BaseAgent(metaclass=AgentMeta):
         Hook for mixins to intercept tool calls.
         Return (True, result) if handled, (False, None) to pass to next handler.
         """
+        # Continue chain for cooperative inheritance with mixins after BaseAgent in MRO
+        if hasattr(super(), '_handle_toolcall'):
+            return super()._handle_toolcall(toolname, function_args)
         return False, None
 
     def _cleanup(self):
         """Hook for mixins to clean up resources. Override and call super()."""
-        pass
+        # Continue chain for cooperative inheritance with mixins after BaseAgent in MRO
+        if hasattr(super(), '_cleanup'):
+            super()._cleanup()
 
     # === RESOURCE MANAGEMENT ===
 
