@@ -525,7 +525,7 @@ if __name__ == "__main__":
         # Turn 1: Fetch URL and preview content (must see output before answering)
         agent.conversation.messages.append({
             "role": "assistant",
-            "content": 'from urllib.request import urlopen\nwith urlopen("http://example.com") as r:\n    body = r.read().decode("utf-8", errors="ignore")\nbody[:100]'
+            "content": '# Title is in <title> tag, so I need the raw HTML\nfrom urllib.request import urlopen\nwith urlopen("http://example.com") as r:\n    body = r.read().decode("utf-8", errors="ignore")\nbody[:100]'
         })
         # Turn 2: Assistant sees content, submits analysis immediately
         agent.conversation.messages.append({
