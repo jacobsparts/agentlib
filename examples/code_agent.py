@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""Code assistant with Python REPL execution and Claude Code MCP tools.
+
+Demonstrates combining REPLAgent with MCPMixin and CLIMixin to create an
+interactive coding assistant that executes Python code directly.
+"""
 
 from agentlib import REPLAgent, MCPMixin
 from agentlib.cli import CLIMixin
