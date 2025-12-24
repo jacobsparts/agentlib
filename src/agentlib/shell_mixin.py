@@ -27,26 +27,10 @@ from pydantic import create_model, Field
 from typing import Optional, Any
 
 from .subshell import SubShell, STILL_RUNNING
+from .tool_mixin import ToolMixin
 
 
-# Tool schema models
-class ShellExecuteParams:
-    """Execute a bash command in a persistent shell session."""
-    command: str = Field(..., description="The bash command to execute")
-    timeout: float = Field(30.0, description="Max seconds to wait for output (default 30)")
-
-
-class ShellReadParams:
-    """Continue reading output from a long-running command."""
-    timeout: float = Field(30.0, description="Max seconds to wait for more output (default 30)")
-
-
-class ShellInterruptParams:
-    """Interrupt the currently running command with SIGINT (Ctrl+C)."""
-    pass
-
-
-class SubShellMixin:
+class SubShellMixin(ToolMixin):
     """Mixin that adds bash shell execution. Use with BaseAgent."""
 
     # Configuration
@@ -129,27 +113,6 @@ Use shell_read() to get more output or shell_interrupt() to stop it."""
 
         return specs
 
-    def _handle_toolcall(self, toolname, function_args):
-        if toolname == 'shell_execute':
-            command = function_args.get('command', '')
-            timeout = function_args.get('timeout', getattr(self, 'shell_timeout', 30.0))
-            result = self._get_shell().execute(command, timeout=timeout)
-            return True, result
-
-        elif toolname == 'shell_read':
-            timeout = function_args.get('timeout', getattr(self, 'shell_timeout', 30.0))
-            result = self._get_shell().read(timeout=timeout)
-            return True, result if result else "[No output available]"
-
-        elif toolname == 'shell_interrupt':
-            result = self._get_shell().interrupt()
-            return True, result if result else "[Command interrupted]"
-
-        # Pass to next in chain
-        if hasattr(super(), '_handle_toolcall'):
-            return super()._handle_toolcall(toolname, function_args)
-        return False, None
-
     def _cleanup(self):
         # Clean up shell
         if hasattr(self, '_shell') and self._shell is not None:
@@ -195,7 +158,8 @@ Use shell_read() to get more output or shell_interrupt() to stop it."""
         """
         self._ensure_setup()
         t = timeout if timeout is not None else getattr(self, 'shell_timeout', 30.0)
-        return self._get_shell().read(timeout=t)
+        result = self._get_shell().read(timeout=t)
+        return result if result else "[No output available]"
 
     def shell_interrupt(self) -> str:
         """
@@ -205,4 +169,5 @@ Use shell_read() to get more output or shell_interrupt() to stop it."""
             Any remaining output after interrupt.
         """
         self._ensure_setup()
-        return self._get_shell().interrupt()
+        result = self._get_shell().interrupt()
+        return result if result else "[Command interrupted]"

@@ -43,6 +43,17 @@ mcp_servers = [
 - Stdio: `timeout`, `forward_stderr` (default: False), `env`
 - SSE: `timeout`, `headers`
 
+**Optional tool filtering:**
+- `include`: Whitelist - only expose these tools
+- `exclude`: Blacklist - expose all except these
+
+```python
+mcp_servers = [
+    ('browser', '/path/to/server', {'include': ['navigate', 'click']}),
+    ('fs', '/path/to/fs-server', {'exclude': ['delete_file']}),
+]
+```
+
 ### Tool Naming
 
 MCP tools are prefixed with server name:

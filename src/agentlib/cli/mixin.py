@@ -1,14 +1,14 @@
 """
-CLIMixin - Mixin that adds CLI REPL functionality to any agent.
+CLIMixin - Mixin that adds interactive CLI functionality to any agent.
 
 Example:
-    from agentlib import BaseAgent, SubREPLResponseMixin
+    from agentlib import BaseAgent
     from agentlib.cli import CLIMixin
 
-    class MyAssistant(CLIMixin, SubREPLResponseMixin, BaseAgent):
+    class MyAssistant(CLIMixin, BaseAgent):
         model = 'anthropic/claude-sonnet-4-5'
         system = "You are a helpful assistant."
-        welcome_message = "Welcome! I can help you with Python tasks."
+        welcome_message = "Welcome!"
 
     if __name__ == "__main__":
         with MyAssistant() as agent:
@@ -125,7 +125,7 @@ class InputSession:
 
 class CLIMixin:
     """
-    Mixin that adds CLI REPL functionality to any agent.
+    Mixin that adds interactive CLI functionality to any agent.
 
     Class Attributes:
         welcome_message: Message to display when CLI starts (supports markup)
@@ -140,14 +140,10 @@ class CLIMixin:
         format_response(response): Format the final response before display
 
     Example:
-        class MyAssistant(CLIMixin, SubREPLResponseMixin, BaseAgent):
+        class MyAssistant(CLIMixin, BaseAgent):
             model = 'anthropic/claude-sonnet-4-5'
             system = "You are helpful."
             welcome_message = "[bold]My Assistant[/bold]\\nReady to help!"
-
-            def on_tool_call(self, name, args):
-                if name == 'python_execute':
-                    self.console.panel(args.get('code', ''), title="Python", border_style="blue")
 
         with MyAssistant() as agent:
             agent.cli_run()
@@ -170,11 +166,6 @@ class CLIMixin:
         if not hasattr(self, '_cli_console'):
             self._cli_console = Console()
 
-        # Override patch approval if FilePatchMixin is present
-        if hasattr(self, '_patch_initialized') and not hasattr(self, '_cli_patch_approval_bound'):
-            self._prompt_patch_approval = self._cli_prompt_patch_approval
-            self._cli_patch_approval_bound = True
-
     @property
     def console(self) -> Console:
         """Get the console instance."""
@@ -187,59 +178,25 @@ class CLIMixin:
         """
         Called before each tool is executed.
 
-        Override to customize tool call display. Default shows Python code
-        in a panel and dim messages for other tools.
+        Override to customize tool call display.
 
         Args:
             name: Tool name
             args: Tool arguments
         """
-        self.console.clear_line()
-
-        if name == 'python_execute':
-            self.console.panel(args.get('code', ''), title="Python", border_style="blue")
-            print()
-        elif name == 'python_execute_response':
-            self.console.panel(args.get('code', ''), title="Python (response)", border_style="blue")
-            print()
-        elif name == 'python_read':
-            self.console.print(f"[dim]Reading output (timeout={args.get('timeout', 30)})...[/dim]")
-        elif name == 'python_interrupt':
-            self.console.print("[red]Interrupting execution...[/red]")
-        elif name == 'shell_execute':
-            self.console.panel(args.get('command', ''), title="Shell", border_style="yellow")
-            print()
-        elif name.startswith('shell_'):
-            self.console.print(f"[dim]{name}...[/dim]")
+        pass
 
     def on_tool_result(self, name: str, result: Any) -> None:
         """
         Called after each tool returns.
 
-        Override to customize tool result display. Default shows output
-        in a panel for execution tools.
+        Override to customize tool result display.
 
         Args:
             name: Tool name
             result: Tool result
         """
-        if result is None:
-            return
-
-        result_str = str(result).strip()
-        if not result_str:
-            return
-
-        # Truncate long output
-        max_len = 2000
-        if len(result_str) > max_len:
-            result_str = result_str[:max_len] + '...'
-
-        if name in ('python_execute', 'python_read', 'shell_execute', 'shell_read'):
-            self.console.panel(result_str, title="Output", border_style="green")
-        elif name.startswith('python_') or name.startswith('shell_'):
-            if result_str:
-                self.console.panel(result_str, title="Result", border_style="green")
+        pass
 
     def format_response(self, response: str) -> str:
         """
@@ -257,22 +214,12 @@ class CLIMixin:
 
     # === INTERNAL HOOK ===
 
-    def _handle_toolcall(self, toolname: str, function_args: dict):
+    def toolcall(self, toolname: str, function_args: dict):
         """Intercept tool calls to invoke hooks."""
-        # Call the on_tool_call hook
         self.on_tool_call(toolname, function_args)
-
-        # Call the actual tool handler (parent)
-        if hasattr(super(), '_handle_toolcall'):
-            handled, result = super()._handle_toolcall(toolname, function_args)
-        else:
-            handled, result = False, None
-
-        # Call the on_tool_result hook
-        if handled:
-            self.on_tool_result(toolname, result)
-
-        return handled, result
+        result = super().toolcall(toolname, function_args)
+        self.on_tool_result(toolname, result)
+        return result
 
     # === CLI ENTRY POINT ===
 
@@ -304,13 +251,16 @@ class CLIMixin:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
         max_turns = getattr(self, 'max_turns', 20)
 
-        self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C/D = quit[/dim]\n")
+        self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]\n")
 
         try:
             while True:
                 try:
                     user_input = session.prompt(f"\n{prompt_str}")
-                except (KeyboardInterrupt, EOFError):
+                except KeyboardInterrupt:
+                    print()  # Just print newline, stay at prompt
+                    continue
+                except EOFError:
                     break
 
                 if not user_input.strip():
@@ -320,15 +270,21 @@ class CLIMixin:
                 self.usermsg(user_input)
 
                 # Show thinking indicator
-                print(f"\n{DIM}{thinking}{RESET}", end="", flush=True)
+                print(f"{DIM}{thinking}{RESET}", end="", flush=True)
 
-                # Run agent loop
-                response = self.run_loop(max_turns=max_turns)
+                # Run agent loop (may be interrupted by Ctrl+C)
+                try:
+                    response = self.run_loop(max_turns=max_turns)
+                except KeyboardInterrupt:
+                    # User interrupted - return to prompt
+                    print()  # Newline after ^C
+                    continue
 
-                # Clear thinking and display response
-                self.console.clear_line()
-                formatted = self.format_response(response)
-                print(formatted)
+                # Display response
+                response_str = str(response) if response is not None else ""
+                formatted = self.format_response(response_str)
+                if formatted:
+                    print(formatted)
 
         finally:
             self.console.print("\n[dim]Session ended. Goodbye![/dim]")

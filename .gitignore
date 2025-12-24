@@ -1,6 +1,7 @@
 # Project specific
 .aider*
 CLAUDE.md
+dev/
 
 # Python
 __pycache__/

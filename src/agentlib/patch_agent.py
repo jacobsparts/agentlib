@@ -23,7 +23,7 @@ Configuration:
 
 Customization:
     - Override _prompt_patch_approval() for custom approval UI
-    - CLIMixin automatically provides interactive approval when combined
+    - Or provide _cli_prompt_patch_approval() for interactive approval
 """
 
 import os
@@ -32,6 +32,8 @@ import threading
 from typing import Optional, Tuple, Dict, Any
 
 from pydantic import create_model, Field
+
+from .tool_mixin import ToolMixin
 
 # Import apply_patch utilities from local module
 from .apply_patch import (
@@ -114,7 +116,7 @@ def _relativize_paths(paths: list, base_path: str) -> list:
     return result
 
 
-class FilePatchMixin:
+class FilePatchMixin(ToolMixin):
     """Mixin that adds file patching capabilities. Use with BaseAgent."""
 
     # Configuration
@@ -169,7 +171,6 @@ class FilePatchMixin:
         Prompt user for patch approval.
 
         Override this method to provide custom approval UI.
-        CLIMixin automatically overrides this when combined.
 
         Args:
             preview_text: Unified diff preview of changes
@@ -182,6 +183,9 @@ class FilePatchMixin:
             - comments: User comments (especially if rejected)
             - disable_future_preview: If True, set patch_preview=False
         """
+        # Check for interactive approval UI hook
+        if hasattr(self, '_cli_prompt_patch_approval'):
+            return self._cli_prompt_patch_approval(preview_text, preamble, postamble)
         # Default: auto-approve
         return True, "", False
 
@@ -232,21 +236,6 @@ class FilePatchMixin:
             )
 
         return specs
-
-    def _handle_toolcall(self, toolname: str, function_args: dict):
-        if toolname == 'apply_patch':
-            result = self._execute_patch(
-                patch=function_args.get('patch', ''),
-                preview=function_args.get('preview', True),
-                preamble=function_args.get('preamble', ''),
-                postamble=function_args.get('postamble', ''),
-            )
-            return True, result
-
-        # Pass to next in chain
-        if hasattr(super(), '_handle_toolcall'):
-            return super()._handle_toolcall(toolname, function_args)
-        return False, None
 
     def _cleanup(self):
         # Reset state

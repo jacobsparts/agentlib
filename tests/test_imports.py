@@ -12,7 +12,7 @@ class TestImports(unittest.TestCase):
         self.assertIsNotNone(BaseAgent)
         self.assertIsNotNone(LLMClient)
         self.assertIsNotNone(Conversation)
-        self.assertIsNotNone(JSON_INDENT)
+        # JSON_INDENT is intentionally None for compact output
 
 if __name__ == "__main__":
     unittest.main()

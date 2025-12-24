@@ -11,6 +11,10 @@ Example:
             ('fs', 'npx -y @mcp/server-filesystem /tmp'),
             ('api', 'http://localhost:3000/sse'),
             ('db', 'python db_server.py', {'timeout': 60.0}),
+            # Optional: expose only specific tools
+            ('browser', '/path/to/browser-server', {'include': ['navigate', 'screenshot']}),
+            # Optional: expose all except certain tools
+            ('other', '/path/to/server', {'exclude': ['dangerous_tool']}),
         ]
 
         @BaseAgent.tool
@@ -24,6 +28,7 @@ Example:
 Notes:
     - Tools are cached on connect. If an MCP server adds/removes tools dynamically,
       call disconnect_mcp() and reconnect to refresh.
+    - Optional 'include'/'exclude' filters let you expose a subset of tools.
     - Call close() when done, or use as context manager.
 """
 
@@ -32,9 +37,10 @@ from pydantic import create_model, Field
 from typing import Optional, Any
 
 from .mcp import create_stdio_client, create_sse_client, MCPError
+from .tool_mixin import ToolMixin
 
 
-class MCPMixin:
+class MCPMixin(ToolMixin):
     """Mixin that adds MCP server integration. Use with BaseAgent."""
 
     mcp_servers: list = []  # List of (name, server) or (name, server, options) tuples
@@ -105,20 +111,29 @@ class MCPMixin:
 
         return specs
 
-    def _handle_toolcall(self, toolname, function_args):
+    def _dispatch_tool(self, toolname, function_args):
+        """Handle MCP tool calls dynamically."""
         mcp_tools = getattr(self, '_mcp_tools', {})
         if toolname in mcp_tools:
-            client, orig_name, _ = mcp_tools[toolname]
             try:
-                result = client.call_tool(orig_name, function_args)
+                result = self._call_mcp_raw(toolname, **function_args)
                 return True, self._format_mcp_result(result)
             except MCPError as e:
                 return True, f"[MCP Error] {e}"
+        return None
 
-        # Pass to next in chain
-        if hasattr(super(), '_handle_toolcall'):
-            return super()._handle_toolcall(toolname, function_args)
-        return False, None
+    def _call_mcp_raw(self, toolname, **function_args):
+        """
+        Call an MCP tool and return the raw result dict.
+
+        Use this in subclass method overrides to get unformatted results:
+
+            def claude_Bash(self, command, **kw):
+                r = self._call_mcp_raw('claude_Bash', command=command, **kw)
+                return r.get('stdout', '') + r.get('stderr', '')
+        """
+        client, orig_name, _ = self._mcp_tools[toolname]
+        return client.call_tool(orig_name, function_args)
 
     def _cleanup(self):
         # Clean up MCP connections
@@ -150,18 +165,30 @@ class MCPMixin:
         Args:
             name: Identifier for this connection (used as tool name prefix)
             server: Server address - URL for SSE (http://...) or command string for stdio
-            options: Optional dict of kwargs passed to underlying connect method
+            options: Optional dict with:
+                - timeout: Request timeout in seconds
+                - forward_stderr: Forward server stderr (stdio only, default: False)
+                - env: Environment variables (stdio only)
+                - headers: HTTP headers (SSE only)
+                - include: Optional list of tool names to expose (whitelist)
+                - exclude: Optional list of tool names to hide (blacklist)
 
         Examples:
             agent.connect_mcp('fs', '/usr/bin/mcp-server-filesystem /tmp')
             agent.connect_mcp('api', 'http://localhost:3000/sse', {'headers': {'Authorization': 'Bearer xxx'}})
+            agent.connect_mcp('browser', '/path/to/server', {'include': ['navigate', 'click']})
         """
-        opts = options or {}
+        opts = options.copy() if options else {}
+        include = opts.pop('include', None)
+        exclude = opts.pop('exclude', None)
+
         if server.startswith('http://') or server.startswith('https://'):
-            self.connect_mcp_sse(name, server, **opts)
+            client = create_sse_client(server, **opts)
         else:
             opts.setdefault('forward_stderr', False)
-            self.connect_mcp_stdio(name, server.split(), **opts)
+            client = create_stdio_client(server.split(), **opts)
+
+        self._register_mcp_client(name, client, include=include, exclude=exclude)
 
     def connect_mcp_stdio(
         self,
@@ -212,17 +239,31 @@ class MCPMixin:
         )
         self._register_mcp_client(name, client)
 
-    def _register_mcp_client(self, name: str, client):
-        """Register an MCP client and cache its tools and instructions."""
+    def _register_mcp_client(self, name: str, client, include: list = None, exclude: list = None):
+        """Register an MCP client and cache its tools and instructions.
+
+        Args:
+            name: Server name prefix
+            client: MCP client instance
+            include: Optional list - only register these tool names (whitelist)
+            exclude: Optional list - skip these tool names (blacklist)
+        """
         self._mcp_clients[name] = client
 
         # Cache instructions
         if client.instructions:
             self._mcp_instructions[name] = client.instructions
 
-        # Cache tools
+        # Cache tools (with optional filtering)
         for tool_def in client.list_tools():
             orig_name = tool_def['name']
+
+            # Apply optional filters
+            if include is not None and orig_name not in include:
+                continue
+            if exclude is not None and orig_name in exclude:
+                continue
+
             tool_name = f"{name}_{orig_name}"
             self._mcp_tools[tool_name] = (client, orig_name, tool_def)
 

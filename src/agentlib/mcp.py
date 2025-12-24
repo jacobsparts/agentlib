@@ -1378,9 +1378,9 @@ class MCPClient:
     """
 
     # MCP Protocol version we implement
-    # We support both 2024-11-05 and 2025-11-25 - we send 2025-11-25 and accept either back
+    # We support multiple versions - send latest, accept any supported
     PROTOCOL_VERSION = "2025-11-25"
-    SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-11-25"}
+    SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-06-18", "2025-11-25"}
 
     # Maximum cached responses to prevent unbounded memory growth
     MAX_PENDING_RESPONSES = 100

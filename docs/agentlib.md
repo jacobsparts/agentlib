@@ -313,6 +313,22 @@ mcp_servers = [
 - Stdio: `timeout`, `forward_stderr` (default: False), `env`
 - SSE: `timeout`, `headers`
 
+**Optional tool filtering:**
+- `include`: List of tool names to expose (whitelist)
+- `exclude`: List of tool names to hide (blacklist)
+
+```python
+mcp_servers = [
+    # Optional: expose only specific tools
+    ('browser', '/path/to/server', {'include': ['navigate', 'screenshot', 'get_title']}),
+
+    # Optional: expose all except certain tools
+    ('fs', 'npx -y @mcp/server-filesystem /tmp', {'exclude': ['write_file', 'delete_file']}),
+]
+```
+
+Use `include` for a whitelist (only these tools) or `exclude` for a blacklist (all except these). They are mutually exclusive.
+
 ### How Tools Are Registered
 
 When an MCP server is connected, all its tools are automatically registered with a prefix:
