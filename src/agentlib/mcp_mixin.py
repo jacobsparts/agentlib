@@ -36,7 +36,7 @@ import threading
 from pydantic import create_model, Field
 from typing import Optional, Any
 
-from .mcp import create_stdio_client, create_sse_client, MCPError
+from .tools.mcp import create_stdio_client, create_sse_client, MCPError
 from .tool_mixin import ToolMixin
 
 

@@ -26,7 +26,7 @@ import threading
 from pydantic import create_model, Field
 from typing import Optional, Any
 
-from .subrepl import SubREPL, STILL_RUNNING
+from .tools.subrepl import SubREPL, STILL_RUNNING
 from .tool_mixin import ToolMixin
 
 
@@ -329,7 +329,7 @@ class REPLMCPMixin(SubREPLMixin):
 
         # Import MCP client factory functions
         repl.execute(
-            "from agentlib.mcp import create_stdio_client, create_sse_client",
+            "from agentlib.tools.mcp import create_stdio_client, create_sse_client",
             timeout=10.0
         )
 

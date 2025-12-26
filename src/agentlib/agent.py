@@ -54,10 +54,7 @@ class BaseAgent(metaclass=AgentMeta):
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-
-        # Auto-wrap user's __init__ to call _ensure_setup() automatically
-        user_init = cls.__dict__.get('__init__')  # Only this class's __init__, not inherited
-
+        user_init = cls.__dict__.get('__init__')
         if user_init:
             def wrapped(self, *args, _user_init=user_init, **kwargs):
                 _user_init(self, *args, **kwargs)
@@ -68,25 +65,20 @@ class BaseAgent(metaclass=AgentMeta):
                 self._ensure_setup()
             cls.__init__ = default_init
 
-    # === HOOKS FOR MIXINS ===
-
     def _ensure_setup(self):
         """Hook for mixins to do lazy initialization. Override and call super()."""
-        # Continue chain for cooperative inheritance with mixins after BaseAgent in MRO
         if hasattr(super(), '_ensure_setup'):
             super()._ensure_setup()
 
     def _build_system_prompt(self):
         """Hook for mixins to modify system prompt. Override and call super()."""
         prompt = getattr(self, 'system', '')
-        # Continue chain for cooperative inheritance with mixins after BaseAgent in MRO
         if hasattr(super(), '_build_system_prompt'):
             prompt = super()._build_system_prompt() + prompt
         return prompt
 
     def _get_dynamic_toolspecs(self):
         """Hook for mixins to add dynamic tools. Override and call super()."""
-        # Continue chain for cooperative inheritance with mixins after BaseAgent in MRO
         if hasattr(super(), '_get_dynamic_toolspecs'):
             return super()._get_dynamic_toolspecs()
         return {}
@@ -96,18 +88,14 @@ class BaseAgent(metaclass=AgentMeta):
         Hook for mixins to intercept tool calls.
         Return (True, result) if handled, (False, None) to pass to next handler.
         """
-        # Continue chain for cooperative inheritance with mixins after BaseAgent in MRO
         if hasattr(super(), '_handle_toolcall'):
             return super()._handle_toolcall(toolname, function_args)
         return False, None
 
     def _cleanup(self):
         """Hook for mixins to clean up resources. Override and call super()."""
-        # Continue chain for cooperative inheritance with mixins after BaseAgent in MRO
         if hasattr(super(), '_cleanup'):
             super()._cleanup()
-
-    # === RESOURCE MANAGEMENT ===
 
     def close(self):
         """Clean up resources. Call when done with agent, or use as context manager."""

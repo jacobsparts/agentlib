@@ -48,7 +48,7 @@ import signal
 import sys
 from multiprocessing import Process, Queue
 from queue import Empty
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 logger = logging.getLogger('agentlib')
 
@@ -62,7 +62,7 @@ class _InterruptedError(KeyboardInterrupt):
         super().__init__("Interrupted by user")
 
 
-from agentlib.subrepl import (
+from agentlib.tools.subrepl import (
     SubREPL,
     _format_echo,
     _split_into_statements,
@@ -324,8 +324,9 @@ def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
         spec: Pydantic model spec for the tool
     """
     param_names: list[str] = []
-    signature_parts: list[str] = []
     doc_parts: list[str] = []
+    required_sig_parts: list[str] = []
+    optional_sig_parts: list[str] = []
 
     if impl is not None:
         # Extract signature from implementation
@@ -341,19 +342,31 @@ def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
                 if isinstance(param.default, str):
                     # In agentlib, string defaults are descriptions, not actual defaults
                     doc_parts.append(f"        {param_name}: {param.default}")
-                    signature_parts.append(param_name)
+                    # Check if type annotation is Optional (Union with None)
+                    ann = param.annotation
+                    is_optional = (
+                        getattr(ann, '__origin__', None) is Union
+                        and type(None) in getattr(ann, '__args__', ())
+                    )
+                    if is_optional:
+                        optional_sig_parts.append(f"{param_name}=None")
+                    else:
+                        required_sig_parts.append(param_name)
                 else:
                     # Actual default value
                     doc_parts.append(f"        {param_name}: (default: {repr(param.default)})")
-                    signature_parts.append(f"{param_name}={repr(param.default)}")
+                    optional_sig_parts.append(f"{param_name}={repr(param.default)}")
             else:
                 doc_parts.append(f"        {param_name}")
-                signature_parts.append(param_name)
+                required_sig_parts.append(param_name)
 
+        # Combine: required params first, then optional
+        signature_parts = required_sig_parts + optional_sig_parts
         docstring = (impl.__doc__ or f"Call the {name} tool.").strip()
 
     else:
         # Dynamic tool - extract from Pydantic spec
+        signature_parts = []
         if hasattr(spec, 'model_fields'):
             # Separate required and optional params (required must come first)
             required_params = []
@@ -412,8 +425,7 @@ def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
 def {name}({signature_str}):
     """{docstring}"""
     import json as _json
-    _args = {{k: v for k, v in {args_dict}.items() if v is not None}}
-    _tool_request_queue.put(_json.dumps({{"tool": "{name}", "args": _args}}))
+    _tool_request_queue.put(_json.dumps({{"tool": "{name}", "args": {args_dict}}}))
     _response = _json.loads(_tool_response_queue.get())
     if "error" in _response:
         raise Exception(_response["error"])
@@ -471,8 +483,14 @@ class REPLMixin:
             self._tool_repl = ToolREPL(echo=True)
 
     def _get_tool_repl(self) -> ToolREPL:
-        """Get or create the ToolREPL instance."""
+        """Get or create the ToolREPL instance, with tools injected."""
         self._ensure_setup()
+        tools = {
+            name: (self._toolimpl.get(name), spec)
+            for name, spec in self.toolspecs.items()
+        }
+        self._tool_repl.inject_tools(tools)
+        self._tool_repl.inject_builtins()
         return self._tool_repl
 
     def _cleanup(self) -> None:
@@ -542,6 +560,8 @@ class REPLMixin:
             tool_list.append(tool_entry)
 
         tools_str = "\n".join(tool_list) if tool_list else "(no tools defined)"
+        if getattr(self, 'interactive', False):
+            tools_str += "\nrespond(text) - Send a message to the user."
 
         return f"""You are in a Python REPL. Respond with unescaped Python.
 
@@ -567,15 +587,7 @@ Call help(function_name) for parameter descriptions.
         self._ensure_setup()
         repl = self._get_tool_repl()
 
-        # Inject tool stubs (includes dynamic tools from mixins)
-        tools = {
-            name: (self._toolimpl.get(name), spec)
-            for name, spec in self.toolspecs.items()
-        }
-        repl.inject_tools(tools)
-        repl.inject_builtins()
-
-        # In interactive mode, add respond() as a friendlier alias for submit()
+        # In interactive mode, add respond()
         if getattr(self, 'interactive', False):
             repl._inject_code('''
 def respond(text):

@@ -2,7 +2,7 @@
 
 REPLAgent is an alternative to BaseAgent where the LLM writes Python code directly instead of making JSON tool calls.
 
-For tool-calling agents (BaseAgent), see [LLM-GUIDE.md](LLM-GUIDE.md).
+For tool-calling agents (BaseAgent), see [guide.md](guide.md).
 
 ## Basic Structure
 

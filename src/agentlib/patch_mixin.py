@@ -35,8 +35,8 @@ from pydantic import create_model, Field
 
 from .tool_mixin import ToolMixin
 
-# Import apply_patch utilities from local module
-from .apply_patch import (
+# Import apply_patch utilities from tools subpackage
+from .tools.apply_patch import (
     text_to_patch,
     patch_to_commit,
     apply_commit,

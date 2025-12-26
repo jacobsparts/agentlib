@@ -2,7 +2,7 @@
 
 Mixins add specialized capabilities to agents. They work with both `BaseAgent` and `REPLAgent`.
 
-For core agent concepts, see [LLM-GUIDE.md](LLM-GUIDE.md). For REPLAgent, see [LLM-GUIDE-REPLAGENT.md](LLM-GUIDE-REPLAGENT.md).
+For core agent concepts, see [guide.md](guide.md). For REPLAgent, see [replagent.md](replagent.md).
 
 ## MCPMixin (MCP Integration)
 
@@ -270,12 +270,14 @@ class PowerAgent(SubREPLMixin, SubShellMixin, MCPMixin, BaseAgent):
 from agentlib import REPLAgent, MCPMixin
 from agentlib.cli import CLIMixin
 
-class CodeAgent(CLIMixin, MCPMixin, REPLAgent):
+class MyAgent(CLIMixin, MCPMixin, REPLAgent):
     model = 'google/gemini-2.5-flash'
     system = "You are a coding assistant."
     mcp_servers = [('browser', 'npx -y @anthropic/mcp-server-puppeteer')]
     interactive = True
 ```
+
+> **Tip:** For a production-ready coding assistant, see `agentlib.agents.CodeAgent` which combines REPLAgent, CLIMixin, and built-in file/search/web tools. Run `code-agent` from the command line or extend it programmatically.
 
 **Lightweight MCP + direct response:**
 ```python
@@ -520,3 +522,35 @@ Paths are relative to base path (in order):
 - Unicode punctuation normalized during matching
 - Whitespace-insensitive matching as fallback
 - Multi-file patches in single operation
+
+## JinaMixin (Web Tools)
+
+Adds `web_fetch` and `web_search` tools powered by Jina AI.
+
+```python
+from agentlib import BaseAgent, JinaMixin
+
+class MyAgent(JinaMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a research assistant."
+
+    @BaseAgent.tool
+    def done(self, response: str = "Response"):
+        self.respond(response)
+```
+
+**Tools provided:**
+- `web_fetch(url, ...)` - Fetch URL as LLM-friendly markdown
+- `web_search(query, ...)` - Search web, return results with content extracted
+
+**Configuration:**
+- `JINA_API_KEY` env var for higher rate limits (optional, free at jina.ai)
+- `jina_timeout = 60.0` - Default request timeout
+
+**Common options:**
+- `target_selector` / `remove_selector` - CSS selectors to include/exclude
+- `return_format` - 'markdown', 'html', 'text'
+- `engine` - 'browser' (quality), 'direct' (speed)
+- `no_cache` - Bypass cache for fresh content
+- `site` - Limit search to domain (web_search only)
+- `num` - Max results (web_search only)

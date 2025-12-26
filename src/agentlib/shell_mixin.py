@@ -26,7 +26,7 @@ import threading
 from pydantic import create_model, Field
 from typing import Optional, Any
 
-from .subshell import SubShell, STILL_RUNNING
+from .tools.subshell import SubShell, STILL_RUNNING
 from .tool_mixin import ToolMixin
 
 

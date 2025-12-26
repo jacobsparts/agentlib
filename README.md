@@ -7,7 +7,7 @@
 ![Python 3.9‒3.12](https://img.shields.io/badge/python-3.9‒3.12-blue)
 &nbsp;
 
-> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add [`docs/LLM-GUIDE.md`](docs/LLM-GUIDE.md) to your context and start building. Include [`docs/LLM-GUIDE-MIXINS.md`](docs/LLM-GUIDE-MIXINS.md) for shell, REPL, MCP, or CLI features. For the code-first REPLAgent paradigm, see [`docs/LLM-GUIDE-REPLAGENT.md`](docs/LLM-GUIDE-REPLAGENT.md).
+> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add [`docs/guide.md`](docs/guide.md) to your context and start building. Include [`docs/mixins.md`](docs/mixins.md) for shell, REPL, MCP, or CLI features. For the code-first REPLAgent paradigm, see [`docs/replagent.md`](docs/replagent.md).
 
 ```python
 from agentlib import BaseAgent
@@ -87,9 +87,11 @@ pip install git+https://github.com/jacobsparts/agentlib.git
 # 2. Set an API key (example: Google Gemini)
 export GOOGLE_API_KEY=sk-...
 
-# 3. Run the minimal agent
-python examples/todo_agent.py # First run builds a todo list and writes to sqlite
-python examples/todo_agent.py # Second run retrieves todo items
+# 3. Try the built-in code agent (Python REPL-based coding assistant)
+code-agent
+
+# Or run an example agent
+python examples/todo_agent.py
 ```
 
 Or copy–paste the snippet below into a new file:
@@ -140,6 +142,30 @@ via puppeteer and Python with pandas, pdfplumber, beautifulsoup4, and openpyxl."
 
 if __name__ == "__main__":
     DataExtractor.main()
+```
+
+### Built-in Code Agent
+
+The code agent inverts the usual agent paradigm: instead of an LLM calling tools via JSON, the model *lives inside a Python REPL*. Model output becomes REPL input; REPL output becomes the model's next prompt. The model writes Python directly—no tool schemas, no JSON marshalling.
+
+```bash
+code-agent
+code-agent --model anthropic/claude-sonnet-4-20250514
+```
+
+This means:
+- **Unrestricted Python** — stdlib, installed packages, subprocesses, network, filesystem
+- **Tools on the fly** — model can define helper functions mid-conversation and reuse them
+- **True collaboration** — drop into `/repl` and work alongside the agent in the same environment
+- **Inspect everything** — model can read its own tool source code, introspect objects, experiment
+
+Production-ready tools are included (glob, grep, read, edit, web_fetch, bash) for feature parity with leading coding agents. And since CodeAgent is just a Python class, it's easy to extend with custom tools, swap the model, modify the system prompt, or use it as a base for specialized agents in your own workflows.
+
+```python
+from agentlib.agents import CodeAgent
+
+with CodeAgent() as agent:
+    result = agent.run("Find all TODO comments in the codebase")
 ```
 
 ---

@@ -5,11 +5,13 @@ from .tool_mixin import ToolMixin
 from .mcp_mixin import MCPMixin
 from .shell_mixin import SubShellMixin
 from .repl_mixin import SubREPLMixin, SubREPLResponseMixin, REPLMCPMixin
-from .patch_agent import FilePatchMixin
-from .subshell import SubShell, STILL_RUNNING
-from .subrepl import SubREPL
+from .patch_mixin import FilePatchMixin
+from .jina_mixin import JinaMixin
+from .tools.subshell import SubShell, STILL_RUNNING
+from .tools.subrepl import SubREPL
 from .cli import CLIMixin, CLIAgent
 from .repl_agent import REPLAgent
+from .agents import CodeAgent, CodeAgentBase
 
 __all__ = [
     "BaseAgent",
@@ -20,6 +22,7 @@ __all__ = [
     "SubREPLMixin",
     "SubREPLResponseMixin",
     "FilePatchMixin",
+    "JinaMixin",
     "SubShell",
     "SubREPL",
     "STILL_RUNNING",
@@ -32,6 +35,9 @@ __all__ = [
     "CLIAgent",
     # REPL-based agent
     "REPLAgent",
+    # Ready-to-use agents
+    "CodeAgent",
+    "CodeAgentBase",
 ]
 
 __version__ = "0.3.0"

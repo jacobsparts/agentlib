@@ -1951,9 +1951,12 @@ class MCPClient:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Tool name must be a non-empty string")
 
+        # Filter out None values - MCP spec expects optional params to be omitted, not null
+        filtered_args = {k: v for k, v in (arguments or {}).items() if v is not None}
+
         params = {
             "name": name,
-            "arguments": arguments or {}
+            "arguments": filtered_args
         }
 
         return self._call("tools/call", params, timeout=timeout)

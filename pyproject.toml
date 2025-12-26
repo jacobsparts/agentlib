@@ -27,6 +27,9 @@ dev = [
   "pytest>=7",
 ]
 
+[project.scripts]
+code-agent = "agentlib.agents.code_agent:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

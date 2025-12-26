@@ -81,8 +81,9 @@ def _split_into_statements(source: str) -> list[str]:
                 statements.append(current_src)
                 current = []
 
-        # Add non-empty lines (keep indented structure)
-        if stripped or (current and is_indented):
+        # Add line if it has content, or if we're accumulating a statement
+        # (preserves blank lines inside multiline strings and indented blocks)
+        if stripped or current:
             current.append(line)
 
     # Handle remaining code
@@ -146,6 +147,7 @@ def _worker_main(cmd_queue: Queue, output_queue: Queue) -> None:
             sys.stdout = _StreamingWriter(output_queue, old_stdout)
             sys.stderr = _StreamingWriter(output_queue, old_stderr)
 
+            had_error = False
             try:
                 try:
                     compiled = code.compile_command(cmd, "<repl>", "exec")
@@ -154,6 +156,7 @@ def _worker_main(cmd_queue: Queue, output_queue: Queue) -> None:
                     else:
                         exec(cmd, repl_locals)
                 except SyntaxError as e:
+                    had_error = True
                     sys.stderr.write(f"  File \"<repl>\", line {e.lineno}\n")
                     if e.text:
                         sys.stderr.write(f"    {e.text}")
@@ -162,8 +165,10 @@ def _worker_main(cmd_queue: Queue, output_queue: Queue) -> None:
                     sys.stderr.write(f"SyntaxError: {e.msg}\n")
 
             except KeyboardInterrupt:
+                had_error = True
                 sys.stderr.write("\nKeyboardInterrupt\n")
             except Exception as e:
+                had_error = True
                 import traceback
                 # Filter traceback to only show frames from <repl>, not our internals
                 tb = e.__traceback__
@@ -178,11 +183,11 @@ def _worker_main(cmd_queue: Queue, output_queue: Queue) -> None:
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
 
-            output_queue.put(("done", None))
+            output_queue.put(("done", had_error))
 
         except KeyboardInterrupt:
             output_queue.put(("output", "\nKeyboardInterrupt\n"))
-            output_queue.put(("done", None))
+            output_queue.put(("done", True))
 
 
 class SubREPL:

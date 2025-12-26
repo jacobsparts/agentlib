@@ -1,6 +1,6 @@
 # AgentLib Quick Reference
 
-> **Note:** This guide covers `BaseAgent` (tool-calling paradigm). For `REPLAgent` (code-first paradigm where LLM writes Python directly), see [LLM-GUIDE-REPLAGENT.md](LLM-GUIDE-REPLAGENT.md).
+> **Note:** This guide covers `BaseAgent` (tool-calling paradigm). For `REPLAgent` (code-first paradigm where LLM writes Python directly), see [replagent.md](replagent.md).
 
 ## Basic Agent Structure
 
@@ -226,7 +226,7 @@ result = agent.run_loop(max_turns=5)  # Run tool loop
 
 ## Mixins
 
-Mixins add specialized capabilities to agents. See [LLM-GUIDE-MIXINS.md](LLM-GUIDE-MIXINS.md) for details:
+Mixins add specialized capabilities to agents. See [mixins.md](mixins.md) for details:
 
 - **MCPMixin** - MCP (Model Context Protocol) server integration
 - **SubShellMixin** - Persistent bash shell access
@@ -237,6 +237,23 @@ Mixins add specialized capabilities to agents. See [LLM-GUIDE-MIXINS.md](LLM-GUI
 
 ## Alternative: REPLAgent
 
-For code-heavy tasks, consider `REPLAgent` instead of `BaseAgent`. The LLM writes Python code directly instead of making tool calls. See [LLM-GUIDE-REPLAGENT.md](LLM-GUIDE-REPLAGENT.md).
+For code-heavy tasks, consider `REPLAgent` instead of `BaseAgent`. The LLM writes Python code directly instead of making tool calls. See [replagent.md](replagent.md).
 
+## Ready-to-Use Agents
+
+AgentLib includes production-ready agents in `agentlib.agents`:
+
+- **CodeAgent** - The model lives inside a Python REPL. Output → stdin, stdout → input. No JSON tool calls—just Python. Full stdlib, any package, dynamic function creation, user can drop into `/repl` to collaborate.
+
+```bash
+code-agent
+code-agent --model anthropic/claude-sonnet-4-20250514
+```
+
+```python
+from agentlib.agents import CodeAgent
+
+with CodeAgent() as agent:
+    result = agent.run("Find all TODO comments")
+```
 
