@@ -28,8 +28,36 @@ Or use the pre-composed CLIAgent:
 import sqlite3
 import readline
 import sys
+import ctypes
+import ctypes.util
 from pathlib import Path
 from typing import Optional, Any
+
+
+def _get_readline_version() -> tuple[int, int]:
+    """Get GNU readline version as (major, minor) tuple.
+
+    Uses ctypes to read rl_readline_version from the readline library.
+    Returns (0, 0) if version cannot be determined.
+    """
+    lib_path = ctypes.util.find_library('readline')
+    if not lib_path:
+        return (0, 0)
+    try:
+        rl = ctypes.CDLL(lib_path)
+        rl_version = ctypes.c_int.in_dll(rl, 'rl_readline_version')
+        major = rl_version.value >> 8
+        minor = rl_version.value & 0xff
+        return (major, minor)
+    except (OSError, ValueError):
+        return (0, 0)
+
+
+# Validate readline version for bracketed paste support
+_RL_VERSION = _get_readline_version()
+assert _RL_VERSION >= (8, 0), (
+    f"GNU readline >= 8.0 required for bracketed paste mode, found {_RL_VERSION[0]}.{_RL_VERSION[1]}"
+)
 
 from .terminal import (
     Console, Panel, Markdown, render_markdown, parse_markup,
@@ -92,9 +120,10 @@ class SQLiteHistory:
 # =============================================================================
 
 class InputSession:
-    """Input session with readline history support.
+    """Input session with readline history support and bracketed paste.
 
     By default, Enter submits and Alt+Enter inserts a newline.
+    Pasted multiline content is buffered as a single input.
     """
 
     def __init__(self, history: Optional[SQLiteHistory] = None):
@@ -102,8 +131,12 @@ class InputSession:
         self._setup_bindings()
 
     def _setup_bindings(self):
-        """Configure readline for input."""
-        # Alt+Enter inserts a literal newline
+        """Configure readline for input with bracketed paste support."""
+        # Enable bracketed paste mode (GNU readline 8.0+)
+        # This makes readline handle ESC[200~ / ESC[201~ paste markers,
+        # buffering pasted content with preserved newlines
+        readline.parse_and_bind('set enable-bracketed-paste on')
+        # Alt+Enter inserts a literal newline for manual multiline
         readline.parse_and_bind(r'"\e\C-m": "\C-v\n"')
 
     def prompt(self, prompt_str: str = "> ") -> str:
