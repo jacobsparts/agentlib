@@ -51,12 +51,7 @@ The code you write is executed directly.
    - submit(value): Return the final result of a task
    - respond(text): Send conversational messages (explanations, questions)
 
-IMPORTANT: respond() and submit() end your turn IMMEDIATELY. You will NOT
-see any output from code in the same response. To review output before
-responding:
-  - Write your code WITHOUT respond/submit
-  - Let it execute and see the results in your next turn
-  - THEN call respond() or submit() with your analysis
+respond() and submit() end your turn. Complete simple tasks in one turn.
 
 Multi-step tasks that require several rounds are expected. Only call
 respond/submit when you're truly finished and ready to return to the user.
@@ -111,34 +106,12 @@ Focus on what needs to be done, not when. Break work into actionable steps.
     max_output_kb = 20 # Large output protection
 
     def process_repl_output(self, output: str) -> str:
-        """Filter and truncate output - used for both display and model."""
-        # Filter out respond()/submit() echo lines only - keep other tool calls visible
-        lines = output.split('\n')
-        result_lines = []
-        hiding = False
-
-        for line in lines:
-            # Only hide respond/submit calls - these are conversational, not computational
-            is_hidden_cmd = line.startswith('>>> respond(') or line.startswith('>>> submit(')
-            is_continuation = line.startswith('... ')
-
-            if is_hidden_cmd:
-                hiding = True
-                continue
-            if hiding and is_continuation:
-                continue
-            if hiding and not is_continuation:
-                hiding = False
-
-            result_lines.append(line)
-
-        result = '\n'.join(result_lines)
-
+        """Truncate output if too large - used for both display and model."""
         # Truncate if too large
         max_bytes = int(self.max_output_kb * 1000)
-        if len(result) > max_bytes:
+        if len(output) > max_bytes:
             import tempfile
-            size_kb = len(result) / 1000
+            size_kb = len(output) / 1000
 
             with tempfile.NamedTemporaryFile(
                 mode='w', prefix='code_agent-', suffix='.txt', delete=False
@@ -146,11 +119,11 @@ Focus on what needs to be done, not when. Break work into actionable steps.
                 f.write(output)  # Write full original output
                 temp_path = f.name
 
-            truncated = result[:max_bytes // 2]
+            truncated = output[:max_bytes // 2]
             msg = f"[ {size_kb:.1f}KB output truncated - written to {temp_path} ]"
             return f"{truncated}\n\n{msg}"
 
-        return result
+        return output
 
     # REPL output hooks
     def on_repl_execute(self, code) -> None:
@@ -176,10 +149,22 @@ Focus on what needs to be done, not when. Break work into actionable steps.
                 # Continuation - just a subtle separator
                 print(f"\x1b[34m{DIM}  ⋮{RESET}")
 
-            # Display with coloring
+            # Display with coloring (submit/respond calls dimmed)
+            in_submit_respond = False
             for line in processed.rstrip('\n').split('\n'):
-                is_prompt = line.startswith('>>> ') or line.startswith('... ')
-                if not is_prompt:
+                is_new_statement = line.startswith('>>> ')
+                is_continuation = line.startswith('... ')
+                is_prompt = is_new_statement or is_continuation
+
+                # Track if we're inside a submit/respond block
+                if line.startswith('>>> respond(') or line.startswith('>>> submit('):
+                    in_submit_respond = True
+                elif is_new_statement:
+                    in_submit_respond = False
+
+                if in_submit_respond and is_prompt:
+                    print(f"{DIM}{line}{RESET}")
+                elif not is_prompt:
                     print(f"\x1b[92m{line}\x1b[0m")  # Bright green
                 else:
                     print(line)
