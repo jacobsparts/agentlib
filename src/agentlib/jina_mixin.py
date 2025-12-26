@@ -56,10 +56,10 @@ class JinaMixin(ToolMixin):
         gather_links: Optional[bool] = None,
         gather_images: Optional[bool] = None,
         generate_image_captions: Optional[bool] = None,
-        remove_images: Optional[bool] = None,
+        remove_images: bool = True,
         extract_iframes: Optional[bool] = None,
         extract_shadow_dom: Optional[bool] = None,
-        return_format: Optional[str] = None,
+        return_format: str = "text",
         link_style: Optional[str] = None,
         engine: Optional[str] = None,
         use_readerlm: Optional[bool] = None,
@@ -163,19 +163,19 @@ class JinaMixin(ToolMixin):
         self,
         query: str,
         site: Optional[str] = None,
-        num: Optional[int] = None,
+        num: int = 5,
         page: Optional[int] = None,
         country: Optional[str] = None,
         location: Optional[str] = None,
         language: Optional[str] = None,
         gather_links: Optional[bool] = None,
         gather_images: Optional[bool] = None,
-        remove_images: Optional[bool] = None,
+        remove_images: bool = True,
         return_format: Optional[str] = None,
         engine: Optional[str] = None,
         timeout: Optional[int] = None,
         locale: Optional[str] = None,
-        exclude_content: Optional[bool] = None,
+        exclude_content: bool = True,
         no_cache: Optional[bool] = None,
         return_json: Optional[bool] = None,
     ) -> str:
@@ -300,12 +300,12 @@ Set JINA_API_KEY for higher rate limits."""
             remove_selector=(Optional[str], Field(None, description="CSS selector to exclude elements")),
             gather_links=(Optional[bool], Field(None, description="Gather all links at end of response")),
             gather_images=(Optional[bool], Field(None, description="Gather all images at end of response")),
-            remove_images=(Optional[bool], Field(None, description="Remove all images from response")),
-            return_format=(Optional[str], Field(None, description="Output format: 'markdown', 'html', 'text'")),
+            remove_images=(bool, Field(True, description="Remove all images from response")),
+            return_format=(str, Field("text", description="Output format: 'markdown', 'html', 'text'")),
             engine=(Optional[str], Field(None, description="Engine: 'browser', 'direct', or 'cf-browser-rendering'")),
             timeout=(Optional[int], Field(None, description="Max seconds to wait")),
             no_cache=(Optional[bool], Field(None, description="Bypass cache for fresh content")),
-            __doc__="Fetch a URL and return LLM-friendly markdown content."
+            __doc__="Fetch a URL and return LLM-friendly text content."
         )
 
         # web_search spec
@@ -313,16 +313,16 @@ Set JINA_API_KEY for higher rate limits."""
             'WebSearch',
             query=(str, Field(..., description="Search query")),
             site=(Optional[str], Field(None, description="Limit search to this domain")),
-            num=(Optional[int], Field(None, description="Maximum number of results")),
+            num=(int, Field(5, description="Maximum number of results")),
             country=(Optional[str], Field(None, description="Two-letter country code for search origin")),
             language=(Optional[str], Field(None, description="Two-letter language code")),
             gather_links=(Optional[bool], Field(None, description="Gather all links at end of response")),
-            remove_images=(Optional[bool], Field(None, description="Remove all images from response")),
+            remove_images=(bool, Field(True, description="Remove all images from response")),
             return_format=(Optional[str], Field(None, description="Output format: 'markdown', 'html', 'text'")),
             timeout=(Optional[int], Field(None, description="Max seconds to wait")),
-            exclude_content=(Optional[bool], Field(None, description="Only return titles/URLs, not page content")),
+            exclude_content=(bool, Field(True, description="Only return titles/URLs, not page content")),
             no_cache=(Optional[bool], Field(None, description="Bypass cache for real-time results")),
-            __doc__="Search the web and return LLM-friendly results with content extracted."
+            __doc__="Search the web and return metadata (titles/URLs). Set exclude_content=False for full content."
         )
 
         return specs
