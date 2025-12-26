@@ -84,8 +84,8 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 # 1. Install
 pip install git+https://github.com/jacobsparts/agentlib.git
 
-# 2. Set an API key (example: Google Gemini)
-export GOOGLE_API_KEY=sk-...
+# 2. Set an API key (example: Anthropic Claude)
+export ANTHROPIC_API_KEY=sk-...
 
 # 3. Try the built-in code agent (Python REPL-based coding assistant)
 code-agent
