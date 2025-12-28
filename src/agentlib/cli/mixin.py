@@ -320,7 +320,31 @@ class CLIMixin:
                     print(formatted)
 
         finally:
+            self._run_pre_exit_hooks()
             self.console.print("\n[dim]Session ended. Goodbye![/dim]")
+
+    def _run_pre_exit_hooks(self) -> None:
+        """Run registered pre-exit hooks before CLI exits."""
+        if hasattr(self, '_pre_exit_hooks'):
+            for hook in self._pre_exit_hooks:
+                try:
+                    hook()
+                except Exception as e:
+                    self.console.print(f"[red]Pre-exit hook error: {e}[/red]")
+
+    def register_pre_exit_hook(self, hook) -> None:
+        """
+        Register a hook to run before CLI exits.
+
+        Hooks are called in registration order. Exceptions are caught
+        and printed but don't prevent other hooks from running.
+
+        Args:
+            hook: Callable with no arguments
+        """
+        if not hasattr(self, '_pre_exit_hooks'):
+            self._pre_exit_hooks = []
+        self._pre_exit_hooks.append(hook)
 
     @classmethod
     def main(cls, **init_kwargs) -> None:

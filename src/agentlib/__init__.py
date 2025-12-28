@@ -7,6 +7,7 @@ from .shell_mixin import SubShellMixin
 from .repl_mixin import SubREPLMixin, SubREPLResponseMixin, REPLMCPMixin
 from .patch_mixin import FilePatchMixin
 from .jina_mixin import JinaMixin
+from .sandbox import SandboxMixin, SandboxedToolREPL
 from .tools.subshell import SubShell, STILL_RUNNING
 from .tools.subrepl import SubREPL
 from .cli import CLIMixin, CLIAgent
@@ -23,6 +24,8 @@ __all__ = [
     "SubREPLResponseMixin",
     "FilePatchMixin",
     "JinaMixin",
+    "SandboxMixin",
+    "SandboxedToolREPL",
     "SubShell",
     "SubREPL",
     "STILL_RUNNING",

@@ -15,7 +15,7 @@ import os
 import shutil
 import sys
 from typing import Optional
-from agentlib import REPLAgent
+from agentlib import REPLAgent, SandboxMixin
 from agentlib.cli import CLIMixin
 from agentlib.jina_mixin import JinaMixin
 from agentlib.cli.terminal import DIM, RESET, Panel
@@ -335,6 +335,7 @@ Focus on what needs to be done, not when. Break work into actionable steps.
                 if formatted:
                     print(formatted)
         finally:
+            self._run_pre_exit_hooks()
             self.console.print("\n[dim]Session ended. Goodbye![/dim]")
 
 
@@ -524,12 +525,21 @@ Examples:
         default=100,
         help="Maximum turns per interaction (default: 100)"
     )
+    parser.add_argument(
+        "--sandbox", "-s",
+        action="store_true",
+        help="Execute agent in a sandboxed filesystem and review changes or save diff"
+    )
     args = parser.parse_args()
 
-    # Create agent class with CLI args
-    class ConfiguredAgent(CodeAgent):
-        model = args.model
-        max_turns = args.max_turns
+    if args.sandbox:
+        class ConfiguredAgent(SandboxMixin, CodeAgent):
+            model = args.model
+            max_turns = args.max_turns
+    else:
+        class ConfiguredAgent(CodeAgent):
+            model = args.model
+            max_turns = args.max_turns
 
     with ConfiguredAgent() as agent:
         if not args.no_synth:

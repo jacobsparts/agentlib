@@ -2,6 +2,7 @@
 .aider*
 CLAUDE.md
 dev/
+src/agentlib/sandbox/sandbox_helper
 
 # Python
 __pycache__/

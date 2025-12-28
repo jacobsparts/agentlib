@@ -554,3 +554,32 @@ class MyAgent(JinaMixin, BaseAgent):
 - `no_cache` - Bypass cache for fresh content
 - `site` - Limit search to domain (web_search only)
 - `num` - Max results (web_search only)
+
+## SandboxMixin (Filesystem Isolation)
+
+Runs agent code in an isolated overlay filesystem. All writes go to a temporary layer; real filesystem unchanged until explicitly applied.
+
+**Linux only.** Requires user namespaces and gcc. See [sandbox.md](sandbox.md) for full documentation.
+
+```python
+from agentlib import SandboxMixin, CodeAgent
+
+class SandboxedAgent(SandboxMixin, CodeAgent):
+    sandbox_target = "/home/user"  # Optional, defaults to $HOME
+
+with SandboxedAgent() as agent:
+    agent.run("Create ~/test.txt")
+
+# Review changes
+print(agent.get_changed_files())
+
+# Apply to real filesystem
+agent.apply_changes()
+```
+
+**Methods:**
+- `get_tarball()` - Raw tarball bytes of all changes
+- `get_changed_files()` - Dict of `{path: content}`
+- `get_deleted_files()` - List of deleted paths
+- `apply_changes(target_dir=None)` - Apply to real filesystem
+- `discard_changes()` - No-op (changes already isolated)
