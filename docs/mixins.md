@@ -293,6 +293,8 @@ Update the timeout to 60
 -------- END config ----------
 ```
 
+**Variant:** `REPLAttachmentMixin` renders attachments as synthetic REPL file-read exchanges for use with `REPLAgent`.
+
 ## Combining Mixins
 
 ```python

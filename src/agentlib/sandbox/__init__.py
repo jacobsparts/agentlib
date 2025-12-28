@@ -77,6 +77,6 @@ def get_sandbox_helper() -> str:
 
 
 # Export mixin classes
-from .mixin import SandboxMixin, SandboxedToolREPL
+from .mixin import SandboxMixin, SandboxedToolREPL, SandboxCrashError
 
-__all__ = ["SandboxMixin", "SandboxedToolREPL", "get_sandbox_helper"]
+__all__ = ["SandboxMixin", "SandboxedToolREPL", "SandboxCrashError", "get_sandbox_helper"]

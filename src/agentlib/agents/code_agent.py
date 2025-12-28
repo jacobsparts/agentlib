@@ -15,7 +15,7 @@ import os
 import shutil
 import sys
 from typing import Optional
-from agentlib import REPLAgent, SandboxMixin
+from agentlib import REPLAgent, SandboxMixin, REPLAttachmentMixin
 from agentlib.cli import CLIMixin
 from agentlib.jina_mixin import JinaMixin
 from agentlib.cli.terminal import DIM, RESET, Panel
@@ -28,7 +28,7 @@ if not shutil.which('rg'):
 
 #import logging; logging.getLogger('agentlib').setLevel(logging.DEBUG)
 
-class CodeAgentBase(CLIMixin, REPLAgent):
+class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     """Code assistant with Python REPL execution."""
 
     model = "anthropic/claude-sonnet-4-5"
@@ -229,7 +229,9 @@ Focus on what needs to be done, not when. Break work into actionable steps.
             history._load_history()  # Restore main history
 
         if transcript:
-            self.usermsg("##### USER REPL SESSION #####\n" + "\n".join(transcript) + "\n##### END SESSION #####")
+            # Strip trailing newlines from each entry to avoid double spacing
+            cleaned = [t.rstrip('\n') for t in transcript]
+            self.usermsg("##### USER REPL SESSION #####\n" + "\n".join(cleaned) + "\n##### END SESSION #####")
 
         return bool(transcript)
 
@@ -262,16 +264,20 @@ Focus on what needs to be done, not when. Break work into actionable steps.
         history = SQLiteHistory(history_path)
         session = InputSession(history)
 
-        # Display welcome
+        # Display welcome banner with model and sandbox info
         welcome = getattr(self, 'welcome_message', '')
         if welcome:
-            self.console.print(Panel.fit(welcome, border_style="cyan"))
+            # Add model and sandbox status
+            model_name = self.model.split('/')[-1] if '/' in self.model else self.model
+            sandbox_status = "[green]sandbox[/green]" if SandboxMixin in type(self).__mro__ else "[dim]no sandbox[/dim]"
+            banner = f"{welcome}\n[dim]{model_name}[/dim] · {sandbox_status}"
+            self.console.print(Panel.fit(banner, border_style="cyan"))
 
         prompt_str = getattr(self, 'cli_prompt', '> ')
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /save <file>, /load <file>[/dim]\n")
+        self.console.print("[dim]Commands: /repl, /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name][/dim]\n")
 
         first_prompt = True
         try:
@@ -305,6 +311,50 @@ Focus on what needs to be done, not when. Break work into actionable steps.
                     filename = user_input.strip()[6:].strip()
                     if filename:
                         self.load_session(filename)
+                    continue
+
+                if user_input.strip().startswith("/attach "):
+                    filename = user_input.strip()[8:].strip()
+                    if filename:
+                        try:
+                            from pathlib import Path
+                            content = Path(filename).read_text()
+                            self.attach(filename, content)
+                            size_kb = len(content) / 1000
+                            print(f"{DIM}Attached {filename} ({size_kb:.1f}KB){RESET}")
+                        except Exception as e:
+                            print(f"{DIM}Error attaching {filename}: {e}{RESET}")
+                    continue
+
+                if user_input.strip().startswith("/detach "):
+                    filename = user_input.strip()[8:].strip()
+                    if filename:
+                        self.detach(filename)
+                        print(f"{DIM}Detached {filename}{RESET}")
+                    continue
+
+                if user_input.strip() == "/attachments":
+                    attachments = self.list_attachments()
+                    if not attachments:
+                        print(f"{DIM}No attachments{RESET}")
+                    else:
+                        print(f"{DIM}Current attachments:{RESET}")
+                        for name, content in attachments.items():
+                            size_kb = len(content) / 1000
+                            print(f"{DIM}  {name} ({size_kb:.1f}KB){RESET}")
+                    continue
+
+                if user_input.strip().startswith("/model"):
+                    parts = user_input.strip().split(None, 1)
+                    if len(parts) == 1:
+                        # No argument - show current model
+                        print(f"{DIM}Current model: {self.model}{RESET}")
+                    else:
+                        # Set new model
+                        new_model = parts[1].strip()
+                        old_model = self.model
+                        self.model = new_model
+                        print(f"{DIM}Model changed: {old_model} → {new_model}{RESET}")
                     continue
 
                 self.usermsg(user_input)

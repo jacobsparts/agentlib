@@ -7,6 +7,8 @@ from .shell_mixin import SubShellMixin
 from .repl_mixin import SubREPLMixin, SubREPLResponseMixin, REPLMCPMixin
 from .patch_mixin import FilePatchMixin
 from .jina_mixin import JinaMixin
+from .attachment_mixin import AttachmentMixin
+from .repl_attachment_mixin import REPLAttachmentMixin
 from .sandbox import SandboxMixin, SandboxedToolREPL
 from .tools.subshell import SubShell, STILL_RUNNING
 from .tools.subrepl import SubREPL
@@ -24,6 +26,8 @@ __all__ = [
     "SubREPLResponseMixin",
     "FilePatchMixin",
     "JinaMixin",
+    "AttachmentMixin",
+    "REPLAttachmentMixin",
     "SandboxMixin",
     "SandboxedToolREPL",
     "SubShell",

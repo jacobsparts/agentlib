@@ -36,7 +36,11 @@ class AttachmentMixin:
     def _ensure_setup(self):
         if hasattr(super(), '_ensure_setup'):
             super()._ensure_setup()
-        
+
+        # Fast path - already initialized
+        if hasattr(self, '_message_attachments'):
+            return
+
         # {message_index: {name: content}} - content is None for invalidation
         self._message_attachments = {}
         self._conversation_wrapped = False

@@ -21,6 +21,7 @@ Usage:
 
 import base64
 import json
+import logging
 import os
 import signal
 import socket
@@ -29,6 +30,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import io
 from pathlib import Path
 from typing import Any, Optional
@@ -37,6 +39,35 @@ try:
     import cloudpickle as pickle
 except ImportError:
     import pickle
+
+logger = logging.getLogger('agentlib.sandbox')
+
+
+class SandboxCrashError(Exception):
+    """Raised when the sandbox worker dies unexpectedly.
+
+    This error contains diagnostic information to help debug the crash.
+    The tarball from the crashed session (if any) is preserved.
+    """
+
+    def __init__(self, message: str, diagnostics: dict):
+        super().__init__(message)
+        self.diagnostics = diagnostics
+
+    def __str__(self):
+        lines = [super().__str__(), "", "=== Sandbox Crash Diagnostics ==="]
+        for key, value in self.diagnostics.items():
+            if key == 'stderr' and value:
+                lines.append(f"{key}:")
+                for line in value.strip().split('\n'):
+                    lines.append(f"  {line}")
+            elif key == 'stdout' and value:
+                lines.append(f"{key}:")
+                for line in value.strip().split('\n'):
+                    lines.append(f"  {line}")
+            else:
+                lines.append(f"{key}: {value}")
+        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -270,11 +301,90 @@ class SandboxedToolREPL:
         self._closed: bool = False
         self.tarball: Optional[bytes] = None
 
+        # Diagnostics tracking
+        self._session_start_time: Optional[float] = None
+        self._session_pid: Optional[int] = None
+        self._last_command: Optional[str] = None
+        self._command_count: int = 0
+        self._had_session: bool = False  # True once any session has started
+
     def _ensure_session(self) -> None:
         """Start the sandboxed worker if not running."""
-        if self._proc is not None and self._proc.poll() is None:
-            return
+        if self._proc is not None:
+            exit_code = self._proc.poll()
+            if exit_code is None:
+                return  # Still running
 
+            # Process died unexpectedly! This is the bug we're catching.
+            if self._had_session:
+                self._handle_unexpected_crash(exit_code)
+
+        self._start_new_session()
+
+    def _handle_unexpected_crash(self, exit_code: int) -> None:
+        """Handle unexpected sandbox worker crash with full diagnostics."""
+        # Capture all available diagnostic info
+        diagnostics = {
+            'exit_code': exit_code,
+            'pid': self._session_pid,
+            'target_dir': self.target_dir,
+            'session_duration': None,
+            'commands_executed': self._command_count,
+            'last_command': None,
+            'tarball_path': self._tar_path,
+            'tarball_exists': False,
+            'tarball_size': 0,
+            'stdout': '',
+            'stderr': '',
+        }
+
+        # Calculate session duration
+        if self._session_start_time:
+            diagnostics['session_duration'] = f"{time.time() - self._session_start_time:.1f}s"
+
+        # Truncate last command if too long
+        if self._last_command:
+            cmd = self._last_command
+            if len(cmd) > 500:
+                cmd = cmd[:500] + f"... ({len(self._last_command)} chars total)"
+            diagnostics['last_command'] = cmd
+
+        # Check tarball status
+        if self._tar_path and os.path.exists(self._tar_path):
+            diagnostics['tarball_exists'] = True
+            diagnostics['tarball_size'] = os.path.getsize(self._tar_path)
+
+        # Get stdout/stderr from crashed process (non-blocking)
+        if self._proc:
+            try:
+                stdout, stderr = self._proc.communicate(timeout=1)
+                diagnostics['stdout'] = stdout.decode('utf-8', errors='replace')
+                diagnostics['stderr'] = stderr.decode('utf-8', errors='replace')
+            except subprocess.TimeoutExpired:
+                diagnostics['stderr'] = "(process hung during output capture)"
+            except Exception as e:
+                diagnostics['stderr'] = f"(failed to capture: {e})"
+
+        # Log the crash
+        logger.error(
+            f"Sandbox worker crashed unexpectedly (exit code {exit_code}). "
+            f"PID={diagnostics['pid']}, duration={diagnostics['session_duration']}, "
+            f"commands={diagnostics['commands_executed']}"
+        )
+
+        # Preserve tarball path in error message
+        tarball_msg = ""
+        if diagnostics['tarball_exists']:
+            tarball_msg = f" Partial tarball preserved at: {self._tar_path}"
+
+        raise SandboxCrashError(
+            f"Sandbox worker died unexpectedly (exit code {exit_code}). "
+            f"Previous edits may have been lost!{tarball_msg}",
+            diagnostics
+        )
+
+    def _start_new_session(self) -> None:
+        """Start a fresh sandbox session."""
         # Import here to trigger lazy compilation
         from . import get_sandbox_helper
         sandbox_helper = get_sandbox_helper()
@@ -315,6 +425,15 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}))
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+
+        # Track session info for diagnostics
+        self._session_start_time = time.time()
+        self._session_pid = self._proc.pid
+        self._command_count = 0
+        self._last_command = None
+        self._had_session = True
+
+        logger.debug(f"Started sandbox session: PID={self._session_pid}, tar={self._tar_path}")
 
         # Accept connection from worker
         try:
@@ -502,6 +621,8 @@ def submit(result):
         """Send code to execute (non-blocking start)."""
         self._ensure_session()
         self._running = True
+        self._last_command = code
+        self._command_count += 1
         _send_msg(self._conn, ("exec", code))
 
     def poll_output(self, timeout: float = 0.05) -> Optional[tuple]:
