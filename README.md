@@ -150,7 +150,7 @@ The code agent inverts the usual agent paradigm: instead of an LLM calling tools
 
 ```bash
 code-agent
-code-agent --model anthropic/claude-sonnet-4-20250514
+code-agent --model anthropic/claude-opus-4-5
 ```
 
 This means:
