@@ -250,6 +250,49 @@ MRO handles diamond inheritance correctly—`SubREPLMixin` appears once.
 | Agent complexity | Simpler (native function calls) | Requires writing code |
 | Best for | Simple MCP usage | Code-oriented agents |
 
+## AttachmentMixin (Persistent Context)
+
+Adds named attachments that persist in conversation context. Attachments are rendered into messages for the LLM and can be updated or removed.
+
+```python
+from agentlib import BaseAgent, AttachmentMixin
+
+class MyAgent(AttachmentMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a helpful assistant."
+
+    @BaseAgent.tool
+    def done(self, response: str = "Response"):
+        self.respond(response)
+
+with MyAgent() as agent:
+    agent.attach("config", {"debug": True, "timeout": 30})
+    agent.attach("schema", "CREATE TABLE users (id INT, name TEXT)")
+    result = agent.run("Update the timeout to 60")
+```
+
+**Methods:**
+- `attach(name, content)` - Add or update attachment (str, dict, or list)
+- `detach(name)` - Remove attachment from context
+
+**Rendering:** Attachments appear as delimited blocks prepended to user/tool messages:
+```
+-------- BEGIN config --------
+{"debug": true, "timeout": 30}
+-------- END config ----------
+
+Update the timeout to 60
+```
+
+**Updates:** When an attachment changes, the old version is marked as removed:
+```
+[Attachment removed: config]
+
+-------- BEGIN config --------
+{"debug": false, "timeout": 60}
+-------- END config ----------
+```
+
 ## Combining Mixins
 
 ```python
