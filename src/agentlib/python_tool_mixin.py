@@ -1,10 +1,10 @@
 """
-SubREPLMixin - Mixin that adds Python REPL execution to any agent.
+PythonToolMixin - Mixin that adds Python execution tools to any agent.
 
 Example:
-    from agentlib import BaseAgent, SubREPLMixin
+    from agentlib import BaseAgent, PythonToolMixin
 
-    class MyAgent(SubREPLMixin, BaseAgent):
+    class MyAgent(PythonToolMixin, BaseAgent):
         model = 'google/gemini-2.5-flash'
         system = "You are a helpful assistant."
 
@@ -30,7 +30,7 @@ from .tools.subrepl import SubREPL, STILL_RUNNING
 from .tool_mixin import ToolMixin
 
 
-class SubREPLMixin(ToolMixin):
+class PythonToolMixin(ToolMixin):
     """Mixin that adds Python REPL execution. Use with BaseAgent."""
 
     # Configuration
@@ -177,7 +177,7 @@ Import statements persist - no need to re-import modules."""
         return result if result else "[Code interrupted]"
 
 
-class SubREPLResponseMixin(SubREPLMixin):
+class PythonToolResponseMixin(PythonToolMixin):
     """
     Extended REPL mixin that adds python_execute_response tool.
 
@@ -185,7 +185,7 @@ class SubREPLResponseMixin(SubREPLMixin):
     the output directly as their response.
 
     Example:
-        class CalcAgent(SubREPLResponseMixin, BaseAgent):
+        class CalcAgent(PythonToolResponseMixin, BaseAgent):
             model = 'google/gemini-2.5-flash'
             system = "You are a calculator. Use python_execute_response to compute and return results."
     """
@@ -193,7 +193,7 @@ class SubREPLResponseMixin(SubREPLMixin):
     def _build_system_prompt(self):
         system = super()._build_system_prompt()
         # Add info about the response tool
-        system += "\n- python_execute_response: Execute Python code and return ALL printed output directly to the user as your final response. The entire stdout (everything you print) becomes the user's response - format it cleanly for them using PLAINTEXT.\n  **Tip: MCP tool results can be parsed and formatted in the same script before returning.**"
+        system += "\n- python_execute_response: Execute Python code and return ALL printed output directly to the user as your final response. The entire stdout (everything you print) becomes the user's response - format it cleanly for them using PLAINTEXT."
         return system
 
     def _get_dynamic_toolspecs(self):
@@ -232,7 +232,13 @@ class SubREPLResponseMixin(SubREPLMixin):
             return f"{clean}\n\n[still running - code timed out]"
 
         # Check for exceptions - return to agent so it can fix
-        if 'Traceback (most recent call last):' in output:
+        error_indicators = [
+            'Traceback (most recent call last):',
+            'SyntaxError:',
+            'IndentationError:',
+            'TabError:',
+        ]
+        if any(ind in output for ind in error_indicators):
             return output
 
         # Success - format and respond to user
@@ -247,7 +253,7 @@ class SubREPLResponseMixin(SubREPLMixin):
         return None  # respond() handles the response
 
 
-class REPLMCPMixin(SubREPLMixin):
+class PythonMCPMixin(PythonToolMixin):
     """
     Mixin that sets up MCP clients in the REPL for lightweight MCP access.
 
@@ -256,9 +262,9 @@ class REPLMCPMixin(SubREPLMixin):
     interact with them directly.
 
     Example:
-        from agentlib import BaseAgent, REPLMCPMixin
+        from agentlib import BaseAgent, PythonMCPMixin
 
-        class MyAgent(REPLMCPMixin, BaseAgent):
+        class MyAgent(PythonMCPMixin, BaseAgent):
             model = 'google/gemini-2.5-flash'
             system = "You are a helpful assistant."
             repl_mcp_servers = [
@@ -276,8 +282,8 @@ class REPLMCPMixin(SubREPLMixin):
             #   fs.call_tool('read_file', {'path': '/tmp/test.txt'})
             result = agent.run("List files in /tmp using the fs MCP server")
 
-    For python_execute_response support, combine with SubREPLResponseMixin:
-        class MyAgent(REPLMCPMixin, SubREPLResponseMixin, BaseAgent):
+    For python_execute_response support, combine with PythonToolResponseMixin:
+        class MyAgent(PythonMCPMixin, PythonToolResponseMixin, BaseAgent):
             repl_mcp_servers = [...]
 
     Notes:

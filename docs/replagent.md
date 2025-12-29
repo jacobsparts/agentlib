@@ -4,6 +4,8 @@ REPLAgent is an alternative to BaseAgent where the LLM writes Python code direct
 
 For tool-calling agents (BaseAgent), see [guide.md](guide.md).
 
+For tool-calling agents that need Python execution as a tool (not the paradigm), see [python_tools.md](python_tools.md).
+
 ## Basic Structure
 
 ```python

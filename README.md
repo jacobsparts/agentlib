@@ -123,12 +123,12 @@ google/gemini-2.5-flash: In=342, Out=54, Rsn=61, Cost=$0.000
 ### Build an Interactive CLI Assistant
 
 ```python
-from agentlib import REPLMCPMixin, SubREPLResponseMixin
+from agentlib import PythonMCPMixin, PythonToolResponseMixin
 from agentlib.cli import CLIAgent
 
 class DataExtractor(
-    REPLMCPMixin,           # Python REPL with lightweight MCP client
-    SubREPLResponseMixin,   # Direct code execution response
+    PythonMCPMixin,             # Python REPL with lightweight MCP client
+    PythonToolResponseMixin,    # Direct code execution response
     CLIAgent,               # Interactive terminal interface
 ):
     model = "google/gemini-2.5-flash"

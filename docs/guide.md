@@ -231,8 +231,8 @@ Mixins add specialized capabilities to agents. See [mixins.md](mixins.md) for de
 
 - **MCPMixin** - MCP (Model Context Protocol) server integration
 - **SubShellMixin** - Persistent bash shell access
-- **SubREPLMixin** - Persistent Python REPL access
-- **REPLMCPMixin** - Lightweight MCP alternative that uses fewer tokens by having agents call MCP tools via Python code
+- **PythonToolMixin** - Persistent Python REPL access
+- **PythonMCPMixin** - Lightweight MCP alternative that uses fewer tokens by having agents call MCP tools via Python code
 - **CLIMixin/CLIAgent** - Interactive terminal REPL with rich formatting, readline history, and customizable hooks
 - **FilePatchMixin** - Context-based file patching for efficient code editing with optional approval workflows
 

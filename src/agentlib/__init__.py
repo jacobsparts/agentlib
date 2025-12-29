@@ -4,7 +4,7 @@ from .llm_registry import register_provider, register_model, ModelNotFoundError
 from .tool_mixin import ToolMixin
 from .mcp_mixin import MCPMixin
 from .shell_mixin import SubShellMixin
-from .repl_mixin import SubREPLMixin, SubREPLResponseMixin, REPLMCPMixin
+from .python_tool_mixin import PythonToolMixin, PythonToolResponseMixin, PythonMCPMixin
 from .patch_mixin import FilePatchMixin
 from .jina_mixin import JinaMixin
 from .attachment_mixin import AttachmentMixin
@@ -20,10 +20,10 @@ __all__ = [
     "BaseAgent",
     "ToolMixin",
     "MCPMixin",
-    "REPLMCPMixin",
+    "PythonMCPMixin",
     "SubShellMixin",
-    "SubREPLMixin",
-    "SubREPLResponseMixin",
+    "PythonToolMixin",
+    "PythonToolResponseMixin",
     "FilePatchMixin",
     "JinaMixin",
     "AttachmentMixin",

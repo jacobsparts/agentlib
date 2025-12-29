@@ -16,10 +16,10 @@ Quick Start:
         MyAssistant.main()
 
 With Python execution:
-    from agentlib import SubREPLResponseMixin
+    from agentlib import PythonToolResponseMixin
     from agentlib.cli import CLIAgent
 
-    class CodeAssistant(SubREPLResponseMixin, CLIAgent):
+    class CodeAssistant(PythonToolResponseMixin, CLIAgent):
         model = 'anthropic/claude-sonnet-4-5'
         system = "You are a Python assistant."
 
@@ -75,18 +75,18 @@ class CLIAgent(CLIMixin, BaseAgent):
             MyAssistant.main()
 
     With Python REPL:
-        from agentlib import SubREPLResponseMixin
+        from agentlib import PythonToolResponseMixin
         from agentlib.cli import CLIAgent
 
-        class CodeAssistant(SubREPLResponseMixin, CLIAgent):
+        class CodeAssistant(PythonToolResponseMixin, CLIAgent):
             model = 'anthropic/claude-sonnet-4-5'
             system = "You are a Python assistant."
 
     With MCP servers:
-        from agentlib import REPLMCPMixin, SubREPLResponseMixin
+        from agentlib import PythonMCPMixin, PythonToolResponseMixin
         from agentlib.cli import CLIAgent
 
-        class MCPAssistant(REPLMCPMixin, SubREPLResponseMixin, CLIAgent):
+        class MCPAssistant(PythonMCPMixin, PythonToolResponseMixin, CLIAgent):
             model = 'anthropic/claude-sonnet-4-5'
             system = "You are helpful."
             repl_mcp_servers = [('fs', '/path/to/mcp-server')]

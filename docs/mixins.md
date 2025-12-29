@@ -137,118 +137,9 @@ class MyAgent(SubShellMixin, BaseAgent):
 
 **Direct access:** `agent.shell_execute("ls -la")`
 
-## SubREPLMixin (Python REPL)
+## Python Tool Mixins
 
-Adds persistent Python REPL. Variables, imports, functions persist across calls.
-
-```python
-from agentlib import BaseAgent, SubREPLMixin
-
-class MyAgent(SubREPLMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
-    system = "You are a helpful assistant with Python execution."
-    repl_timeout = 30.0  # Default timeout (optional)
-
-    @BaseAgent.tool
-    def done(self, response: str = "Response"):
-        self.respond(response)
-```
-
-**Tools provided:**
-- `python_execute(code, timeout=30)` - Run Python code
-- `python_read(timeout=30)` - Continue reading if output ended with `[still running]\n`
-- `python_interrupt()` - Send SIGINT to stop code
-
-**Direct access:** `agent.python_execute("print(1+1)")`
-
-**Variant:** `SubREPLResponseMixin` adds `python_execute_response(code, preamble, postamble)` - executes code and returns output as the agent's final response. If code throws an exception or times out, error returns to agent for retry.
-
-## REPLMCPMixin (Lightweight MCP)
-
-Alternative to `MCPMixin` that uses fewer tokens. MCP clients are pre-instantiated in the REPL; agent calls tools via code.
-
-```python
-from agentlib import BaseAgent, REPLMCPMixin
-
-class MyAgent(REPLMCPMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
-    system = "You are a helpful assistant."
-    repl_mcp_servers = [
-        ('fs', '/path/to/mcp-server-filesystem /tmp'),
-        ('api', 'http://localhost:3000/sse'),
-        ('db', 'python db_server.py', {'timeout': 60.0}),
-    ]
-
-    @BaseAgent.tool
-    def done(self, response: str = "Response"):
-        """Send response to user."""
-        self.respond(response)
-```
-
-### repl_mcp_servers Format
-
-Same as `mcp_servers` in MCPMixin:
-```python
-repl_mcp_servers = [
-    (name, server),              # Basic
-    (name, server, options),     # With options dict
-]
-```
-
-### Configuration
-
-```python
-class MyAgent(REPLMCPMixin, BaseAgent):
-    repl_mcp_servers = [...]
-    repl_mcp_enumerate_tools = True  # Enumerate tools at setup (default: True)
-```
-
-Set `repl_mcp_enumerate_tools = False` to skip tool enumeration—useful when there are many MCP servers. Tools can still be discovered at runtime via `client.list_tools()`.
-
-Per-server override:
-```python
-repl_mcp_servers = [
-    ('fs', '/path/to/server'),                          # Uses global default
-    ('api', 'http://localhost/sse', {'enumerate_tools': False}),  # Skip for this server
-]
-```
-
-### How Agent Uses MCP
-
-MCP clients available as REPL variables. Agent writes code:
-```python
-# In python_execute:
-result = fs.call_tool('read_file', {'path': '/tmp/test.txt'})
-for item in result['content']:
-    if item['type'] == 'text':
-        print(item['text'])
-```
-
-### MCP Client Methods
-
-```python
-client.list_tools()                           # List available tools
-client.call_tool('name', {'arg': 'value'})    # Call a tool
-# Returns: {'content': [...], 'isError': bool}
-```
-
-### With python_execute_response
-
-Combine with `SubREPLResponseMixin` for direct output:
-```python
-class MyAgent(REPLMCPMixin, SubREPLResponseMixin, BaseAgent):
-    repl_mcp_servers = [...]
-```
-
-MRO handles diamond inheritance correctly—`SubREPLMixin` appears once.
-
-### MCPMixin vs REPLMCPMixin
-
-| Aspect | MCPMixin | REPLMCPMixin |
-|--------|----------|--------------|
-| Token usage | Higher (tool per MCP function) | Lower (tools via code) |
-| Agent complexity | Simpler (native function calls) | Requires writing code |
-| Best for | Simple MCP usage | Code-oriented agents |
+See [python_tools.md](python_tools.md) for `PythonToolMixin`, `PythonToolResponseMixin`, and `PythonMCPMixin`.
 
 ## AttachmentMixin (Persistent Context)
 
@@ -298,9 +189,9 @@ Update the timeout to 60
 ## Combining Mixins
 
 ```python
-from agentlib import BaseAgent, MCPMixin, SubShellMixin, SubREPLMixin
+from agentlib import BaseAgent, MCPMixin, SubShellMixin, PythonToolMixin
 
-class PowerAgent(SubREPLMixin, SubShellMixin, MCPMixin, BaseAgent):
+class PowerAgent(PythonToolMixin, SubShellMixin, MCPMixin, BaseAgent):
     model = 'google/gemini-2.5-flash'
     system = "You have shell, Python, and MCP server access."
     mcp_servers = [('fs', 'npx -y @mcp/server-filesystem /tmp')]
@@ -326,9 +217,9 @@ class MyAgent(CLIMixin, MCPMixin, REPLAgent):
 
 **Lightweight MCP + direct response:**
 ```python
-from agentlib import BaseAgent, REPLMCPMixin, SubREPLResponseMixin
+from agentlib import BaseAgent, PythonMCPMixin, PythonToolResponseMixin
 
-class DataAgent(REPLMCPMixin, SubREPLResponseMixin, BaseAgent):
+class DataAgent(PythonMCPMixin, PythonToolResponseMixin, BaseAgent):
     model = 'google/gemini-2.5-flash'
     system = "Query data and return formatted results."
     repl_mcp_servers = [('db', 'python db_server.py')]
@@ -358,10 +249,10 @@ if __name__ == "__main__":
 
 Add mixins for additional capabilities:
 ```python
-from agentlib import SubREPLResponseMixin
+from agentlib import PythonToolResponseMixin
 from agentlib.cli import CLIAgent
 
-class CodeAssistant(SubREPLResponseMixin, CLIAgent):
+class CodeAssistant(PythonToolResponseMixin, CLIAgent):
     model = 'google/gemini-2.5-flash'
     system = "You are a Python assistant."
 ```
@@ -413,10 +304,10 @@ class MyAssistant(CLIAgent):
 ### Using CLIMixin Directly
 
 ```python
-from agentlib import BaseAgent, SubREPLResponseMixin
+from agentlib import BaseAgent, PythonToolResponseMixin
 from agentlib.cli import CLIMixin
 
-class CustomAgent(CLIMixin, SubREPLResponseMixin, BaseAgent):
+class CustomAgent(CLIMixin, PythonToolResponseMixin, BaseAgent):
     model = 'google/gemini-2.5-flash'
     system = "You are helpful."
     welcome_message = "Hello!"
@@ -428,10 +319,10 @@ with CustomAgent() as agent:
 ### With MCP Servers
 
 ```python
-from agentlib import REPLMCPMixin
+from agentlib import PythonMCPMixin
 from agentlib.cli import CLIAgent
 
-class MCPAssistant(REPLMCPMixin, CLIAgent):
+class MCPAssistant(PythonMCPMixin, CLIAgent):
     model = 'google/gemini-2.5-flash'
     system = "You are helpful."
     repl_mcp_servers = [
