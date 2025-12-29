@@ -26,38 +26,11 @@ Or use the pre-composed CLIAgent:
 """
 
 import sqlite3
-import readline
 import sys
-import ctypes
-import ctypes.util
 from pathlib import Path
 from typing import Optional, Any
 
-
-def _get_readline_version() -> tuple[int, int]:
-    """Get GNU readline version as (major, minor) tuple.
-
-    Uses ctypes to read rl_readline_version from the readline library.
-    Returns (0, 0) if version cannot be determined.
-    """
-    lib_path = ctypes.util.find_library('readline')
-    if not lib_path:
-        return (0, 0)
-    try:
-        rl = ctypes.CDLL(lib_path)
-        rl_version = ctypes.c_int.in_dll(rl, 'rl_readline_version')
-        major = rl_version.value >> 8
-        minor = rl_version.value & 0xff
-        return (major, minor)
-    except (OSError, ValueError):
-        return (0, 0)
-
-
-# Validate readline version for bracketed paste support
-_RL_VERSION = _get_readline_version()
-assert _RL_VERSION >= (8, 0), (
-    f"GNU readline >= 8.0 required for bracketed paste mode, found {_RL_VERSION[0]}.{_RL_VERSION[1]}"
-)
+from .prompt import prompt as raw_prompt
 
 from .terminal import (
     Console, Panel, Markdown, render_markdown, parse_markup,
@@ -66,11 +39,11 @@ from .terminal import (
 
 
 # =============================================================================
-# SQLite History for readline
+# SQLite History
 # =============================================================================
 
 class SQLiteHistory:
-    """SQLite-backed history that integrates with readline."""
+    """SQLite-backed history for CLI input."""
 
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
@@ -79,7 +52,6 @@ class SQLiteHistory:
             db_path = str(Path(db_path).expanduser())
         self.db_path = db_path
         self._init_db()
-        self._load_history()
 
     def _init_db(self):
         """Create the history table if it doesn't exist."""
@@ -93,20 +65,17 @@ class SQLiteHistory:
             """)
             conn.commit()
 
-    def _load_history(self):
-        """Load history from SQLite into readline."""
-        readline.clear_history()
+    def load_history(self) -> list[str]:
+        """Load history from SQLite as a list."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 "SELECT command FROM history ORDER BY id ASC"
             )
-            for row in cursor:
-                readline.add_history(row[0])
+            return [row[0] for row in cursor]
 
     def add(self, command: str):
         """Add a command to history."""
         if command.strip():
-            readline.add_history(command)
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute(
                     "INSERT INTO history (command) VALUES (?)",
@@ -120,7 +89,7 @@ class SQLiteHistory:
 # =============================================================================
 
 class InputSession:
-    """Input session with readline history support and bracketed paste.
+    """Input session with history support and bracketed paste.
 
     By default, Enter submits and Alt+Enter inserts a newline.
     Pasted multiline content is buffered as a single input.
@@ -128,28 +97,16 @@ class InputSession:
 
     def __init__(self, history: Optional[SQLiteHistory] = None):
         self.history = history or SQLiteHistory()
-        self._setup_bindings()
-
-    def _setup_bindings(self):
-        """Configure readline for input with bracketed paste support."""
-        # Enable bracketed paste mode (GNU readline 8.0+)
-        # This makes readline handle ESC[200~ / ESC[201~ paste markers,
-        # buffering pasted content with preserved newlines
-        readline.parse_and_bind('set enable-bracketed-paste on')
-        # Alt+Enter inserts a literal newline for manual multiline
-        readline.parse_and_bind(r'"\e\C-m": "\C-v\n"')
+        self._history_list = self.history.load_history()
 
     def prompt(self, prompt_str: str = "> ") -> str:
         """Get input from user."""
-        try:
-            user_input = input(prompt_str)
-            if user_input.strip():
-                self.history.add(user_input)
-            return user_input
-        except EOFError:
-            raise
-        except KeyboardInterrupt:
-            raise
+        user_input = raw_prompt(
+            prompt_str=prompt_str,
+            history=self._history_list,
+            on_submit=self.history.add,
+        )
+        return user_input
 
 
 # =============================================================================

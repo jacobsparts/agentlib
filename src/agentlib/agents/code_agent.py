@@ -121,6 +121,7 @@ The code you write is executed directly.
 4. Call `submit(value)` or `respond(text)` to return to the user:
    - submit(value): Return the final result of a task
    - respond(text): Send conversational messages (explanations, questions)
+   - print(): Output visible to YOU in your next turn (does NOT return to user)
 
 respond() and submit() end your turn. Complete simple tasks in one turn.
 
@@ -300,55 +301,52 @@ Focus on what needs to be done, not when. Break work into actionable steps.
 
     def user_repl_session(self, history):
         """Drop into the REPL for direct user interaction."""
-        import readline
+        from agentlib.cli.prompt import prompt as raw_prompt
         from codeop import compile_command
 
         repl = self._get_tool_repl()
         self.complete = False
         transcript = []
         buffer = []
+        repl_history = []  # Separate history for REPL session
 
-        readline.clear_history()
         print(f"{DIM}Entering REPL. Ctrl+D to exit.{RESET}")
 
-        try:
-            while True:
-                prompt = "... " if buffer else ">>> "
-                try:
-                    line = input(prompt)
-                except EOFError:
-                    break
-                except KeyboardInterrupt:
-                    print()
-                    buffer = []
-                    continue
+        while True:
+            prompt_str = "... " if buffer else ">>> "
+            try:
+                line = raw_prompt(prompt_str, history=repl_history, add_to_history=False)
+            except EOFError:
+                break
+            except KeyboardInterrupt:
+                print()
+                buffer = []
+                continue
 
-                buffer.append(line)
-                source = "\n".join(buffer)
+            buffer.append(line)
+            source = "\n".join(buffer)
 
-                try:
-                    result = compile_command(source + "\n\n")
-                    if result is not None:
-                        # Complete statement - execute with tool handling
-                        output, _ = self._execute_with_tool_handling(repl, source)
-                        processed = self.process_repl_output(output)
-                        # Strip echo for display (user already typed it)
-                        display_lines = []
-                        for line in processed.split('\n'):
-                            if not line.startswith('>>> ') and not line.startswith('... '):
-                                display_lines.append(line)
-                        display = '\n'.join(display_lines).strip()
-                        if display:
-                            print(f"\x1b[92m{display}\x1b[0m")
-                        transcript.append(processed)
-                        readline.add_history(source)
-                        buffer = []
-                    # else: incomplete, continue accumulating
-                except SyntaxError as e:
-                    print(f"\x1b[91mSyntaxError: {e}\x1b[0m")
+            try:
+                result = compile_command(source + "\n\n")
+                if result is not None:
+                    # Complete statement - execute with tool handling
+                    output, _ = self._execute_with_tool_handling(repl, source)
+                    processed = self.process_repl_output(output)
+                    # Strip echo for display (user already typed it)
+                    display_lines = []
+                    for ln in processed.split('\n'):
+                        if not ln.startswith('>>> ') and not ln.startswith('... '):
+                            display_lines.append(ln)
+                    display = '\n'.join(display_lines).strip()
+                    if display:
+                        print(f"\x1b[92m{display}\x1b[0m")
+                    transcript.append(processed)
+                    repl_history.append(source)
                     buffer = []
-        finally:
-            history._load_history()  # Restore main history
+                # else: incomplete, continue accumulating
+            except SyntaxError as e:
+                print(f"\x1b[91mSyntaxError: {e}\x1b[0m")
+                buffer = []
 
         if transcript:
             # Strip trailing newlines from each entry to avoid double spacing
@@ -681,6 +679,11 @@ class CodeAgent(JinaMixin, CodeAgentBase):
         Avoid commands that require interactive input.
         """
         import subprocess
+        # Show status before blocking call so user knows what's happening
+        display_cmd = repr(command)
+        if len(display_cmd) > 60:
+            display_cmd = display_cmd[:57] + "...'"
+        print(f"\r\033[K\033[2m>>> bash({display_cmd})\033[0m", end="", flush=True)
         timeout = timeout or 120
         result = subprocess.run(
             command,
