@@ -365,8 +365,15 @@ Focus on what needs to be done, not when. Break work into actionable steps.
 
     def load_session(self, filename: str):
         """Load conversation from file and notify agent of reset."""
-        with open(filename) as f:
-            self.conversation.messages = json.load(f)
+        if not os.path.exists(filename):
+            print(f"{DIM}File not found: {filename}{RESET}")
+            return
+        try:
+            with open(filename) as f:
+                self.conversation.messages = json.load(f)
+        except json.JSONDecodeError:
+            print(f"{DIM}Error: {filename} is not a valid JSON session file{RESET}")
+            return
         self.usermsg(">>> system_reset()\nREPL session has been reset\n")
         print(f"{DIM}Session loaded from {filename}{RESET}")
 

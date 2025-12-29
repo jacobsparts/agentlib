@@ -306,7 +306,14 @@ def prompt(
                     buf.insert(cursor, ch)
                     cursor += 1
                     if cursor == len(buf) and '\n' not in buf:
-                        sys.stdout.write(ch)  # Fast path
+                        # Fast path: check if we wrapped to a new physical line
+                        try:
+                            tw = os.get_terminal_size().columns
+                        except OSError:
+                            tw = 80
+                        if tw > 0 and (len(display_prompt) + len(buf)) % tw == 0:
+                            prev_lines += 1
+                        sys.stdout.write(ch)
                     else:
                         _redraw(buf, cursor)
                     i += 1
