@@ -325,6 +325,7 @@ class SandboxedToolREPL:
         self._last_command: Optional[str] = None
         self._command_count: int = 0
         self._had_session: bool = False  # True once any session has started
+        self._accumulated_tarball: Optional[bytes] = None  # Accumulated changes across restarts
 
     def _ensure_session(self) -> None:
         """Start the sandboxed worker if not running."""
@@ -333,31 +334,95 @@ class SandboxedToolREPL:
             if exit_code is None:
                 return  # Still running
 
-            # Process exited - check if it was user-initiated or a crash
-            if self._had_session:
-                # SIGINT (-2) and SIGTERM (-15) are typically user-initiated
-                # Exit code 0 is clean shutdown
-                # These should allow restart without error
-                if exit_code in (0, -2, -15):
-                    # Check if there were potential unsaved changes
-                    if self._command_count > 0:
-                        logger.warning(
-                            f"Sandbox session ended (exit code {exit_code}) after "
-                            f"{self._command_count} command(s). Starting fresh session - "
-                            f"previous changes may not be saved."
-                        )
-                    else:
-                        logger.debug(
-                            f"Sandbox session ended (exit code {exit_code}). "
-                            f"Starting new session."
-                        )
-                    # Clean up old process reference
-                    self._proc = None
-                else:
-                    # Actual unexpected crash
-                    self._handle_unexpected_crash(exit_code)
+            # Process exited - capture tarball before cleanup
+            self._capture_tarball_from_ended_session()
+            
+            if self._had_session and self._command_count > 0:
+                # Session ended with potential changes - warn user
+                logger.warning(
+                    f"Sandbox session ended (exit code {exit_code}) after "
+                    f"{self._command_count} command(s). Recovering changes and restarting..."
+                )
+            else:
+                logger.debug(
+                    f"Sandbox session ended (exit code {exit_code}). "
+                    f"Starting new session."
+                )
+            
+            # Clean up old process reference
+            self._proc = None
 
         self._start_new_session()
+
+    def _capture_tarball_from_ended_session(self) -> None:
+        """Capture tarball from a session that ended, accumulating changes."""
+        if not self._tar_path:
+            return
+            
+        try:
+            if os.path.exists(self._tar_path):
+                with open(self._tar_path, 'rb') as f:
+                    new_tarball = f.read()
+                
+                if new_tarball:
+                    # Merge with any existing accumulated tarball
+                    if self._accumulated_tarball:
+                        self._accumulated_tarball = self._merge_tarballs(
+                            self._accumulated_tarball, new_tarball
+                        )
+                    else:
+                        self._accumulated_tarball = new_tarball
+                    
+                    logger.info(
+                        f"Captured {len(new_tarball)} bytes from ended session "
+                        f"(accumulated: {len(self._accumulated_tarball)} bytes)"
+                    )
+        except Exception as e:
+            logger.error(f"Failed to capture tarball from ended session: {e}")
+        finally:
+            # Clean up the old tarball file
+            try:
+                if self._tar_path and os.path.exists(self._tar_path):
+                    os.unlink(self._tar_path)
+            except:
+                pass
+            self._tar_path = None
+    
+    def _merge_tarballs(self, base: bytes, overlay: bytes) -> bytes:
+        """Merge two tarballs, with overlay taking precedence."""
+        if not base:
+            return overlay
+        if not overlay:
+            return base
+        
+        # Extract both to memory, overlay wins for conflicts
+        files = {}
+        
+        for tarball_bytes in [base, overlay]:
+            try:
+                with tarfile.open(fileobj=io.BytesIO(tarball_bytes)) as tf:
+                    for member in tf.getmembers():
+                        if member.isfile():
+                            f = tf.extractfile(member)
+                            if f:
+                                files[member.name] = (member, f.read())
+                        else:
+                            # Preserve non-file entries (dirs, whiteouts)
+                            files[member.name] = (member, None)
+            except Exception as e:
+                logger.warning(f"Error reading tarball during merge: {e}")
+        
+        # Create merged tarball
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode='w') as tf:
+            for name, (member, content) in files.items():
+                if content is not None:
+                    member.size = len(content)
+                    tf.addfile(member, io.BytesIO(content))
+                else:
+                    tf.addfile(member)
+        
+        return out.getvalue()
 
     def _handle_unexpected_crash(self, exit_code: int) -> None:
         """Handle unexpected sandbox worker crash with full diagnostics."""
@@ -442,6 +507,16 @@ class SandboxedToolREPL:
         os.close(fd)
         os.unlink(self._tar_path)  # sandbox_helper will create it
 
+        # If we have accumulated changes from a previous session, write them to restore file
+        restore_path = None
+        if self._accumulated_tarball:
+            fd, restore_path = tempfile.mkstemp(suffix='.tar', prefix='sandbox_restore_')
+            try:
+                os.write(fd, self._accumulated_tarball)
+            finally:
+                os.close(fd)
+            logger.info(f"Restoring {len(self._accumulated_tarball)} bytes of accumulated changes")
+
         # Pass worker code as -c argument (inline)
         worker_bootstrap = f'''
 import base64, sys
@@ -453,10 +528,17 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}))
         cmd = [
             sandbox_helper,
             '--tar', self._tar_path,
+        ]
+        if restore_path:
+            cmd.extend(['--restore', restore_path])
+        cmd.extend([
             self.target_dir,
             '--',
             sys.executable, '-c', worker_bootstrap
-        ]
+        ])
+        
+        # Track restore path for cleanup
+        self._restore_path = restore_path
 
         self._proc = subprocess.Popen(
             cmd,
@@ -494,6 +576,14 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}))
             self._proc.kill()
             raise RuntimeError("Worker authentication failed")
         _send_msg(self._conn, 'ok')
+
+        # Clean up restore file now that sandbox has loaded it
+        if hasattr(self, '_restore_path') and self._restore_path:
+            try:
+                os.unlink(self._restore_path)
+            except:
+                pass
+            self._restore_path = None
 
         self._tools_injected = False
 
@@ -753,17 +843,27 @@ def submit(result):
             self._proc = None
 
         # Read tarball
+        final_tarball = b""
         if self._tar_path:
             try:
                 with open(self._tar_path, 'rb') as f:
-                    self.tarball = f.read()
+                    final_tarball = f.read()
             except FileNotFoundError:
-                self.tarball = b""
+                pass
             finally:
                 try:
                     os.unlink(self._tar_path)
                 except:
                     pass
+        
+        # Merge with accumulated tarball from any previous session restarts
+        if self._accumulated_tarball:
+            if final_tarball:
+                self.tarball = self._merge_tarballs(self._accumulated_tarball, final_tarball)
+            else:
+                self.tarball = self._accumulated_tarball
+        else:
+            self.tarball = final_tarball
 
         return self.tarball or b""
 

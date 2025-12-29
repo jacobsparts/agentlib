@@ -84,21 +84,30 @@ static void cleanup_tmpdir(const char *path) {
 }
 
 static void usage(const char *prog) {
-    fprintf(stderr, "Usage: %s [--tar FILE] <target_dir> -- <command> [args...]\n", prog);
-    fprintf(stderr, "  --tar FILE    Write tarball of changes to FILE (use - for stdout)\n");
-    fprintf(stderr, "  target_dir    Directory to overlay (e.g., /home/user)\n");
+    fprintf(stderr, "Usage: %s [--tar FILE] [--restore FILE] <target_dir> -- <command> [args...]\n", prog);
+    fprintf(stderr, "  --tar FILE      Write tarball of changes to FILE (use - for stdout)\n");
+    fprintf(stderr, "  --restore FILE  Pre-populate overlay with changes from FILE\n");
+    fprintf(stderr, "  target_dir      Directory to overlay (e.g., /home/user)\n");
 }
 
 int main(int argc, char *argv[]) {
     uid_t real_uid = getuid();
     gid_t real_gid = getgid();
     const char *tar_file = NULL;
+    const char *restore_file = NULL;
     int arg_idx = 1;
 
-    /* Parse --tar option */
-    if (argc > 2 && strcmp(argv[1], "--tar") == 0) {
-        tar_file = argv[2];
-        arg_idx = 3;
+    /* Parse options */
+    while (arg_idx < argc - 1) {
+        if (strcmp(argv[arg_idx], "--tar") == 0 && arg_idx + 1 < argc) {
+            tar_file = argv[arg_idx + 1];
+            arg_idx += 2;
+        } else if (strcmp(argv[arg_idx], "--restore") == 0 && arg_idx + 1 < argc) {
+            restore_file = argv[arg_idx + 1];
+            arg_idx += 2;
+        } else {
+            break;
+        }
     }
 
     if (argc < arg_idx + 3) {
@@ -142,6 +151,18 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: failed to create overlay dirs: %s\n", strerror(errno));
         cleanup_tmpdir(g_tmpdir);
         return 1;
+    }
+
+    /* Restore previous changes if requested */
+    if (restore_file) {
+        char tar_cmd[PATH_MAX * 2];
+        snprintf(tar_cmd, sizeof(tar_cmd),
+                 "tar -xf '%s' -C '%s' 2>/dev/null", restore_file, g_upper);
+        int ret = system(tar_cmd);
+        if (ret != 0) {
+            fprintf(stderr, "Warning: failed to restore from %s (ret=%d)\n", restore_file, ret);
+            /* Continue anyway - may be empty or missing */
+        }
     }
 
     /* Fork - child runs sandboxed command, parent waits and generates tarball */
