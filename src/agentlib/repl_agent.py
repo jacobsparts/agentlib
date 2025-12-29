@@ -653,6 +653,14 @@ def respond(text):
                     if not content:
                         break
 
+                    # Strip markdown fences if present
+                    if content.startswith("```"):
+                        first_newline = content.find('\n')
+                        if first_newline != -1:
+                            content = content[first_newline + 1:]
+                        if content.endswith("```"):
+                            content = content[:-3].rstrip('\n')
+
                     output, pure_syntax_error = self._execute_with_tool_handling(repl, content)
 
                     if not pure_syntax_error:
@@ -670,7 +678,17 @@ def respond(text):
                         {"role": "user", "content": f"{output}\n{hint}"}
                     ]
                 else:
-                    # All retries exhausted - remind LLM of expected format
+                    # All retries exhausted - save conversation and crash
+                    import tempfile
+                    import json
+                    import sys
+                    crash_file = tempfile.NamedTemporaryFile(
+                        mode='w', suffix='.json', prefix='repl_crash_', delete=False
+                    )
+                    json.dump(self.conversation._messages(), crash_file, indent=2)
+                    crash_file.close()
+                    print(f"\n*** CRASH: Model failed to produce valid Python after {max_syntax_retries} retries ***", file=sys.stderr)
+                    print(f"*** Conversation saved to: {crash_file.name} ***", file=sys.stderr)
                     raise SyntaxError(
                         f"Your response must be valid Python code without preamble or markdown.\n\n{output}"
                     )
