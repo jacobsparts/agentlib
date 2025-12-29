@@ -27,6 +27,7 @@ Example:
 
 from __future__ import annotations
 
+import ast
 import code
 import os
 import signal
@@ -39,6 +40,43 @@ from typing import Any, Optional
 
 
 STILL_RUNNING = "[still running]\n"
+
+
+def _redact_long_strings(source: str, max_len: int = 200, max_newlines: int = 3) -> str:
+    """Replace long string literals with redaction marker for echo display.
+
+    Only redacts plain string literals, not f-strings or variables.
+    Redacts if string exceeds max_len OR contains more than max_newlines.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source  # Can't parse, return as-is
+
+    # Find all long string constants with their repr (how they appear in source)
+    redactions = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and
+            isinstance(node.value, str) and
+            hasattr(node, 'end_lineno')):  # Ensure we have position info
+            value = node.value
+            if len(value) > max_len or value.count('\n') > max_newlines:
+                redactions.append(node)
+
+    if not redactions:
+        return source
+
+    # Use ast.get_source_segment to get exact source text (handles Unicode correctly)
+    # Then do string replacement
+    result = source
+    for node in redactions:
+        # Get the exact source text of this string literal
+        segment = ast.get_source_segment(source, node)
+        if segment:
+            # Replace first occurrence (we process all nodes, each gets replaced once)
+            result = result.replace(segment, '"[content omitted from echo]"', 1)
+
+    return result
 
 
 def _with_still_running(output: str) -> str:
@@ -93,8 +131,17 @@ def _split_into_statements(source: str) -> list[str]:
     return [s for s in statements if s.strip()]
 
 
-def _format_echo(stmt: str) -> str:
-    """Format a statement with REPL-style echo prefix."""
+def _format_echo(stmt: str, redact_long_strings: bool = True) -> str:
+    """Format a statement with REPL-style echo prefix.
+
+    Args:
+        stmt: Python statement to format
+        redact_long_strings: If True, replace long string literals with
+            "[redacted by system]" to save tokens in the echo
+    """
+    if redact_long_strings:
+        stmt = _redact_long_strings(stmt)
+
     lines = stmt.split('\n')
     result = [f">>> {lines[0]}"]
     for line in lines[1:]:

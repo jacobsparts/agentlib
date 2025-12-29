@@ -13,20 +13,31 @@ Example:
 
     with MyAgent() as agent:
         agent.attach("config.json", '{"debug": true}')
-        result = agent.run("What's in the config?")
+        agent.attach("settings.yaml", 'key: value')
+        result = agent.run("What's in the files?")
 
 The agent sees synthetic history like:
+    user: >>> submit("Please load the following files: config.json, settings.yaml")
+    Please load the following files: config.json, settings.yaml
+
     assistant: with open('config.json') as f:
+        print(f.read())
+    with open('settings.yaml') as f:
         print(f.read())
 
     user: >>> with open('config.json') as f:
     ...     print(f.read())
     {"debug": true}
 
+    >>> with open('settings.yaml') as f:
+    ...     print(f.read())
+    key: value
+
 Behavior:
     - attach(name, content): Add or update - shows as file read
     - detach(name): Remove - shows as commented-out (redacted) read
-    - Attachments inject message pairs before the next assistant turn
+    - Multiple attachments at the same point are batched into one exchange
+    - If injecting before first user message, a synthetic request is added
 """
 
 import json
@@ -60,6 +71,10 @@ class REPLAttachmentMixin:
 
         conv._messages = _messages_with_attachments
 
+    def _non_system_count(self) -> int:
+        """Count non-system messages (for index alignment with API messages list)."""
+        return sum(1 for m in self.conversation.messages if m.get("role") != "system")
+
     def attach(self, name: str, content):
         """
         Add or update an attachment.
@@ -72,7 +87,7 @@ class REPLAttachmentMixin:
         if isinstance(content, (dict, list)):
             content = json.dumps(content, indent=2)
 
-        idx = len(self.conversation.messages)
+        idx = self._non_system_count()
         if idx not in self._attachment_state:
             self._attachment_state[idx] = {}
         self._attachment_state[idx][name] = content
@@ -85,7 +100,7 @@ class REPLAttachmentMixin:
             name: Identifier of attachment to remove
         """
         self._wrap_conversation()
-        idx = len(self.conversation.messages)
+        idx = self._non_system_count()
         if idx not in self._attachment_state:
             self._attachment_state[idx] = {}
         self._attachment_state[idx][name] = None
@@ -113,25 +128,49 @@ class REPLAttachmentMixin:
 
         return active
 
-    def _render_read(self, name: str, content: str) -> tuple[dict, dict]:
-        """Render an attachment as a synthetic file read exchange."""
-        code = f"with open({name!r}) as f:\n    print(f.read())"
-        output = f">>> with open({name!r}) as f:\n...     print(f.read())\n{content}"
+    def _render_batch(self, reads: dict[str, str], redactions: list[str]) -> tuple[dict, dict]:
+        """
+        Render multiple attachments as a single synthetic REPL exchange.
+
+        Args:
+            reads: {name: content} for files to show as read
+            redactions: [name, ...] for files to show as redacted
+        """
+        code_parts = []
+        output_parts = []
+
+        for name, content in reads.items():
+            code_parts.append(f"with open({name!r}) as f:\n    print(f.read())")
+            output_parts.append(f">>> with open({name!r}) as f:\n...     print(f.read())\n{content}")
+
+        for name in redactions:
+            code_parts.append(f"# with open({name!r}) as f:  # [redacted by system]\n#     print(f.read())")
+            output_parts.append(f">>> # with open({name!r}) as f:  # [redacted by system]\n>>> #     print(f.read())")
 
         return (
-            {"role": "assistant", "content": code},
-            {"role": "user", "content": output},
+            {"role": "assistant", "content": "\n".join(code_parts)},
+            {"role": "user", "content": "\n\n".join(output_parts) + "\n"},
         )
 
-    def _render_redacted(self, name: str) -> tuple[dict, dict]:
-        """Render a detached attachment as commented-out code."""
-        code = f"# with open({name!r}) as f:  # [redacted by system]\n#     print(f.read())"
-        output = f">>> # with open({name!r}) as f:  # [redacted by system]\n>>> #     print(f.read())"
+    def _emit_attachment_batch(self, reads: dict, redactions: list, result: list):
+        """Emit a batch of attachments, adding synthetic user request if needed."""
+        if not reads and not redactions:
+            return
 
-        return (
-            {"role": "assistant", "content": code},
-            {"role": "user", "content": output},
-        )
+        # Check if we need a synthetic user request to maintain alternation
+        last_role = result[-1].get("role") if result else None
+        if last_role in (None, "system") and reads:
+            if len(reads) == 1:
+                request_text = f"Please load {next(iter(reads))}"
+            else:
+                request_text = f"Please load the following files: {', '.join(reads)}"
+            # Format as REPL output to maintain the illusion
+            request_msg = f'>>> submit("{request_text}")\n{request_text}\n'
+            result.append({"role": "user", "content": request_msg})
+
+        assistant_msg, user_msg = self._render_batch(reads, redactions)
+        result.append(assistant_msg)
+        result.append(user_msg)
 
     def _inject_attachments(self, messages: list) -> list:
         """
@@ -140,8 +179,9 @@ class REPLAttachmentMixin:
         Walks through messages and attachment state. When attachments change,
         injects message pairs that look like file reads in the REPL.
 
-        For early attachments (before first user message), injects a synthetic
-        user request to maintain LLM provider compatibility.
+        If injecting would place an assistant message after a system message
+        (or at the start), adds a synthetic user request first to maintain
+        LLM provider compatibility.
         """
         if not self._attachment_state:
             return messages
@@ -150,72 +190,58 @@ class REPLAttachmentMixin:
         # Track current state: {name: content} where content=None means detached
         active = {}
 
-        # Check if we have early attachments (before any user/assistant messages)
-        # Attachments added before first user message will be at index 0 or 1 (after system message)
-        needs_synthetic_request = False
-        early_attachments = {}
+        # Separate system messages (keep them first, don't count in indices)
+        system_messages = []
+        non_system_messages = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_messages.append(msg)
+            else:
+                non_system_messages.append(msg)
 
-        # Check for attachments at index 0 or 1 when there are only system messages
-        has_non_system = any(msg.get("role") not in ("system",) for msg in messages)
-        if not has_non_system:
-            # Check both index 0 and 1 for attachments
-            for idx in [0, 1]:
-                attachments = self._attachment_state.get(idx, {})
-                if attachments:
-                    early_attachments.update(attachments)
-            if early_attachments:
-                needs_synthetic_request = True
+        # Add system messages first (they don't participate in attachment injection)
+        result.extend(system_messages)
 
-        for idx, msg in enumerate(messages):
-            # Special handling for index 0 with early attachments
-            if idx == 0 and needs_synthetic_request and msg.get("role") == "system":
-                # Add system message first
-                result.append(msg)
-                # Add synthetic user request
-                filenames = [name for name, content in early_attachments.items() if content is not None]
-                if filenames:
-                    if len(filenames) == 1:
-                        request_msg = f"Please load {filenames[0]}"
-                    else:
-                        file_list = ", ".join(filenames)
-                        request_msg = f"Please load the following files: {file_list}"
-                    result.append({"role": "user", "content": request_msg})
+        # Determine max index we need to process (non-system messages + attachments)
+        max_idx = len(non_system_messages)
+        if self._attachment_state:
+            max_idx = max(max_idx, max(self._attachment_state.keys()) + 1)
 
-                # Now render the early attachments as file reads
-                for name, content in early_attachments.items():
-                    if content is not None:
-                        assistant_msg, user_msg = self._render_read(name, content)
-                        result.append(assistant_msg)
-                        result.append(user_msg)
-                        active[name] = content
-
-            # Process attachment changes before this message
+        for idx in range(max_idx):
+            # Process attachment changes at this index
             changes = self._attachment_state.get(idx, {})
+            reads = {}
+            redactions = []
+
             for name, content in changes.items():
                 prev_content = active.get(name)
 
                 if content is None:
                     # Detaching
                     if name in active:
-                        assistant_msg, user_msg = self._render_redacted(name)
-                        result.append(assistant_msg)
-                        result.append(user_msg)
+                        redactions.append(name)
                         del active[name]
                 elif prev_content != content:
                     # New or updated attachment
                     if prev_content is not None:
-                        # Content changed - show redaction first
-                        assistant_msg, user_msg = self._render_redacted(name)
-                        result.append(assistant_msg)
-                        result.append(user_msg)
-                    # Show new content
-                    assistant_msg, user_msg = self._render_read(name, content)
-                    result.append(assistant_msg)
-                    result.append(user_msg)
+                        # Content changed - redact old version
+                        redactions.append(name)
+                    reads[name] = content
                     active[name] = content
 
-            # Add the message to result (unless it's index 0 system message we already added)
-            if not (idx == 0 and needs_synthetic_request and msg.get("role") == "system"):
-                result.append(msg)
+            self._emit_attachment_batch(reads, redactions, result)
+
+            # Add the original message if it exists at this index
+            if idx < len(non_system_messages):
+                msg = non_system_messages[idx]
+                # Merge consecutive user messages to maintain REPL illusion
+                if (result and result[-1].get("role") == "user" and
+                    msg.get("role") == "user"):
+                    # Append to previous user message
+                    prev = result[-1]["content"]
+                    sep = "" if prev.endswith("\n") else "\n"
+                    result[-1]["content"] = prev + sep + msg["content"]
+                else:
+                    result.append(msg)
 
         return result

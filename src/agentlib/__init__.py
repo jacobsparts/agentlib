@@ -1,6 +1,6 @@
 from .core import BaseAgent
 from .client import ValidationError, BadRequestError
-from .llm_registry import register_provider, register_model
+from .llm_registry import register_provider, register_model, ModelNotFoundError
 from .tool_mixin import ToolMixin
 from .mcp_mixin import MCPMixin
 from .shell_mixin import SubShellMixin
@@ -35,6 +35,7 @@ __all__ = [
     "STILL_RUNNING",
     "ValidationError",
     "BadRequestError",
+    "ModelNotFoundError",
     "register_provider",
     "register_model",
     # CLI

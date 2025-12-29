@@ -4,6 +4,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+class ModelNotFoundError(Exception):
+    """Raised when an unknown model is requested."""
+    pass
+
 @dataclass
 class ProviderConfig:
     provider: str
@@ -32,19 +36,41 @@ class EndpointRegistry:
     def __init__(self):
         self._models = {}
         self._providers = {}
+        self._aliases = {}
 
     def register_provider(self, name, **kwargs):
         kwargs['provider'] = name
         self._providers[name] = ProviderConfig(**kwargs)
 
-    def register_model(self, provider, alias, **kwargs):
+    def register_model(self, provider, alias, aliases=None, **kwargs):
         if not (prov_obj := self._providers.get(provider)):
             raise ValueError(f"unknown provider: {provider}")
         kwargs.setdefault('model', alias)
-        self._models[f"{provider}/{alias}"] = ModelConfig(provider=prov_obj, **kwargs)
+        full_name = f"{provider}/{alias}"
+        self._models[full_name] = ModelConfig(provider=prov_obj, **kwargs)
+        if aliases:
+            for a in (aliases if isinstance(aliases, list) else [aliases]):
+                self._aliases[a] = full_name
+
+    def resolve_model_name(self, name):
+        """Resolve an alias or short name to the full model name (provider/model).
+        Returns the input unchanged if not an alias."""
+        return self._aliases.get(name, name)
 
     def get_model_config(self, name):
-        _model = dict(self._models[name].__dict__)
+        # Resolve alias if it exists
+        resolved_name = self._aliases.get(name, name)
+        
+        # Check if model exists
+        if resolved_name not in self._models:
+            # Provide helpful error message
+            available = list(self._models.keys()) + list(self._aliases.keys())
+            raise ModelNotFoundError(
+                f"Unknown model '{name}'. Available models and aliases:\n" +
+                "\n".join(f"  - {m}" for m in sorted(available))
+            )
+        
+        _model = dict(self._models[resolved_name].__dict__)
         _provider = _model.pop('provider').__dict__
         keys = _model.keys() | _provider.keys()
         model_config = { k: v if (v := _model.get(k)) is not None else _provider.get(k) for k in keys }
@@ -57,6 +83,7 @@ registry = EndpointRegistry()
 register_provider = registry.register_provider
 register_model = registry.register_model
 get_model_config = registry.get_model_config
+resolve_model_name = registry.resolve_model_name
 
 # --- OpenAI ---
 register_provider("openai",
@@ -83,6 +110,7 @@ register_model("openai","gpt-5.1",
 )
 register_model("openai","gpt-5-mini",
     model="gpt-5-mini",
+    aliases="mini",
     input_cost=0.25,
     cached_cost=0.025,
     output_cost=2.0,
@@ -109,18 +137,21 @@ register_provider("anthropic",
 )
 register_model("anthropic","claude-haiku-4-5",
     model="claude-haiku-4-5",
+    aliases="haiku",
     input_cost=1.00,
     cached_cost=0.1,
     output_cost=5.0,
 )
 register_model("anthropic","claude-sonnet-4-5",
     model="claude-sonnet-4-5",
+    aliases="sonnet",
     input_cost=3.00,
     cached_cost=0.3,
     output_cost=15.0,
 )
 register_model("anthropic","claude-opus-4-5",
     model="claude-opus-4-5",
+    aliases="opus",
     input_cost=5.00,
     cached_cost=0.5,
     output_cost=25.0,
@@ -138,6 +169,7 @@ register_provider("google",
 )
 register_model("google","gemini-3-pro",
     model="gemini-3-pro-preview",
+    aliases="pro",
     config={"reasoning_effort": "high"},
     input_cost=2.00,
     cached_cost=0.2,
@@ -146,6 +178,7 @@ register_model("google","gemini-3-pro",
 )
 register_model("google","gemini-2.5-pro",
     model="gemini-2.5-pro",
+    aliases="pro",
     config={"reasoning_effort": "high"},
     input_cost=1.25,
     cached_cost=0.125,
@@ -154,6 +187,7 @@ register_model("google","gemini-2.5-pro",
 )
 register_model("google","gemini-2.5-flash",
     model="gemini-2.5-flash",
+    aliases="flash",
     config={"reasoning_effort": "high"},
     input_cost=0.3,
     cached_cost=0.03,

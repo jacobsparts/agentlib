@@ -15,9 +15,11 @@ import os
 import shutil
 import sys
 from typing import Optional
+from pathlib import Path
 from agentlib import REPLAgent, SandboxMixin, REPLAttachmentMixin
 from agentlib.cli import CLIMixin
 from agentlib.jina_mixin import JinaMixin
+from agentlib.llm_registry import ModelNotFoundError
 from agentlib.cli.terminal import DIM, RESET, Panel
 from dotenv import load_dotenv
 
@@ -27,6 +29,68 @@ if not shutil.which('rg'):
     sys.exit("Error: ripgrep (rg) is required but not found. Install with: apt install ripgrep")
 
 #import logging; logging.getLogger('agentlib').setLevel(logging.DEBUG)
+
+
+def gather_auto_attach_files():
+    '''Find CLAUDE.md or AGENTS.md files and their @ imports.
+    
+    Searches current directory and parent directories for CLAUDE.md or AGENTS.md.
+    Recursively processes @ imports (lines starting with @ followed by filename).
+    Returns list of file paths relative to current directory, with no duplicates.
+    '''
+    current = Path.cwd()
+    found_files = []
+    seen_paths = set()
+    
+    def add_file_and_imports(file_path: Path, base_dir: Path):
+        'Recursively add file and its imports.'
+        # Normalize to absolute path for deduplication
+        abs_path = file_path.resolve()
+        if abs_path in seen_paths:
+            return
+        seen_paths.add(abs_path)
+        
+        # Add to results (relative to cwd)
+        rel_path = os.path.relpath(abs_path, current)
+        found_files.append(rel_path)
+        
+        # Scan for @ imports
+        try:
+            content = file_path.read_text()
+            for line in content.split('\n'):
+                if line.startswith('@'):
+                    import_name = line[1:].strip()
+                    if import_name:
+                        # Resolve relative to the directory containing this file
+                        import_path = (file_path.parent / import_name).resolve()
+                        if import_path.exists() and import_path.is_file():
+                            add_file_and_imports(import_path, file_path.parent)
+        except Exception:
+            pass  # Ignore read errors
+    
+    # Search for CLAUDE.md or AGENTS.md in current and parent directories
+    md_files = []
+    search_dir = current
+    while True:
+        for name in ['CLAUDE.md', 'AGENTS.md']:
+            candidate = search_dir / name
+            if candidate.exists():
+                md_files.append(candidate)
+        
+        parent = search_dir.parent
+        if parent == search_dir:  # Reached root
+            break
+        search_dir = parent
+    
+    # Sort so parent directories come first (reverse order of discovery)
+    md_files.reverse()
+    
+    # Process each markdown file and its imports
+    for md_file in md_files:
+        add_file_and_imports(md_file, md_file.parent)
+    
+    return found_files
+
 
 class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     """Code assistant with Python REPL execution."""
@@ -101,9 +165,10 @@ Focus on what needs to be done, not when. Break work into actionable steps.
   available.
 - For file operations, you can use native Python (`Path.read_text()`,
   `open()`) or available functions.
+- read() returns formatted output with line numbers - use it for viewing.
 """
 
-    max_output_kb = 20 # Large output protection
+    max_output_kb = 50 # Large output protection
 
     def process_repl_output(self, output: str) -> str:
         """Truncate output if too large - used for both display and model."""
@@ -134,9 +199,25 @@ Focus on what needs to be done, not when. Break work into actionable steps.
         """Buffer chunks without display - we show processed output at end."""
         pass  # No-op, we display in on_repl_output using process_repl_output
 
+    max_display_chars = 200  # Max chars per line to show user (agent sees full output)
+
+    def _truncate_for_display(self, output: str) -> str:
+        """Truncate long lines for user display while agent sees full output."""
+        lines = output.split('\n')
+        truncated_lines = []
+        
+        for line in lines:
+            if len(line) <= self.max_display_chars:
+                truncated_lines.append(line)
+            else:
+                truncated_lines.append(line[:self.max_display_chars] + '...')
+        
+        return '\n'.join(truncated_lines)
+
     def on_repl_output(self, output: str) -> None:
-        """Display processed output (same as what model sees)."""
+        """Display truncated output (agent sees full output via process_repl_output)."""
         processed = self.process_repl_output(output)
+        display = self._truncate_for_display(processed)
 
         if processed.strip():
             self.console.clear_line()  # Clear thinking message
@@ -151,7 +232,7 @@ Focus on what needs to be done, not when. Break work into actionable steps.
 
             # Display with coloring (submit/respond calls dimmed)
             in_submit_respond = False
-            for line in processed.rstrip('\n').split('\n'):
+            for line in display.rstrip('\n').split('\n'):
                 is_new_statement = line.startswith('>>> ')
                 is_continuation = line.startswith('... ')
                 is_prompt = is_new_statement or is_continuation
@@ -250,7 +331,31 @@ Focus on what needs to be done, not when. Break work into actionable steps.
         self.usermsg(">>> system_reset()\nREPL session has been reset\n")
         print(f"{DIM}Session loaded from {filename}{RESET}")
 
-    def cli_run(self, max_turns: int | None = None):
+    def _synthetic_exchange(self):
+        self._ensure_setup()
+        repl = self._get_tool_repl()
+        repl.execute('from urllib.request import urlopen; body = "[redacted by system]"')
+        for role, content in (
+            # First user question - styled as REPL output since it follows attachment load
+            ('user', 'What do you think of the title of the example.com page? And what is the length of the page in bytes?\n'),
+            ('assistant', '# Title is in <title> tag, so I need the raw HTML\nfrom urllib.request import urlopen\nwith urlopen("http://example.com") as r:\n    body = r.read().decode("utf-8", errors="ignore")\nbody[:100]'),
+            ('user', '>>> from urllib.request import urlopen\n>>> with urlopen("http://example.com") as r:\n...     body = r.read().decode("utf-8", errors="ignore")\n>>> body[:100]\n\'<!doctype html><html lang="en"><head><title>Example Domain</title><meta name="viewport" content="wid\'\n'),
+            ('assistant', 'submit(f"The title is \'Example Domain\'--a concise, descriptive title. Page length: {len(body)} bytes.")'),
+            # User reply appended to submit output (simulating the REPL continuation)
+            ('user', '>>> submit(f"The title is \'Example Domain\'--a concise, descriptive title. Page length: {len(body)} bytes.")\nWhat do you think of the documentation style in CLAUDE.md?\n'),
+            # Assistant makes a mistake - responds in plaintext
+            ('assistant', "The documentation style is good - it's concise and uses a code-first approach with clear section headers."),
+            # Error shown, with recovery hint
+            ('user', ">>> The documentation style is good - it's concise and uses a code-first approach with clear section headers.\n  File \"<repl>\", line 1\n    The documentation style is good - it's concise and uses a code-first approach with clear section headers.\n                                     ^\nSyntaxError: unterminated string literal (detected at line 1)\n\nYour response was not valid Python and was rejected. Try again using only Python code. Use an appropriate function to communicate text.\n"),
+            # Assistant recovers correctly
+            ('assistant', 'respond("The documentation style is good - concise and code-first with clear section headers.")'),
+            ('user', '>>> respond("The documentation style is good - concise and code-first with clear section headers.")\n'),
+        ):
+            self.conversation.messages.append({"role": role, "content": content})
+        # Mark that last message is REPL output - next user message should append
+        self._last_was_repl_output = True
+
+    def cli_run(self, max_turns: int | None = None, synth: bool = True):
         """Run CLI loop with Python block delimiters."""
         from agentlib.cli.mixin import SQLiteHistory, InputSession
 
@@ -264,11 +369,18 @@ Focus on what needs to be done, not when. Break work into actionable steps.
         history = SQLiteHistory(history_path)
         session = InputSession(history)
 
+        for filename in gather_auto_attach_files():
+            content = Path(filename).read_text()
+            self.attach(filename, content)
+
         # Display welcome banner with model and sandbox info
         welcome = getattr(self, 'welcome_message', '')
         if welcome:
             # Add model and sandbox status
-            model_name = self.model.split('/')[-1] if '/' in self.model else self.model
+            # Resolve alias to full name for display
+            from agentlib.llm_registry import resolve_model_name
+            full_model_name = resolve_model_name(self.model)
+            model_name = full_model_name.split('/')[-1] if '/' in full_model_name else full_model_name
             sandbox_status = "[green]sandbox[/green]" if SandboxMixin in type(self).__mro__ else "[dim]no sandbox[/dim]"
             banner = f"{welcome}\n[dim]{model_name}[/dim] · {sandbox_status}"
             self.console.print(Panel.fit(banner, border_style="cyan"))
@@ -277,17 +389,12 @@ Focus on what needs to be done, not when. Break work into actionable steps.
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name][/dim]\n")
+        self.console.print("[dim]Commands: /repl, /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name][/dim]")
 
-        first_prompt = True
         try:
             while True:
                 try:
-                    if first_prompt:
-                        user_input = session.prompt(prompt_str)
-                        first_prompt = False
-                    else:
-                        user_input = session.prompt(f"\n{prompt_str}")
+                    user_input = session.prompt(f"\n{prompt_str}")
                 except KeyboardInterrupt:
                     print()
                     continue
@@ -317,7 +424,6 @@ Focus on what needs to be done, not when. Break work into actionable steps.
                     filename = user_input.strip()[8:].strip()
                     if filename:
                         try:
-                            from pathlib import Path
                             content = Path(filename).read_text()
                             self.attach(filename, content)
                             size_kb = len(content) / 1000
@@ -348,15 +454,34 @@ Focus on what needs to be done, not when. Break work into actionable steps.
                     parts = user_input.strip().split(None, 1)
                     if len(parts) == 1:
                         # No argument - show current model
-                        print(f"{DIM}Current model: {self.model}{RESET}")
+                        from agentlib.llm_registry import resolve_model_name
+                        full_name = resolve_model_name(self.model)
+                        if full_name != self.model:
+                            print(f"{DIM}Current model: {self.model} → {full_name}{RESET}")
+                        else:
+                            print(f"{DIM}Current model: {self.model}{RESET}")
                     else:
                         # Set new model
                         new_model = parts[1].strip()
                         old_model = self.model
-                        self.model = new_model
-                        print(f"{DIM}Model changed: {old_model} → {new_model}{RESET}")
+                        try:
+                            # Validate the model exists by trying to get its config
+                            from agentlib.llm_registry import get_model_config
+                            get_model_config(new_model)
+                            self.model = new_model
+                            # Clear cached client so new model takes effect
+                            if hasattr(self, '_llm_client'):
+                                delattr(self, '_llm_client')
+                            if hasattr(self, '_conversation'):
+                                delattr(self, '_conversation')
+                            print(f"{DIM}Model changed: {old_model} → {new_model}{RESET}")
+                        except ModelNotFoundError as e:
+                            print(f"{DIM}{str(e)}{RESET}")
                     continue
 
+                if synth:
+                    self._synthetic_exchange()
+                    synth = False
                 self.usermsg(user_input)
 
                 # Reset state for new user interaction
@@ -401,7 +526,6 @@ class CodeAgent(JinaMixin, CodeAgentBase):
             path: Optional[str] = "Directory to search in (default: current directory)"
         ):
         """Find files matching a glob pattern, sorted by modification time."""
-        from pathlib import Path
         base = Path(path) if path else Path('.')
         matches = list(base.glob(pattern))
         matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -456,7 +580,6 @@ class CodeAgent(JinaMixin, CodeAgentBase):
             limit: Optional[int] = "Number of lines to read (default: 2000)"
         ):
         """Read a file's contents with line numbers."""
-        from pathlib import Path
         content = Path(file_path).read_text()
         all_lines = content.split('\n')
         total_lines = len(all_lines)
@@ -482,7 +605,6 @@ class CodeAgent(JinaMixin, CodeAgentBase):
             replace_all: Optional[bool] = "Replace all occurrences"
         ):
         """Edit a file by replacing text."""
-        from pathlib import Path
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError("File does not exist.")
@@ -530,21 +652,8 @@ class CodeAgent(JinaMixin, CodeAgentBase):
         return result.stdout
 
 
-def synthetic_exchange(agent):
-    agent._ensure_setup()
-    repl = agent._get_tool_repl()
-    repl.execute('from urllib.request import urlopen; body = "REDACTED"')
-    for role, content in (
-        ('user', "What do you think of the title of the example.com page? And what is the length of the page in bytes?"),
-        ('assistant', '# Title is in <title> tag, so I need the raw HTML\nfrom urllib.request import urlopen\nwith urlopen("http://example.com") as r:\n    body = r.read().decode("utf-8", errors="ignore")\nbody[:100]'),
-        ('user', '>>> from urllib.request import urlopen\n>>> with urlopen("http://example.com") as r:\n...     body = r.read().decode("utf-8", errors="ignore")\n>>> body[:100]\n\'<!doctype html><html lang="en"><head><title>Example Domain</title><meta name="viewport" content="wid\''),
-        ('assistant', 'submit(f"The title is \'Example Domain\'--a concise, descriptive title. Page length: {len(body)} bytes.")'),
-        ('user', '>>> submit(f"The title is \'Example Domain\'--a concise, descriptive title. Page length: {len(body)} bytes.")'),
-    ):
-        agent.conversation.messages.append({"role": role, "content": content})
-
-
 def main():
+    print(gather_auto_attach_files())
     """CLI entry point for code-agent."""
     import argparse
 
@@ -582,6 +691,14 @@ Examples:
     )
     args = parser.parse_args()
 
+    # Validate model name early
+    try:
+        from agentlib.llm_registry import get_model_config
+        get_model_config(args.model)
+    except ModelNotFoundError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
     if args.sandbox:
         class ConfiguredAgent(SandboxMixin, CodeAgent):
             model = args.model
@@ -591,10 +708,12 @@ Examples:
             model = args.model
             max_turns = args.max_turns
 
-    with ConfiguredAgent() as agent:
-        if not args.no_synth:
-            synthetic_exchange(agent)
-        agent.cli_run()
+    try:
+        with ConfiguredAgent() as agent:
+            agent.cli_run(synth=not args.no_synth)
+    except ModelNotFoundError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

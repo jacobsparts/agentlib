@@ -70,6 +70,7 @@ class LLMClient:
                 logger.info("---------- FROM LLM ----------")
                 logger.info(response_data)
             if response.status == 429:
+                print(response)
                 logger.warning("Throttled. Waiting 20s")
                 time.sleep(20)
                 raise Exception("Throttled")

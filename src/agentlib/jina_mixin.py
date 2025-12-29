@@ -279,8 +279,7 @@ You have access to web fetching and search tools:
 - web_fetch: Retrieve any URL as clean, LLM-friendly markdown
 - web_search: Search the web and get results with content extracted
 
-Both tools support extensive options for filtering, formatting, and localization.
-Set JINA_API_KEY for higher rate limits."""
+Both tools support extensive options for filtering, formatting, and localization."""
 
         return system + web_instructions
 

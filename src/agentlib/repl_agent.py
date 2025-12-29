@@ -474,6 +474,38 @@ class REPLMixin:
 
     interactive: bool = False  # Set True to enable respond() function
 
+    def usermsg(self, content, **kwargs):
+        """
+        Add a user message, appending to REPL output if continuing a session.
+
+        When the last message was REPL output (from a previous turn), new user
+        messages are appended to maintain the illusion of a continuous REPL
+        session. The message appears as if submitted via submit().
+        """
+        # Check if we should append to last REPL output
+        if getattr(self, '_last_was_repl_output', False) and self.conversation.messages:
+            # Don't append if there are pending attachments (from REPLAttachmentMixin)
+            # They need to be injected between the REPL output and the new message
+            has_pending = False
+            if hasattr(self, '_attachment_state') and hasattr(self, '_non_system_count'):
+                current_idx = self._non_system_count()
+                has_pending = any(idx >= current_idx for idx in self._attachment_state)
+
+            if not has_pending:
+                last_msg = self.conversation.messages[-1]
+                if last_msg.get("role") == "user":
+                    # Append as output of the previous submit() call
+                    # Add trailing \n since this simulates print() output from submit()
+                    prev = last_msg["content"]
+                    sep = "" if prev.endswith("\n") else "\n"
+                    last_msg["content"] = prev + sep + content + "\n"
+                    self._last_was_repl_output = False
+                    return
+
+        # Fall back to normal message append
+        self._last_was_repl_output = False
+        return super().usermsg(content, **kwargs)
+
     def _ensure_setup(self) -> None:
         """Initialize the ToolREPL."""
         if hasattr(super(), '_ensure_setup'):
@@ -661,9 +693,6 @@ def respond(text):
             if not content:
                 continue
 
-            if self.complete:
-                return self._final_result
-
             # Feed output back to LLM as the REPL response
             # Allow subclasses to process/truncate large outputs
             output_for_llm = output
@@ -671,9 +700,16 @@ def respond(text):
                 output_for_llm = self.process_repl_output(output)
 
             if output_for_llm.strip():
+                self._last_was_repl_output = False  # Clear before usermsg check
                 self.usermsg(output_for_llm)
             else:
+                self._last_was_repl_output = False
                 self.usermsg("(no output)")
+
+            if self.complete:
+                # Mark that last message is REPL output - next user message appends
+                self._last_was_repl_output = True
+                return self._final_result
 
         raise Exception(f"Agent did not complete within {max_turns} turns")
 
