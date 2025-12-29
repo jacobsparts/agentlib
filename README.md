@@ -191,7 +191,7 @@ with CodeAgent() as agent:
 | X.AI     | `XAI_API_KEY`      |
 | OpenRouter | `OPENROUTER_API_KEY` |
 
-Add more chat completions compatible endpoints with `register_provider` and `register_model`.  See `llm_registry.py` for details.
+Add more chat completions compatible endpoints with `register_provider` and `register_model`.  See `examples/config.py` and `llm_registry.py` for details.
 
 ---
 

@@ -169,7 +169,6 @@ register_provider("google",
 )
 register_model("google","gemini-3-pro",
     model="gemini-3-pro-preview",
-    aliases="pro",
     config={"reasoning_effort": "high"},
     input_cost=2.00,
     cached_cost=0.2,
@@ -178,7 +177,6 @@ register_model("google","gemini-3-pro",
 )
 register_model("google","gemini-2.5-pro",
     model="gemini-2.5-pro",
-    aliases="pro",
     config={"reasoning_effort": "high"},
     input_cost=1.25,
     cached_cost=0.125,
@@ -243,3 +241,29 @@ register_model("openrouter","qwen3-235b-a22b",
     output_cost=0.1,
     tools=False,
 )
+
+# --- User Configuration ---
+from agentlib.config import get_config_spec, get_user_config
+
+def load_user_config():
+    """Load user's custom model configurations from ~/.agentlib/config.py"""
+    # Get spec and module without executing
+    spec, user_config = get_config_spec()
+    
+    if spec is None and user_config is None:
+        # Config doesn't exist
+        return
+    
+    if spec is None:
+        # Already loaded by someone else
+        return
+    
+    # Inject registry functions before execution
+    user_config.register_provider = register_provider
+    user_config.register_model = register_model
+    user_config.registry = registry
+    
+    # Now execute with injected functions
+    get_user_config()
+
+load_user_config()

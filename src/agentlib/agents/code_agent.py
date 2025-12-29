@@ -31,6 +31,13 @@ if not shutil.which('rg'):
 #import logging; logging.getLogger('agentlib').setLevel(logging.DEBUG)
 
 
+def _get_config_value(attr_name, default):
+    """Lazy load user config value."""
+    from agentlib.config import get_user_config
+    config = get_user_config()
+    return getattr(config, attr_name, default) if config else default
+
+
 def gather_auto_attach_files():
     '''Find CLAUDE.md or AGENTS.md files and their @ imports.
     
@@ -95,11 +102,11 @@ def gather_auto_attach_files():
 class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     """Code assistant with Python REPL execution."""
 
-    model = "anthropic/claude-sonnet-4-5"
+    model = _get_config_value("code_agent_model", "anthropic/claude-sonnet-4-5")
     welcome_message = "[bold]Code Agent[/bold]\nPython REPL-based coding assistant"
     thinking_message = "Working..."
     interactive = True  # Enables respond() function
-    max_turns = 100
+    max_turns = _get_config_value("code_agent_max_turns", 100)
     system = """>>> help(assistant)
 
 You are an interactive coding assistant operating within a Python REPL.
@@ -168,7 +175,7 @@ Focus on what needs to be done, not when. Break work into actionable steps.
 - read() returns formatted output with line numbers - use it for viewing.
 """
 
-    max_output_kb = 50 # Large output protection
+    max_output_kb = _get_config_value("code_agent_max_output_kb", 50)  # Large output protection
 
     def process_repl_output(self, output: str) -> str:
         """Truncate output if too large - used for both display and model."""
@@ -199,7 +206,7 @@ Focus on what needs to be done, not when. Break work into actionable steps.
         """Buffer chunks without display - we show processed output at end."""
         pass  # No-op, we display in on_repl_output using process_repl_output
 
-    max_display_chars = 200  # Max chars per line to show user (agent sees full output)
+    max_display_chars = _get_config_value("code_agent_max_display_chars", 200)  # Max chars per line to show user (agent sees full output)
 
     def _truncate_for_display(self, output: str) -> str:
         """Truncate long lines for user display while agent sees full output."""
@@ -369,10 +376,6 @@ Focus on what needs to be done, not when. Break work into actionable steps.
         history = SQLiteHistory(history_path)
         session = InputSession(history)
 
-        for filename in gather_auto_attach_files():
-            content = Path(filename).read_text()
-            self.attach(filename, content)
-
         # Display welcome banner with model and sandbox info
         welcome = getattr(self, 'welcome_message', '')
         if welcome:
@@ -390,6 +393,12 @@ Focus on what needs to be done, not when. Break work into actionable steps.
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
         self.console.print("[dim]Commands: /repl, /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name][/dim]")
+
+        if files := gather_auto_attach_files():
+            print(f"Loading {', '.join(files)}")
+            for filename in files:
+                content = Path(filename).read_text()
+                self.attach(filename, content)
 
         try:
             while True:
@@ -653,7 +662,6 @@ class CodeAgent(JinaMixin, CodeAgentBase):
 
 
 def main():
-    print(gather_auto_attach_files())
     """CLI entry point for code-agent."""
     import argparse
 
@@ -670,8 +678,8 @@ Examples:
     )
     parser.add_argument(
         "--model", "-m",
-        default="anthropic/claude-sonnet-4-5",
-        help="LLM model to use (default: anthropic/claude-sonnet-4-5)"
+        default=_get_config_value("code_agent_model", "anthropic/claude-sonnet-4-5"),
+        help="LLM model to use (default from config or anthropic/claude-sonnet-4-5)"
     )
     parser.add_argument(
         "--no-synth",
@@ -681,8 +689,8 @@ Examples:
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=100,
-        help="Maximum turns per interaction (default: 100)"
+        default=_get_config_value("code_agent_max_turns", 100),
+        help="Maximum turns per interaction (default from config or 100)"
     )
     parser.add_argument(
         "--sandbox", "-s",

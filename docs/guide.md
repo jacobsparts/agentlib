@@ -25,6 +25,7 @@ class MyAgent(BaseAgent):
 - **OpenAI**: `openai/gpt-5.1`, `openai/gpt-5-mini`
 - **Anthropic**: `anthropic/claude-sonnet-4-5`
 - Set via env vars: `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
+- **Custom models**: Create `~/.agentlib/config.py` to register providers/models and configure agents (see `examples/config.py`)
 
 ### Tool Decorator
 ```python
