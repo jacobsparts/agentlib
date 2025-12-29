@@ -26,3 +26,4 @@ code_agent_model = "anthropic/claude-opus-4-5"   # Default model
 code_agent_max_turns = 50                        # Max conversation turns
 code_agent_max_output_kb = 100                   # Max REPL output size (KB)
 code_agent_max_display_chars = 300               # Max chars per line in display
+code_agent_sandbox = False                       # Run in sandbox by default (--no-sandbox to override)

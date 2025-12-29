@@ -178,7 +178,19 @@ def worker_main(port, authkey):
     # because the CWD fd was opened before the overlay was mounted.
     os.chdir(os.getcwd())
 
+    # Request SIGTERM when parent (sandbox_helper) dies (Linux-specific)
+    # This handles the edge case where sandbox_helper is killed but we continue
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        PR_SET_PDEATHSIG = 1
+        SIGTERM = 15
+        libc.prctl(PR_SET_PDEATHSIG, SIGTERM)
+    except Exception:
+        pass  # Not on Linux or ctypes unavailable
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(60)  # Periodic timeout to check if we should exit
     sock.connect(('127.0.0.1', port))
 
     # Authenticate
@@ -263,6 +275,12 @@ def worker_main(port, authkey):
         except KeyboardInterrupt:
             _send_msg(sock, ("output", "\\nKeyboardInterrupt\\n"))
             _send_msg(sock, ("done", True))
+        except socket.timeout:
+            # Periodic timeout - check if parent CLI is still alive
+            # If ppid is 1 (init/systemd), parent died and we should exit
+            if os.getppid() == 1:
+                break
+            # Otherwise continue waiting
         except ConnectionError:
             break
 
@@ -315,9 +333,29 @@ class SandboxedToolREPL:
             if exit_code is None:
                 return  # Still running
 
-            # Process died unexpectedly! This is the bug we're catching.
+            # Process exited - check if it was user-initiated or a crash
             if self._had_session:
-                self._handle_unexpected_crash(exit_code)
+                # SIGINT (-2) and SIGTERM (-15) are typically user-initiated
+                # Exit code 0 is clean shutdown
+                # These should allow restart without error
+                if exit_code in (0, -2, -15):
+                    # Check if there were potential unsaved changes
+                    if self._command_count > 0:
+                        logger.warning(
+                            f"Sandbox session ended (exit code {exit_code}) after "
+                            f"{self._command_count} command(s). Starting fresh session - "
+                            f"previous changes may not be saved."
+                        )
+                    else:
+                        logger.debug(
+                            f"Sandbox session ended (exit code {exit_code}). "
+                            f"Starting new session."
+                        )
+                    # Clean up old process reference
+                    self._proc = None
+                else:
+                    # Actual unexpected crash
+                    self._handle_unexpected_crash(exit_code)
 
         self._start_new_session()
 
@@ -424,6 +462,9 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}))
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            # Create new session to isolate from terminal signals (SIGINT from Ctrl+C)
+            # Without this, Ctrl+C at terminal kills sandbox_helper, losing all edits
+            start_new_session=True,
         )
 
         # Track session info for diagnostics
@@ -666,10 +707,11 @@ def submit(result):
         _send_msg(self._conn, "ack")
 
     def interrupt(self) -> None:
-        """Send SIGINT to worker."""
+        """Send SIGINT to worker process group."""
         if self._proc and self._proc.poll() is None:
             try:
-                os.kill(self._proc.pid, signal.SIGINT)
+                # Send to process group (sandbox runs in its own session)
+                os.killpg(self._proc.pid, signal.SIGINT)
             except (ProcessLookupError, OSError):
                 pass
 
@@ -702,7 +744,11 @@ def submit(result):
             try:
                 self._proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                self._proc.kill()
+                # Kill entire process group (sandbox runs in its own session)
+                try:
+                    os.killpg(self._proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    self._proc.kill()
                 self._proc.wait()
             self._proc = None
 

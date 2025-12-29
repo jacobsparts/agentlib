@@ -209,11 +209,45 @@ Focus on what needs to be done, not when. Break work into actionable steps.
     max_display_chars = _get_config_value("code_agent_max_display_chars", 200)  # Max chars per line to show user (agent sees full output)
 
     def _truncate_for_display(self, output: str) -> str:
-        """Truncate long lines for user display while agent sees full output."""
-        lines = output.split('\n')
-        truncated_lines = []
+        """Truncate long lines and read() output blocks for user display."""
+        import re
         
-        for line in lines:
+        lines = output.split('\n')
+        result_lines = []
+        
+        # Detect read() output pattern (line numbers with arrow: "   42→")
+        read_pattern = re.compile(r'^\s*\d+→')
+        
+        # Process lines, detecting and truncating read() output blocks
+        i = 0
+        max_read_lines = 30  # Threshold for truncation
+        head_tail = 10  # Lines to keep at head and tail
+        
+        while i < len(lines):
+            line = lines[i]
+            
+            # Check if this starts a read() output block
+            if read_pattern.match(line):
+                # Find the extent of this block
+                block_start = i
+                while i < len(lines) and read_pattern.match(lines[i]):
+                    i += 1
+                block = lines[block_start:i]
+                
+                # Truncate if too long
+                if len(block) > max_read_lines:
+                    omitted = len(block) - 3
+                    result_lines.extend(block[:3])
+                    result_lines.append(f"    ... ({omitted} lines omitted for display)")
+                else:
+                    result_lines.extend(block)
+            else:
+                result_lines.append(line)
+                i += 1
+        
+        # Truncate long individual lines
+        truncated_lines = []
+        for line in result_lines:
             if len(line) <= self.max_display_chars:
                 truncated_lines.append(line)
             else:
@@ -697,9 +731,13 @@ Examples:
         action="store_true",
         help="Execute agent in a sandboxed filesystem and review changes or save diff"
     )
+    parser.add_argument(
+        "--no-sandbox",
+        action="store_true",
+        help="Disable sandbox mode (overrides config default)"
+    )
     args = parser.parse_args()
 
-    # Validate model name early
     try:
         from agentlib.llm_registry import get_model_config
         get_model_config(args.model)
@@ -707,7 +745,14 @@ Examples:
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
+    # Determine sandbox mode: flags override config default
+    use_sandbox = _get_config_value("code_agent_sandbox", False)
     if args.sandbox:
+        use_sandbox = True
+    if args.no_sandbox:
+        use_sandbox = False
+
+    if use_sandbox:
         class ConfiguredAgent(SandboxMixin, CodeAgent):
             model = args.model
             max_turns = args.max_turns
