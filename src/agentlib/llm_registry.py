@@ -169,7 +169,7 @@ register_provider("google",
 )
 register_model("google","gemini-3-pro",
     model="gemini-3-pro-preview",
-    aliases="pro"
+    aliases="pro",
     config={"reasoning_effort": "high"},
     input_cost=2.00,
     cached_cost=0.2,
@@ -217,6 +217,13 @@ register_model("xai","grok-4-1",
     input_cost=0.2,
     cached_cost=0.05,
     output_cost=0.5,
+)
+register_model("xai","grok-code-fast-1",
+    model="grok-code-fast-1",
+    aliases="grok-code",
+    input_cost=0.2,
+    cached_cost=0.02,
+    output_cost=1.5,
 )
 
 # --- OpenRouter ---
