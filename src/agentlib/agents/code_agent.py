@@ -692,7 +692,7 @@ class CodeAgent(JinaMixin, CodeAgentBase):
         display_cmd = repr(command)
         if len(display_cmd) > 60:
             display_cmd = display_cmd[:57] + "...'"
-        print(f"\r\033[K\033[2m>>> bash({display_cmd})\033[0m", end="", flush=True)
+        print(f"\r\033[K\033[2m>>> bash({display_cmd})\033[0m", flush=True)
         timeout = timeout or 120
         result = subprocess.run(
             command,
