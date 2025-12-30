@@ -447,6 +447,9 @@ Focus on what needs to be done, not when. Break work into actionable steps.
                     print()
                     continue
                 except EOFError:
+                    if not self._run_pre_exit_hooks():
+                        self.console.print("[yellow]Returning to prompt. Try Ctrl+D again to exit.[/yellow]")
+                        continue
                     break
 
                 if not user_input.strip():
@@ -558,7 +561,6 @@ Focus on what needs to be done, not when. Break work into actionable steps.
                 if formatted:
                     print(formatted)
         finally:
-            self._run_pre_exit_hooks()
             self.console.print("\n[dim]Session ended. Goodbye![/dim]")
 
 
