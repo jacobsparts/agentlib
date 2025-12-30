@@ -251,6 +251,9 @@ class CLIMixin:
                     print()  # Just print newline, stay at prompt
                     continue
                 except EOFError:
+                    if not self._run_pre_exit_hooks():
+                        self.console.print("[yellow]Returning to prompt. Try Ctrl+D again to exit.[/yellow]")
+                        continue
                     break
 
                 if not user_input.strip():
@@ -277,17 +280,23 @@ class CLIMixin:
                     print(formatted)
 
         finally:
-            self._run_pre_exit_hooks()
             self.console.print("\n[dim]Session ended. Goodbye![/dim]")
 
-    def _run_pre_exit_hooks(self) -> None:
-        """Run registered pre-exit hooks before CLI exits."""
+    def _run_pre_exit_hooks(self) -> bool:
+        """Run registered pre-exit hooks before CLI exits.
+        
+        Returns:
+            True if all hooks succeeded, False if any failed.
+        """
+        success = True
         if hasattr(self, '_pre_exit_hooks'):
             for hook in self._pre_exit_hooks:
                 try:
                     hook()
                 except Exception as e:
                     self.console.print(f"[red]Pre-exit hook error: {e}[/red]")
+                    success = False
+        return success
 
     def register_pre_exit_hook(self, hook) -> None:
         """

@@ -74,13 +74,14 @@ def prompt(
         history = []
     
     prev_lines = 1
+    prev_cursor_row = 0  # Physical row where cursor was left (0-indexed from top)
     
     # Strip leading newlines from prompt - they're only for initial display
     display_prompt = prompt_str.lstrip('\n')
     display_continuation = continuation_str.lstrip('\n')
     
     def _redraw(buf, cursor):
-        nonlocal prev_lines
+        nonlocal prev_lines, prev_cursor_row
         
         try:
             term_width = os.get_terminal_size().columns
@@ -88,8 +89,8 @@ def prompt(
             term_width = 80
         
         out = ['\x1b[?25l']  # Hide cursor
-        if prev_lines > 1:
-            out.append(f'\x1b[{prev_lines - 1}A')
+        if prev_cursor_row > 0:
+            out.append(f'\x1b[{prev_cursor_row}A')
         out.append('\r')
         
         content = ''.join(buf)
@@ -143,6 +144,9 @@ def prompt(
         out.append('\x1b[?25h')  # Show cursor
         sys.stdout.write(''.join(out))
         sys.stdout.flush()
+        
+        # Track cursor's physical row for next redraw
+        prev_cursor_row = sum(line_physical_counts[:cursor_line]) + cursor_phys_row
 
     with RawMode():
         sys.stdout.write(prompt_str)
@@ -306,14 +310,18 @@ def prompt(
                     buf.insert(cursor, ch)
                     cursor += 1
                     if cursor == len(buf) and '\n' not in buf:
-                        # Fast path: check if we wrapped to a new physical line
+                        # Fast path: typing at end of single-line input
                         try:
                             tw = os.get_terminal_size().columns
                         except OSError:
                             tw = 80
                         if tw > 0 and (len(display_prompt) + len(buf)) % tw == 0:
-                            prev_lines += 1
-                        sys.stdout.write(ch)
+                            # At wrap boundary - terminal enters pending-wrap state
+                            # where cursor hasn't actually moved to new row yet.
+                            # Full redraw needed to correctly position cursor.
+                            _redraw(buf, cursor)
+                        else:
+                            sys.stdout.write(ch)
                     else:
                         _redraw(buf, cursor)
                     i += 1
