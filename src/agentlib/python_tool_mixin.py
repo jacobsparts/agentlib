@@ -27,11 +27,18 @@ from pydantic import create_model, Field
 from typing import Optional, Any
 
 from .tools.subrepl import SubREPL, STILL_RUNNING
+from .tools.source_extract import extract_method_source
 from .tool_mixin import ToolMixin
 
 
 class PythonToolMixin(ToolMixin):
     """Mixin that adds Python REPL execution. Use with BaseAgent."""
+
+    @staticmethod
+    def repl(fn):
+        """Mark a method for injection into the REPL as a callable function."""
+        fn._repl_inject = True
+        return fn
 
     # Configuration
     repl_echo: bool = False  # Echo statements in output (default False for agent use)
@@ -60,9 +67,18 @@ class PythonToolMixin(ToolMixin):
             self._repl_initialized = True
 
     def _get_repl(self) -> SubREPL:
-        """Lazily create REPL on first use, with startup code injected."""
+        """Lazily create REPL on first use, with startup code and @repl methods injected."""
         if self._repl is None:
             self._repl = SubREPL(echo=getattr(self, 'repl_echo', False))
+            
+            # Inject methods marked with @repl decorator
+            # Iterate over class hierarchy to avoid triggering property access
+            for cls in type(self).__mro__:
+                for name, attr in vars(cls).items():
+                    if callable(attr) and getattr(attr, '_repl_inject', False):
+                        bound_method = getattr(self, name)
+                        code = extract_method_source(bound_method, name)
+                        self._repl._inject_code(code)
             
             # Inject startup code if defined
             startup = getattr(self, 'repl_startup', None)
