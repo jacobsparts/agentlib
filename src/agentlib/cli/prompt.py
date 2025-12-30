@@ -85,8 +85,10 @@ def prompt(
         
         try:
             term_width = os.get_terminal_size().columns
+            term_height = os.get_terminal_size().lines
         except OSError:
             term_width = 80
+            term_height = 24
         
         out = ['\x1b[?25l']  # Hide cursor
         if prev_cursor_row > 0:
@@ -96,24 +98,16 @@ def prompt(
         content = ''.join(buf)
         lines = content.split('\n')
         
-        # Calculate physical lines each logical line takes (accounting for terminal wrap)
+        # Calculate physical lines each logical line takes
         line_physical_counts = []
         for i, line in enumerate(lines):
             prefix_len = len(display_prompt) if i == 0 else len(display_continuation)
             line_len = prefix_len + len(line)
             line_physical_counts.append(max(1, (line_len + term_width - 1) // term_width))
         
-        prev_lines = sum(line_physical_counts)
+        content_rows = sum(line_physical_counts)
         
-        for i, line in enumerate(lines):
-            prefix = display_prompt if i == 0 else display_continuation
-            out.append(f'{prefix}{line}\x1b[K')
-            if i < len(lines) - 1:
-                out.append('\n')
-        
-        out.append('\x1b[J')  # Clear to end of screen
-        
-        # Find which logical line the cursor is on
+        # Find cursor logical line and column
         pos = 0
         cursor_line = 0
         cursor_col = 0
@@ -124,18 +118,41 @@ def prompt(
                 break
             pos += len(line) + 1
         
-        # Calculate physical cursor position
+        # Calculate cursor physical position
         prefix_len = len(display_prompt) if cursor_line == 0 else len(display_continuation)
         cursor_display_col = prefix_len + cursor_col
-        cursor_phys_row = cursor_display_col // term_width
+        cursor_phys_row_in_line = cursor_display_col // term_width
         cursor_phys_col = cursor_display_col % term_width
+        cursor_target_row = sum(line_physical_counts[:cursor_line]) + cursor_phys_row_in_line
         
-        # Physical lines from cursor to end of content
-        remaining_in_current = line_physical_counts[cursor_line] - cursor_phys_row - 1
-        physical_lines_after = remaining_in_current + sum(line_physical_counts[cursor_line + 1:])
+        # Total rows needed (content may not extend to cursor row at wrap boundary)
+        total_rows = max(content_rows, cursor_target_row + 1)
+        prev_lines = total_rows
         
-        if physical_lines_after > 0:
-            out.append(f'\x1b[{physical_lines_after}A')
+        # Print content
+        for i, line in enumerate(lines):
+            prefix = display_prompt if i == 0 else display_continuation
+            out.append(f'{prefix}{line}\x1b[K')
+            if i < len(lines) - 1:
+                out.append('\n')
+        
+        # After printing content, cursor is at end of last line
+        last_prefix = len(display_prompt) if len(lines) == 1 else len(display_continuation)
+        last_line_len = last_prefix + len(lines[-1])
+        terminal_row = sum(line_physical_counts[:-1]) + ((last_line_len - 1) // term_width if last_line_len > 0 else 0)
+        
+        # If cursor is beyond content (wrap boundary), create that row
+        if cursor_target_row > terminal_row:
+            rows_to_add = cursor_target_row - terminal_row
+            out.append('\n' * rows_to_add)
+            terminal_row = cursor_target_row
+        
+        out.append('\x1b[J')  # Clear to end of screen
+        
+        # Navigate to cursor position
+        rows_up = terminal_row - cursor_target_row
+        if rows_up > 0:
+            out.append(f'\x1b[{rows_up}A')
         
         out.append('\r')
         if cursor_phys_col > 0:
@@ -145,8 +162,7 @@ def prompt(
         sys.stdout.write(''.join(out))
         sys.stdout.flush()
         
-        # Track cursor's physical row for next redraw
-        prev_cursor_row = sum(line_physical_counts[:cursor_line]) + cursor_phys_row
+        prev_cursor_row = cursor_target_row
 
     with RawMode():
         sys.stdout.write(prompt_str)
@@ -232,13 +248,19 @@ def prompt(
                                 buf = list(history[history_idx])
                             cursor = len(buf)
                             _redraw(buf, cursor)
-                    elif seq == 72:  # Home
-                        if cursor > 0:
-                            cursor = 0
+                    elif seq == 72:  # Home - start of current line
+                        content = ''.join(buf)
+                        line_start = content.rfind('\n', 0, cursor) + 1
+                        if cursor != line_start:
+                            cursor = line_start
                             _redraw(buf, cursor)
-                    elif seq == 70:  # End
-                        if cursor < len(buf):
-                            cursor = len(buf)
+                    elif seq == 70:  # End - end of current line
+                        content = ''.join(buf)
+                        line_end = content.find('\n', cursor)
+                        if line_end == -1:
+                            line_end = len(buf)
+                        if cursor != line_end:
+                            cursor = line_end
                             _redraw(buf, cursor)
                     elif seq == 51 and i < len(k) and k[i] == 126:  # Delete
                         i += 1
@@ -247,33 +269,45 @@ def prompt(
                             _redraw(buf, cursor)
                     continue
                 
-                # Ctrl+A - start of line
+                # Ctrl+A - start of current line
                 if c == 1:
-                    if cursor > 0:
-                        cursor = 0
+                    content = ''.join(buf)
+                    line_start = content.rfind('\n', 0, cursor) + 1
+                    if cursor != line_start:
+                        cursor = line_start
                         _redraw(buf, cursor)
                     i += 1
                     continue
                 
-                # Ctrl+E - end of line
+                # Ctrl+E - end of current line
                 if c == 5:
-                    if cursor < len(buf):
-                        cursor = len(buf)
+                    content = ''.join(buf)
+                    line_end = content.find('\n', cursor)
+                    if line_end == -1:
+                        line_end = len(buf)
+                    if cursor != line_end:
+                        cursor = line_end
                         _redraw(buf, cursor)
                     i += 1
                     continue
                 
-                # Ctrl+K - kill to end
+                # Ctrl+K - kill to end of current line
                 if c == 11:
-                    del buf[cursor:]
+                    content = ''.join(buf)
+                    line_end = content.find('\n', cursor)
+                    if line_end == -1:
+                        line_end = len(buf)
+                    del buf[cursor:line_end]
                     _redraw(buf, cursor)
                     i += 1
                     continue
                 
-                # Ctrl+U - kill to start
+                # Ctrl+U - kill to start of current line
                 if c == 21:
-                    del buf[:cursor]
-                    cursor = 0
+                    content = ''.join(buf)
+                    line_start = content.rfind('\n', 0, cursor) + 1
+                    del buf[line_start:cursor]
+                    cursor = line_start
                     _redraw(buf, cursor)
                     i += 1
                     continue
