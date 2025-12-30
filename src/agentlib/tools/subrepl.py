@@ -284,6 +284,40 @@ class SubREPL:
             self._worker.start()
             self._running = False
 
+    def _inject_code(self, code: str, timeout: float = 10.0) -> None:
+        """
+        Execute code silently (no echo, output discarded).
+        
+        This is the primitive for silent code injection. Subclasses may
+        override for different transports (queue, socket, etc.).
+        
+        Args:
+            code: Python code to execute
+            timeout: Max seconds to wait (default 10.0)
+        """
+        self._ensure_session()
+        old_echo = self._echo
+        self._echo = False
+        try:
+            self.execute(code, timeout=timeout)
+        finally:
+            self._echo = old_echo
+
+    def inject_startup(self, code_list: list[str], timeout: float = 10.0) -> None:
+        """
+        Inject startup code silently.
+        
+        Used to set up the REPL environment before agent interaction.
+        Each string in code_list is executed in order.
+        
+        Args:
+            code_list: List of Python code strings to execute
+            timeout: Max seconds per code block (default 10.0)
+        """
+        for code in code_list:
+            if code and code.strip():
+                self._inject_code(code, timeout=timeout)
+
     def execute(
         self,
         code: str,

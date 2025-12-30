@@ -108,16 +108,13 @@ class BaseAgent(metaclass=AgentMeta):
         self.close()
         return False
 
-    def tool(_input=None, model=None): # decorator
-        if has_decorator_parameters := model is not None:
-            toolspec = _input = model
-        else:
-            toolspec = None
+    def tool(_input=None, model=None, inject=False): # decorator
+        toolspec = model  # None if not provided
         def decorator(fn):
-            nonlocal toolspec
             if fn.__doc__ is None:
                 raise ValueError(f"Missing docstring: {fn.__name__}")
             fn._tool_name = toolname = fn.__name__
+            fn._tool_inject = inject
             def regen_toolspec(self, fn=fn, toolname=toolname, toolspec=toolspec):
                 model_name = ''.join(word.title() for word in toolname.split('_'))
                 if toolspec is None: # function signature based schema
@@ -151,7 +148,10 @@ class BaseAgent(metaclass=AgentMeta):
                 return toolspec
             fn._tool_spec = regen_toolspec
             return fn
-        return decorator(_input) if not has_decorator_parameters else decorator
+        if _input is not None and callable(_input):
+            # Called as @tool without parentheses
+            return decorator(_input)
+        return decorator
 
     @property
     def toolspecs(self):

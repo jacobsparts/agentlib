@@ -568,7 +568,7 @@ class CodeAgent(JinaMixin, CodeAgentBase):
     Inherits web_fetch and web_search from JinaMixin.
     """
 
-    @REPLAgent.tool
+    @REPLAgent.tool(inject=True)
     def glob(self,
             pattern: str = "Glob pattern (e.g., '**/*.py')",
             path: Optional[str] = "Directory to search in (default: current directory)"
@@ -579,7 +579,7 @@ class CodeAgent(JinaMixin, CodeAgentBase):
         matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return [str(m) for m in matches]
 
-    @REPLAgent.tool
+    @REPLAgent.tool(inject=True)
     def grep(self,
             pattern: str = "Regex pattern to search for",
             path: Optional[str] = "File or directory to search in",
@@ -621,7 +621,7 @@ class CodeAgent(JinaMixin, CodeAgentBase):
             return files
         return output
 
-    @REPLAgent.tool
+    @REPLAgent.tool(inject=True)
     def read(self,
             file_path: str = "Absolute path to the file",
             offset: Optional[int] = "Line number to start from (1-indexed)",
@@ -645,7 +645,7 @@ class CodeAgent(JinaMixin, CodeAgentBase):
             output += f"\n... ({remaining} more lines)"
         return output
 
-    @REPLAgent.tool
+    @REPLAgent.tool(inject=True)
     def edit(self,
             file_path: str = "Absolute path to the file",
             old_string: str = "Text to replace (must be unique unless replace_all)",
@@ -674,7 +674,7 @@ class CodeAgent(JinaMixin, CodeAgentBase):
             return f"All {count} occurrences replaced."
         return "Edit applied."
 
-    @REPLAgent.tool
+    @REPLAgent.tool(inject=True)
     def bash(self,
             command: str = "The command to execute",
             timeout: Optional[int] = "Timeout in seconds (default: 120)"

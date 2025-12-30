@@ -219,7 +219,11 @@ class ToolREPL(SubREPL):
 
     def inject_tools(self, tools: dict[str, tuple[Callable, Any]]) -> None:
         """
-        Inject tool stub functions into the REPL.
+        Inject tool functions into the REPL.
+
+        Tools marked with inject=True have their source extracted and run
+        directly in the subprocess. Other tools get relay stubs that call
+        back to the host process.
 
         Args:
             tools: Dict of tool_name -> (implementation, pydantic_spec)
@@ -230,8 +234,16 @@ class ToolREPL(SubREPL):
             return
 
         for name, (impl, spec) in tools.items():
-            stub_code = _generate_tool_stub(name, impl, spec)
-            self._inject_code(stub_code)
+            should_inject = impl is not None and getattr(impl, '_tool_inject', False)
+            
+            if should_inject:
+                # Direct source injection - raises on failure
+                code = _extract_tool_source(impl, name)
+            else:
+                # Relay stub - calls back to host process
+                code = _generate_tool_stub(name, impl, spec)
+            
+            self._inject_code(code)
 
         self._tools_injected = True
 
@@ -251,11 +263,13 @@ def submit(result):
     _tool_response_queue.get()  # Wait for ack
 ''')
 
-    def _inject_code(self, code_str: str) -> None:
-        """Execute code without echo, waiting for completion."""
+    def _inject_code(self, code: str, timeout: float = 10.0) -> None:
+        """Override to use queue directly and handle tool worker."""
+        # Note: timeout parameter accepted for interface compatibility but
+        # we use a fixed 5.0s poll timeout internally
         self._ensure_session()
         self._running = True
-        self._cmd_queue.put(code_str)
+        self._cmd_queue.put(code)
 
         while True:
             try:
@@ -306,22 +320,111 @@ def submit(result):
 
 
 # ---------------------------------------------------------------------------
-# Stub generation
+# Tool source extraction (for inject=True tools)
 # ---------------------------------------------------------------------------
 
-def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
+def _extract_tool_source(impl: Callable, name: str) -> str:
     """
-    Generate Python stub function that bridges to main process.
-
-    The stub:
-    1. Serializes the call to the tool request queue
-    2. Blocks waiting for response
-    3. Returns result or raises exception
-
+    Extract and transform tool source for direct injection into subprocess.
+    
+    Transforms a bound method into a standalone function by:
+    - Removing 'self' parameter
+    - Stripping type annotations (may reference unavailable types)
+    - Converting string defaults to None (agentlib convention)
+    - Removing decorators
+    - Replacing getattr(self, 'attr', default) with default
+    
     Args:
-        name: Tool name
-        impl: Tool implementation (may be None for dynamic tools)
-        spec: Pydantic model spec for the tool
+        impl: Tool implementation function
+        name: Tool name (for error messages)
+        
+    Returns:
+        Python source code for the standalone function
+        
+    Raises:
+        ValueError: If source extraction or transformation fails
+    """
+    import textwrap
+    
+    # Get source
+    try:
+        source = inspect.getsource(impl)
+    except (OSError, TypeError) as e:
+        raise ValueError(f"Cannot extract source for tool '{name}': {e}")
+    
+    source = textwrap.dedent(source)
+    
+    # Parse to AST
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        raise ValueError(f"Cannot parse source for tool '{name}': {e}")
+    
+    # Find function definition
+    func_def = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            func_def = node
+            break
+    
+    if func_def is None:
+        raise ValueError(f"Cannot find function '{name}' in extracted source")
+    
+    # Remove 'self' parameter
+    if func_def.args.args and func_def.args.args[0].arg == 'self':
+        func_def.args.args.pop(0)
+    
+    # Strip type annotations
+    for arg in func_def.args.args:
+        arg.annotation = None
+    for arg in func_def.args.kwonlyargs:
+        arg.annotation = None
+    if func_def.args.vararg:
+        func_def.args.vararg.annotation = None
+    if func_def.args.kwarg:
+        func_def.args.kwarg.annotation = None
+    func_def.returns = None
+    
+    # Fix string defaults (agentlib convention: strings are descriptions, not values)
+    new_defaults = []
+    for default in func_def.args.defaults:
+        if isinstance(default, ast.Constant) and isinstance(default.value, str):
+            new_defaults.append(ast.Constant(value=None))
+        else:
+            new_defaults.append(default)
+    func_def.args.defaults = new_defaults
+    
+    # Remove decorators
+    func_def.decorator_list = []
+    
+    # Replace getattr(self, 'attr', default) with just default
+    class SelfGetattrReplacer(ast.NodeTransformer):
+        def visit_Call(self, node):
+            self.generic_visit(node)
+            if (isinstance(node.func, ast.Name) and
+                node.func.id == 'getattr' and
+                len(node.args) >= 3 and
+                isinstance(node.args[0], ast.Name) and
+                node.args[0].id == 'self'):
+                return node.args[2]
+            return node
+    
+    func_def = SelfGetattrReplacer().visit(func_def)
+    ast.fix_missing_locations(func_def)
+    
+    return ast.unparse(func_def)
+
+
+# ---------------------------------------------------------------------------
+# Relay stub generation (for relay tools and MCP)
+# ---------------------------------------------------------------------------
+
+def _extract_stub_signature(name: str, impl: Optional[Callable], spec: Any) -> tuple[str, str, str]:
+    """
+    Extract signature info for generating relay stubs.
+    
+    Returns:
+        (signature_str, docstring, args_dict) - components for stub template
     """
     param_names: list[str] = []
     doc_parts: list[str] = []
@@ -360,7 +463,6 @@ def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
                 doc_parts.append(f"        {param_name}")
                 required_sig_parts.append(param_name)
 
-        # Combine: required params first, then optional
         signature_parts = required_sig_parts + optional_sig_parts
         docstring = (impl.__doc__ or f"Call the {name} tool.").strip()
 
@@ -368,12 +470,10 @@ def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
         # Dynamic tool - extract from Pydantic spec
         signature_parts = []
         if hasattr(spec, 'model_fields'):
-            # Separate required and optional params (required must come first)
             required_params = []
             optional_params = []
 
             for field_name, field_info in spec.model_fields.items():
-                # Sanitize param name for valid Python identifier
                 sanitized = field_name.lstrip('-')
                 if sanitized and sanitized[0].isdigit():
                     sanitized = 'p_' + sanitized
@@ -381,7 +481,6 @@ def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
                 desc = field_info.description or ''
                 doc_parts.append(f"        {sanitized}: {desc}")
 
-                # Check if field has a real default (not PydanticUndefined)
                 has_default = (
                     field_info.default is not None and
                     type(field_info.default).__name__ != 'PydanticUndefinedType'
@@ -392,11 +491,8 @@ def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
                 elif field_info.is_required():
                     required_params.append((field_name, sanitized))
                 else:
-                    # Optional without default - use None
                     optional_params.append((field_name, sanitized, 'None'))
 
-            # Build signature: required params first, then optional
-            # param_names stores (original, sanitized) tuples
             for orig, sanitized in required_params:
                 param_names.append((orig, sanitized))
                 signature_parts.append(sanitized)
@@ -411,22 +507,39 @@ def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
     if doc_parts:
         docstring += "\n\n    Args:\n" + "\n".join(doc_parts)
 
-    # Build args dict construction
-    # For dynamic tools, param_names contains (original, sanitized) tuples
-    # For static tools, param_names contains just the name strings
-    # Filter out None values per MCP spec (optional params should be omitted, not null)
+    # Build args dict - handle both tuple and string param_names
     if param_names and isinstance(param_names[0], tuple):
         args_items = ", ".join(f'"{orig}": {sanitized}' for orig, sanitized in param_names)
     else:
         args_items = ", ".join(f'"{n}": {n}' for n in param_names)
     args_dict = f"{{{args_items}}}"
 
+    return signature_str, docstring, args_dict
+
+
+def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
+    """Generate relay stub using queue transport (for ToolREPL)."""
+    sig, doc, args = _extract_stub_signature(name, impl, spec)
     return f'''
-def {name}({signature_str}):
-    """{docstring}"""
+def {name}({sig}):
+    """{doc}"""
     import json as _json
-    _tool_request_queue.put(_json.dumps({{"tool": "{name}", "args": {args_dict}}}))
+    _tool_request_queue.put(_json.dumps({{"tool": "{name}", "args": {args}}}))
     _response = _json.loads(_tool_response_queue.get())
+    if "error" in _response:
+        raise Exception(_response["error"])
+    return _response["result"]
+'''
+
+
+def _generate_socket_relay_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
+    """Generate relay stub using socket transport (for SandboxedToolREPL)."""
+    sig, doc, args = _extract_stub_signature(name, impl, spec)
+    return f'''
+def {name}({sig}):
+    """{doc}"""
+    _send_tool_request(_json.dumps({{"tool": "{name}", "args": {args}}}))
+    _response = _json.loads(_recv_tool_response())
     if "error" in _response:
         raise Exception(_response["error"])
     return _response["result"]
@@ -515,7 +628,7 @@ class REPLMixin:
             self._tool_repl = ToolREPL(echo=True)
 
     def _get_tool_repl(self) -> ToolREPL:
-        """Get or create the ToolREPL instance, with tools injected."""
+        """Get or create the ToolREPL instance, with tools and startup code injected."""
         self._ensure_setup()
         tools = {
             name: (self._toolimpl.get(name), spec)
@@ -523,6 +636,16 @@ class REPLMixin:
         }
         self._tool_repl.inject_tools(tools)
         self._tool_repl.inject_builtins()
+        
+        # Inject startup code if defined
+        if not getattr(self, '_repl_startup_injected', False):
+            startup = getattr(self, 'repl_startup', None)
+            if startup:
+                if callable(startup):
+                    startup = startup()
+                self._tool_repl.inject_startup(startup)
+            self._repl_startup_injected = True
+        
         return self._tool_repl
 
     def _cleanup(self) -> None:

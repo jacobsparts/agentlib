@@ -7,7 +7,7 @@
 ![Python 3.9‒3.12](https://img.shields.io/badge/python-3.9‒3.12-blue)
 &nbsp;
 
-> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add [`docs/guide.md`](docs/guide.md) to your context and start building. Include [`docs/mixins.md`](docs/mixins.md) for shell, REPL, MCP, or CLI features. For the code-first REPLAgent paradigm, see [`docs/replagent.md`](docs/replagent.md).
+> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add `docs/guide.md` to your context and start building. Mixins add shell, Python execution, MCP, and CLI features. 
 
 ```python
 from agentlib import BaseAgent

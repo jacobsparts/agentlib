@@ -60,9 +60,17 @@ class PythonToolMixin(ToolMixin):
             self._repl_initialized = True
 
     def _get_repl(self) -> SubREPL:
-        """Lazily create REPL on first use."""
+        """Lazily create REPL on first use, with startup code injected."""
         if self._repl is None:
             self._repl = SubREPL(echo=getattr(self, 'repl_echo', False))
+            
+            # Inject startup code if defined
+            startup = getattr(self, 'repl_startup', None)
+            if startup:
+                if callable(startup):
+                    startup = startup()
+                self._repl.inject_startup(startup)
+        
         return self._repl
 
     def _build_system_prompt(self):

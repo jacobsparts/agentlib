@@ -588,10 +588,14 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}))
         self._tools_injected = False
 
     def inject_tools(self, tools: dict) -> None:
-        """Inject tool implementations that run inside the sandbox.
+        """Inject tool functions into the sandbox.
 
-        Extracts source code from actual tool methods and transforms them
-        into standalone functions for the sandbox REPL.
+        Tools marked with inject=True have their source extracted and run
+        directly in the sandbox. Other tools get relay stubs that call
+        back to the host process via socket.
+
+        Args:
+            tools: Dict of tool_name -> (implementation, pydantic_spec)
         """
         self._ensure_session()
 
@@ -608,88 +612,21 @@ import urllib.error
 from pathlib import Path
 ''')
 
-        import ast
-        import inspect
-        import textwrap
+        from agentlib.repl_agent import _extract_tool_source, _generate_socket_relay_stub
 
         for name, (impl, spec) in tools.items():
-            if impl is None:
-                continue  # Skip tools without implementations (e.g., MCP tools)
-
-            try:
-                source = inspect.getsource(impl)
-            except (OSError, TypeError):
-                continue  # Can't get source, skip
-
-            # Dedent before parsing (source may be indented if from a class)
-            source = textwrap.dedent(source)
-
-            # Parse and transform the AST
-            try:
-                tree = ast.parse(source)
-            except SyntaxError:
+            should_inject = impl is not None and getattr(impl, '_tool_inject', False)
+            
+            if should_inject:
+                # Direct source injection - raises on failure
+                code = _extract_tool_source(impl, name)
+            elif impl is not None or spec is not None:
+                # Socket relay stub - calls back to host process
+                code = _generate_socket_relay_stub(name, impl, spec)
+            else:
                 continue
-
-            # Find the function definition (skip decorators in AST)
-            func_def = None
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef) and node.name == name:
-                    func_def = node
-                    break
-
-            if func_def is None:
-                continue
-
-            # Remove 'self' parameter
-            if func_def.args.args and func_def.args.args[0].arg == 'self':
-                func_def.args.args.pop(0)
-
-            # Strip type annotations (they may reference unavailable types)
-            for arg in func_def.args.args:
-                arg.annotation = None
-            for arg in func_def.args.kwonlyargs:
-                arg.annotation = None
-            if func_def.args.vararg:
-                func_def.args.vararg.annotation = None
-            if func_def.args.kwarg:
-                func_def.args.kwarg.annotation = None
-            func_def.returns = None
-
-            # Fix defaults: in agentlib, string defaults are descriptions, not values
-            # Convert them to None (the actual intended default)
-            new_defaults = []
-            for default in func_def.args.defaults:
-                if isinstance(default, ast.Constant) and isinstance(default.value, str):
-                    new_defaults.append(ast.Constant(value=None))
-                else:
-                    new_defaults.append(default)
-            func_def.args.defaults = new_defaults
-
-            # Remove decorators
-            func_def.decorator_list = []
-
-            # Replace getattr(self, 'attr', default) with just default
-            # This handles patterns like: getattr(self, 'jina_timeout', 60.0)
-            class SelfGetattrReplacer(ast.NodeTransformer):
-                def visit_Call(self, node):
-                    self.generic_visit(node)
-                    # Match getattr(self, 'attr', default)
-                    if (isinstance(node.func, ast.Name) and
-                        node.func.id == 'getattr' and
-                        len(node.args) >= 3 and
-                        isinstance(node.args[0], ast.Name) and
-                        node.args[0].id == 'self'):
-                        # Return the default value (3rd argument)
-                        return node.args[2]
-                    return node
-
-            func_def = SelfGetattrReplacer().visit(func_def)
-            ast.fix_missing_locations(func_def)
-
-            # Unparse back to source
-            func_source = ast.unparse(func_def)
-
-            self._inject_code(func_source)
+            
+            self._inject_code(code)
 
         self._tools_injected = True
 
@@ -739,14 +676,26 @@ def submit(result):
     _recv_tool_response()  # Wait for ack
 ''')
 
-    def _inject_code(self, code_str: str) -> None:
-        """Execute code silently (no echo)."""
+    def _inject_code(self, code: str, timeout: float = 10.0) -> None:
+        """Override to use socket transport."""
         self._ensure_session()
-        _send_msg(self._conn, ("inject", code_str))
+        _send_msg(self._conn, ("inject", code))
 
-        msg_type, msg_data = _recv_msg(self._conn, timeout=10.0)
+        msg_type, msg_data = _recv_msg(self._conn, timeout=timeout)
         if msg_type == "inject_error":
             raise RuntimeError(f"Failed to inject code: {msg_data}")
+
+    def inject_startup(self, code_list: list[str], timeout: float = 10.0) -> None:
+        """
+        Inject startup code silently.
+        
+        Args:
+            code_list: List of Python code strings to execute
+            timeout: Max seconds per code block (default 10.0)
+        """
+        for code in code_list:
+            if code and code.strip():
+                self._inject_code(code, timeout=timeout)
 
     def execute(self, code: str) -> None:
         """Send code to execute (non-blocking start)."""
@@ -924,6 +873,15 @@ class SandboxMixin:
 
         repl.inject_tools(tools)
         repl.inject_builtins()
+        
+        # Inject startup code if defined
+        if not getattr(self, '_repl_startup_injected', False):
+            startup = getattr(self, 'repl_startup', None)
+            if startup:
+                if callable(startup):
+                    startup = startup()
+                repl.inject_startup(startup)
+            self._repl_startup_injected = True
 
         return repl
 
