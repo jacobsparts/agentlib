@@ -117,10 +117,16 @@ def _tool_worker_main(
 
     while True:
         try:
-            cmd = cmd_queue.get()
+            msg = cmd_queue.get()
 
-            if cmd is None:
+            if msg is None:
                 break
+
+            # Commands can be (seq_id, cmd) tuples or plain strings (legacy/injection)
+            if isinstance(msg, tuple):
+                seq_id, cmd = msg
+            else:
+                seq_id, cmd = None, msg
 
             old_stdout = sys.stdout
             old_stderr = sys.stderr
@@ -170,11 +176,11 @@ def _tool_worker_main(
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
 
-            output_queue.put(("done", had_error))
+            output_queue.put(("done", (seq_id, had_error)))
 
         except KeyboardInterrupt:
             output_queue.put(("output", "\nKeyboardInterrupt\n"))
-            output_queue.put(("done", None))
+            output_queue.put(("done", (seq_id, True)))
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +201,7 @@ class ToolREPL(SubREPL):
         self._tool_request_queue: Optional[Queue] = None
         self._tool_response_queue: Optional[Queue] = None
         self._tools_injected: bool = False
+        self._cmd_seq: int = 0  # Command sequence number for detecting stale messages
 
     def _ensure_session(self) -> None:
         """Override to use tool-aware worker and add tool queues."""
@@ -217,6 +224,7 @@ class ToolREPL(SubREPL):
             self._worker.start()
             self._running = False
             self._tools_injected = False
+            self._cmd_seq = 0  # Reset sequence on new session
 
     def inject_tools(self, tools: dict[str, tuple[Callable, Any]]) -> None:
         """
@@ -270,12 +278,13 @@ def submit(result):
         # we use a fixed 5.0s poll timeout internally
         self._ensure_session()
         self._running = True
-        self._cmd_queue.put(code)
+        self._cmd_queue.put(code)  # Plain string, worker uses seq_id=None
 
         while True:
             try:
                 msg_type, msg_data = self._output_queue.get(timeout=5.0)
                 if msg_type == "done":
+                    # msg_data is (seq_id, had_error) - injection uses seq_id=None
                     self._running = False
                     return
                 if msg_type == "output" and msg_data.strip():
@@ -720,13 +729,8 @@ def respond(text):
                     raise SyntaxError(
                         f"Your response must be valid Python code without preamble or markdown.\n\n{output}"
                     )
-            except _InterruptedError as e:
-                # Fire output hook to close delimiter
-                if hasattr(self, 'on_repl_output'):
-                    self.on_repl_output(e.output)
-                # Add interrupt output to conversation so agent sees it next turn
-                if e.output:
-                    self.usermsg(e.output)
+            except _InterruptedError:
+                # Interrupted output is discarded - don't pollute conversation
                 raise
 
             # Fire output hook after successful execution
@@ -809,7 +813,9 @@ def respond(text):
             any_executed = True
             stream(_format_echo(stmt))
             repl._running = True
-            repl._cmd_queue.put(stmt)
+            repl._cmd_seq += 1
+            current_seq = repl._cmd_seq
+            repl._cmd_queue.put((current_seq, stmt))
 
             # Poll loop for this statement
             statement_had_error = False
@@ -827,7 +833,10 @@ def respond(text):
                                     if msg_type == "output":
                                         stream(msg_data)
                                     elif msg_type == "done":
-                                        break
+                                        seq_id, _ = msg_data
+                                        if seq_id == current_seq:
+                                            break
+                                        # Stale done from previous command, ignore
                                 except Empty:
                                     break
                             repl._running = False
@@ -839,26 +848,30 @@ def respond(text):
                         if msg_type == "output":
                             stream(msg_data)
                         elif msg_type == "done":
-                            repl._running = False
-                            statement_had_error = msg_data  # msg_data is had_error boolean
-                            break  # Statement complete, move to next
+                            seq_id, had_error = msg_data
+                            if seq_id == current_seq:
+                                repl._running = False
+                                statement_had_error = had_error
+                                break  # Statement complete, move to next
+                            # Stale done from previous command, ignore and keep polling
                     except Empty:
                         pass
             except KeyboardInterrupt:
                 # User pressed Ctrl+C - interrupt the subprocess
                 repl.interrupt()
-                # Drain remaining output (will contain KeyboardInterrupt message)
+                # Drain and discard until we get done for current command
                 while True:
                     try:
                         msg_type, msg_data = repl._output_queue.get(timeout=0.5)
-                        if msg_type == "output":
-                            stream(msg_data)
-                        elif msg_type == "done":
-                            break
+                        if msg_type == "done":
+                            seq_id, _ = msg_data
+                            if seq_id == current_seq:
+                                break
+                            # Stale done, keep draining
                     except Empty:
                         break
                 repl._running = False
-                raise _InterruptedError("".join(output_chunks))
+                raise _InterruptedError()
 
             # Stop processing if this statement had a runtime error
             if statement_had_error:

@@ -234,27 +234,13 @@ register_provider("openrouter",
     tools=None,
     api_type="completions",
 )
-lambda_config = {'provider': {'order': ['Lambda'], 'allow_fallbacks': False}}
-novita_config = {'provider': {'order': ['Novita'], 'allow_fallbacks': False}}
-register_model("openrouter","deepseek-r1",
-    model="deepseek/deepseek-r1",
-    config=lambda_config,
-    input_cost=0.54,
-    output_cost=2.18,
-    tools=True,
-)
-register_model("openrouter","deepseek-v3-0324",
-    model="deepseek/deepseek-chat-v3-0324",
-    config=lambda_config,
-    input_cost=0.34,
-    output_cost=0.88,
-    tools=True,
-)
-register_model("openrouter","qwen3-235b-a22b",
-    model="qwen/qwen3-235b-a22b",
-    config=novita_config,
-    input_cost=0.1,
-    output_cost=0.1,
+zai_config = {'provider': {'order': ['z-ai'], 'allow_fallbacks': False}, 'temperature': 0}
+register_model("openrouter","glm-4.7",
+    model="z-ai/glm-4.7",
+    aliases="glm",
+    config=zai_config,
+    input_cost=0.4,
+    output_cost=1.5,
     tools=False,
 )
 

@@ -16,7 +16,7 @@ import shutil
 import sys
 from typing import Optional
 from pathlib import Path
-from agentlib import REPLAgent, SandboxMixin, REPLAttachmentMixin
+from agentlib import REPLAgent, SandboxMixin, REPLAttachmentMixin, MCPMixin
 from agentlib.cli import CLIMixin
 from agentlib.jina_mixin import JinaMixin
 from agentlib.llm_registry import ModelNotFoundError
@@ -564,11 +564,13 @@ Focus on what needs to be done, not when. Break work into actionable steps.
             self.console.print("\n[dim]Session ended. Goodbye![/dim]")
 
 
-class CodeAgent(JinaMixin, CodeAgentBase):
-    """Code agent with native tools (no MCP dependencies).
+class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
+    """Code agent with native tools.
 
     Inherits web_fetch and web_search from JinaMixin.
     """
+
+    mcp_servers = []
 
     @REPLAgent.tool(inject=True)
     def glob(self,
