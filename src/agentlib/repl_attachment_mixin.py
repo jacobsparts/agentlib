@@ -17,21 +17,19 @@ Example:
         result = agent.run("What's in the files?")
 
 The agent sees synthetic history like:
-    user: >>> submit("Please load the following files: config.json, settings.yaml")
-    Please load the following files: config.json, settings.yaml
+    user: >>> submit("Please read these files to get up to speed before we continue: config.json, settings.yaml")
+    Please read these files to get up to speed before we continue: config.json, settings.yaml
 
-    assistant: with open('config.json') as f:
-        print(f.read())
-    with open('settings.yaml') as f:
-        print(f.read())
+    assistant: read('config.json')
+    read('settings.yaml')
 
-    user: >>> with open('config.json') as f:
-    ...     print(f.read())
-    {"debug": true}
+    # Files loaded into context, no need to read them again unless I make changes
 
-    >>> with open('settings.yaml') as f:
-    ...     print(f.read())
-    key: value
+    user: >>> read('config.json')
+        1→{"debug": true}
+
+    >>> read('settings.yaml')
+        1→key: value
 
 Behavior:
     - attach(name, content): Add or update - shows as file read
@@ -140,12 +138,20 @@ class REPLAttachmentMixin:
         output_parts = []
 
         for name, content in reads.items():
-            code_parts.append(f"with open({name!r}) as f:\n    print(f.read())")
-            output_parts.append(f">>> with open({name!r}) as f:\n...     print(f.read())\n{content}")
+            # Format with line numbers like read() does
+            lines = content.split('\n')
+            formatted = '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
+            code_parts.append(f"read({name!r})")
+            output_parts.append(f">>> read({name!r})\n{formatted}")
 
         for name in redactions:
-            code_parts.append(f"# with open({name!r}) as f:  # [redacted by system]\n#     print(f.read())")
-            output_parts.append(f">>> # with open({name!r}) as f:  # [redacted by system]\n>>> #     print(f.read())")
+            code_parts.append(f"# read({name!r})  # [redacted by system]")
+            output_parts.append(f">>> # read({name!r})  # [redacted by system]")
+
+        # Add guidance comment at end of assistant code
+        if reads:
+            code_parts.append("")
+            code_parts.append("# Files loaded into context, no need to read them again unless I make changes")
 
         return (
             {"role": "assistant", "content": "\n".join(code_parts)},
@@ -161,9 +167,9 @@ class REPLAttachmentMixin:
         last_role = result[-1].get("role") if result else None
         if last_role in (None, "system") and reads:
             if len(reads) == 1:
-                request_text = f"Please load {next(iter(reads))}"
+                request_text = f"Please read {next(iter(reads))} to get up to speed before we continue."
             else:
-                request_text = f"Please load the following files: {', '.join(reads)}"
+                request_text = f"Please read these files to get up to speed before we continue: {', '.join(reads)}"
             # Format as REPL output to maintain the illusion
             request_msg = f'>>> submit("{request_text}")\n{request_text}\n'
             result.append({"role": "user", "content": request_msg})

@@ -174,6 +174,18 @@ Focus on what needs to be done, not when. Break work into actionable steps.
 - For file operations, you can use native Python (`Path.read_text()`,
   `open()`) or available functions.
 - read() returns formatted output with line numbers - use it for viewing.
+
+>>> context_management()
+
+File reads are complete unless otherwise indicated. Re-reading wastes tokens -
+avoid re-reading files unless you have edited them and need to check current state.
+
+>>> when_uncertain()
+
+If you don't immediately know the answer:
+1. Use note() to capture observations and continue reasoning
+2. Ask clarifying questions via respond()
+3. State what you've learned from available context
 """
 
     max_output_kb = _get_config_value("code_agent_max_output_kb", 50)  # Large output protection
@@ -571,6 +583,16 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
     """
 
     mcp_servers = []
+
+    @REPLAgent.tool(inject=True)
+    def note(self, content: str = "All relevant observations and reasoning"):
+        """Capture your current thinking and yield to a new turn.
+
+        Call this when you're uncertain how to proceed or want to document
+        what you've learned before continuing. Write down everything relevant—
+        observations, hypotheses, open questions, options you're considering.
+        """
+        return "[Continuing...]"
 
     @REPLAgent.tool(inject=True)
     def glob(self,
