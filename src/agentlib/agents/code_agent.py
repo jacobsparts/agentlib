@@ -103,6 +103,52 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     """Code assistant with Python REPL execution."""
 
     model = _get_config_value("code_agent_model", "anthropic/claude-sonnet-4-5")
+    
+    @REPLAgent.tool
+    def view_images(self,
+            files: list[str | bytes] = "List of image filepaths or binary data",
+            notes: str = "Observations, objectives, what to look for"
+        ):
+        '''Load images into context for visual analysis on next turn.'''
+        images = []
+        total_bytes = 0
+        
+        if not isinstance(files, list):
+            files = [files]
+            
+        for f in files:
+            if isinstance(f, bytes):
+                data = f
+            else:
+                p = Path(f).expanduser()
+                if not p.exists():
+                    raise FileNotFoundError(f"Image not found: {f}")
+                data = p.read_bytes()
+            
+            # Validate JPEG or PNG
+            if len(data) < 4:
+                raise ValueError("Invalid image data (too short)")
+            
+            is_jpeg = data.startswith(b'\xff\xd8\xff')
+            is_png = data.startswith(b'\x89PNG')
+            
+            if not (is_jpeg or is_png):
+                name = f if isinstance(f, str) else f"{len(data)} bytes"
+                raise ValueError(f"Unsupported image format: {name} (only JPEG and PNG supported)")
+
+            images.append(data)
+            total_bytes += len(data)
+        
+        self._pending_images = getattr(self, '_pending_images', []) + images
+        return f"{len(images)} image(s) queued ({total_bytes // 1000}KB) - {notes}"
+
+    def usermsg(self, content, **kwargs):
+        """Override to attach pending images."""
+        if pending := getattr(self, '_pending_images', None):
+            kwargs['images'] = kwargs.get('images', []) + pending
+            self._pending_images = []
+        return super().usermsg(content, **kwargs)
+
     welcome_message = "[bold]Code Agent[/bold]\nPython REPL-based coding assistant"
     thinking_message = "Working..."
     interactive = True  # Enables respond() function

@@ -441,7 +441,21 @@ def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
 def {name}({sig}):
     """{doc}"""
     import json as _json
-    _tool_request_queue.put(_json.dumps({{"tool": "{name}", "args": {args}}}))
+    
+    def _serialize(x):
+        if isinstance(x, bytes):
+            import base64
+            return {{"__b64__": base64.b64encode(x).decode()}}
+        if isinstance(x, (list, tuple)):
+            return [_serialize(i) for i in x]
+        if isinstance(x, dict):
+            return {{k: _serialize(v) for k, v in x.items()}}
+        return x
+        
+    _args = {args}
+    _safe_args = {{k: _serialize(v) for k, v in _args.items()}}
+    
+    _tool_request_queue.put(_json.dumps({{"tool": "{name}", "args": _safe_args}}))
     _response = _json.loads(_tool_response_queue.get())
     if "error" in _response:
         raise Exception(_response["error"])
@@ -455,7 +469,20 @@ def _generate_socket_relay_stub(name: str, impl: Optional[Callable], spec: Any) 
     return f'''
 def {name}({sig}):
     """{doc}"""
-    _send_tool_request(_json.dumps({{"tool": "{name}", "args": {args}}}))
+    def _serialize(x):
+        if isinstance(x, bytes):
+            import base64
+            return {{"__b64__": base64.b64encode(x).decode()}}
+        if isinstance(x, (list, tuple)):
+            return [_serialize(i) for i in x]
+        if isinstance(x, dict):
+            return {{k: _serialize(v) for k, v in x.items()}}
+        return x
+        
+    _args = {args}
+    _safe_args = {{k: _serialize(v) for k, v in _args.items()}}
+    
+    _send_tool_request(_json.dumps({{"tool": "{name}", "args": _safe_args}}))
     _response = _json.loads(_recv_tool_response())
     if "error" in _response:
         raise Exception(_response["error"])
@@ -529,6 +556,11 @@ class REPLMixin:
                     prev = last_msg["content"]
                     sep = "" if prev.endswith("\n") else "\n"
                     last_msg["content"] = prev + sep + content + "\n"
+                    
+                    # If new content has images, append them too
+                    if 'images' in kwargs:
+                        last_msg['images'] = last_msg.get('images', []) + kwargs['images']
+                        
                     self._last_was_repl_output = False
                     return
 
@@ -888,6 +920,19 @@ def respond(text):
         """Handle a tool request from the REPL."""
         tool_name = req.get('tool')
         args = req.get('args', {})
+
+        # Deserialize special types (like bytes)
+        def _deserialize(x):
+            if isinstance(x, dict) and "__b64__" in x:
+                import base64
+                return base64.b64decode(x["__b64__"])
+            if isinstance(x, list):
+                return [_deserialize(i) for i in x]
+            if isinstance(x, dict):
+                return {k: _deserialize(v) for k, v in x.items()}
+            return x
+            
+        args = {k: _deserialize(v) for k, v in args.items()}
 
         if tool_name == '__submit__':
             self._final_result = args.get('result')

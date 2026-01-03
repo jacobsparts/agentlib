@@ -985,6 +985,19 @@ class SandboxMixin:
         tool_name = req.get('tool')
         args = req.get('args', {})
 
+        # Deserialize special types (like bytes) - copied from REPLAgent
+        def _deserialize(x):
+            if isinstance(x, dict) and "__b64__" in x:
+                import base64
+                return base64.b64decode(x["__b64__"])
+            if isinstance(x, list):
+                return [_deserialize(i) for i in x]
+            if isinstance(x, dict):
+                return {k: _deserialize(v) for k, v in x.items()}
+            return x
+            
+        args = {k: _deserialize(v) for k, v in args.items()}
+
         if tool_name == '__submit__':
             self._final_result = args.get('result')
             self.complete = True
