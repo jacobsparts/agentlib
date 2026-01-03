@@ -600,7 +600,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             path: Optional[str] = "Directory to search in (default: current directory)"
         ):
         """Find files matching a glob pattern, sorted by modification time."""
-        base = Path(path) if path else Path('.')
+        base = Path(path).expanduser() if path else Path('.')
         matches = list(base.glob(pattern))
         matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return [str(m) for m in matches]
@@ -649,12 +649,12 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
     @REPLAgent.tool(inject=True)
     def read(self,
-            file_path: str = "Absolute path to the file",
+            file_path: str = "Path to the file",
             offset: Optional[int] = "Line number to start from (1-indexed)",
             limit: Optional[int] = "Number of lines to read (default: 2000)"
         ):
         """Read a file's contents with line numbers."""
-        content = Path(file_path).read_text()
+        content = Path(file_path).expanduser().read_text()
         all_lines = content.split('\n')
         total_lines = len(all_lines)
 
@@ -673,13 +673,13 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
     @REPLAgent.tool(inject=True)
     def edit(self,
-            file_path: str = "Absolute path to the file",
+            file_path: str = "Path to the file",
             old_string: str = "Text to replace (must be unique unless replace_all)",
             new_string: str = "Replacement text",
             replace_all: Optional[bool] = "Replace all occurrences"
         ):
         """Edit a file by replacing text."""
-        path = Path(file_path)
+        path = Path(file_path).expanduser()
         if not path.exists():
             raise FileNotFoundError("File does not exist.")
         if old_string == new_string:

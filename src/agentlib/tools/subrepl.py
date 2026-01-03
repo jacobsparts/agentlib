@@ -171,10 +171,11 @@ class _StreamingWriter:
         return self._original.fileno()
 
 
-def _worker_main(cmd_queue: Queue, output_queue: Queue) -> None:
+def _worker_main(cmd_queue: Queue, output_queue: Queue, cwd: str) -> None:
     """
     Worker process entry point.
     """
+    os.chdir(cwd)
     repl_locals: dict[str, Any] = {}
 
     def sigint_handler(signum: int, frame: Any) -> None:
@@ -278,7 +279,7 @@ class SubREPL:
             self._output_queue = Queue()
             self._worker = Process(
                 target=_worker_main,
-                args=(self._cmd_queue, self._output_queue),
+                args=(self._cmd_queue, self._output_queue, os.getcwd()),
                 daemon=True
             )
             self._worker.start()

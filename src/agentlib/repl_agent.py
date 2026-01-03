@@ -242,6 +242,9 @@ class ToolREPL(SubREPL):
         if self._tools_injected:
             return
 
+        # Inject common imports needed by tools
+        self._inject_code('from pathlib import Path')
+
         for name, (impl, spec) in tools.items():
             should_inject = impl is not None and getattr(impl, '_tool_inject', False)
             
