@@ -8,11 +8,21 @@ import urllib.parse
 import threading
 import time
 import logging
+import base64
 from collections import defaultdict
 
 from .utils import throttle, JSON_INDENT, UsageTracker
 from .llm_registry import get_model_config
 from .conversation import Conversation
+
+# Message keys passed through to _call_completions and _call_messages
+# in addition to the standard four: 'role', 'content', 'name', 'tool_call_id'
+EXTRA_KEYS = {'images'}
+
+MEDIA_TYPES = {
+    b'\xff\xd8\xff': "image/jpeg",
+    b'\x89PN': "image/png",
+}
 
 logger = logging.getLogger('agentlib')
 
@@ -31,7 +41,23 @@ class LLMClient:
         self.native = self.model_config.get('tools') if native is None else native
 
     def _call_completions(self, messages, tools):
+        """
+        Call OpenAI Completions API.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'.
+                      Messages may include 'images' key with list of raw bytes (PNG/JPEG).
+            tools: Optional tool specifications.
+        """
         # OpenAI Completions API-compatible format
+        for m in messages:
+            if images := m.pop('images', None):
+                m['content'] = [
+                    *([{"type": "text", "text": m['content']}] if m['content'] else []),
+                    *[{"type": "image_url", "image_url": {
+                        "url": f"data:{MEDIA_TYPES[img[:3]]};base64,{base64.b64encode(img).decode()}"
+                    }} for img in images]
+                ]
         req = {
             "model": self.model_config['model'],
             "messages": messages,
@@ -90,7 +116,25 @@ class LLMClient:
             conn.close()
 
     def _call_messages(self, messages, tools):
+        """
+        Call Anthropic Messages API.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'.
+                      Messages may include 'images' key with list of raw bytes (PNG/JPEG).
+            tools: Optional tool specifications.
+        """
         # Anthropic Messages API-compatible format
+        for m in messages:
+            if images := m.pop('images', None):
+                m['content'] = [
+                    *([{"type": "text", "text": m['content']}] if m['content'] else []),
+                    *[{"type": "image", "source": {
+                        "type": "base64",
+                        "media_type": MEDIA_TYPES[img[:3]],
+                        "data": base64.b64encode(img).decode()
+                    }} for img in images]
+                ]
         system_message = None
         _messages = []
         for msg in messages:
@@ -111,7 +155,6 @@ class LLMClient:
             elif msg['role'] == 'assistant' and 'tool_calls' in msg:
                 content = []
                 if text := msg['content']:
-                    assert isinstance(text, str)
                     content.append({"type": "text", "text": text})
                 for row in msg['tool_calls']:
                     tc = row['function']
@@ -202,9 +245,17 @@ class LLMClient:
                 "name": tc['function']['name'],
                 "arguments": json.loads(tc['function']['arguments']),
             } for tc in m['tool_calls'] ] }, indent=JSON_INDENT)
-            return {'role': 'assistant', 'content': f"{m['content']}\n{tool_calls_str}".strip()}
+            return {
+                'role': 'assistant',
+                'content': f"{m['content']}\n{tool_calls_str}".strip(),
+                **{k: v for k, v in m.items() if k in EXTRA_KEYS}
+            }
         elif m['role'] == 'tool':
-            return {'role': 'user', 'content': f"{m['name']}: {m['content']}"}
+            return {
+                'role': 'user',
+                'content': f"{m['name']}: {m['content']}",
+                **{k: v for k, v in m.items() if k in EXTRA_KEYS}
+            }
         else:
             return m
 
