@@ -437,11 +437,32 @@ def _extract_stub_signature(name: str, impl: Optional[Callable], spec: Any) -> t
 def _generate_tool_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
     """Generate relay stub using queue transport (for ToolREPL)."""
     sig, doc, args = _extract_stub_signature(name, impl, spec)
+
+    # Check for files_param marker - adds path-to-bytes conversion
+    files_param = getattr(impl, '_tool_files_param', None) if impl else None
+    preprocess = ""
+    if files_param:
+        preprocess = f'''
+    # Convert file paths to bytes
+    from pathlib import Path as _Path
+    def _read_file(f):
+        if isinstance(f, bytes):
+            return f
+        p = _Path(f).expanduser()
+        if not p.exists():
+            raise FileNotFoundError(f"File not found: {{f}}")
+        return p.read_bytes()
+    if isinstance({files_param}, list):
+        {files_param} = [_read_file(f) for f in {files_param}]
+    elif isinstance({files_param}, str):
+        {files_param} = [_read_file({files_param})]
+'''
+
     return f'''
 def {name}({sig}):
     """{doc}"""
     import json as _json
-    
+    {preprocess}
     def _serialize(x):
         if isinstance(x, bytes):
             import base64
@@ -451,10 +472,10 @@ def {name}({sig}):
         if isinstance(x, dict):
             return {{k: _serialize(v) for k, v in x.items()}}
         return x
-        
+
     _args = {args}
     _safe_args = {{k: _serialize(v) for k, v in _args.items()}}
-    
+
     _tool_request_queue.put(_json.dumps({{"tool": "{name}", "args": _safe_args}}))
     _response = _json.loads(_tool_response_queue.get())
     if "error" in _response:
@@ -466,9 +487,30 @@ def {name}({sig}):
 def _generate_socket_relay_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
     """Generate relay stub using socket transport (for SandboxedToolREPL)."""
     sig, doc, args = _extract_stub_signature(name, impl, spec)
+
+    # Check for files_param marker - adds path-to-bytes conversion
+    files_param = getattr(impl, '_tool_files_param', None) if impl else None
+    preprocess = ""
+    if files_param:
+        preprocess = f'''
+    # Convert file paths to bytes
+    def _read_file(f):
+        if isinstance(f, bytes):
+            return f
+        p = Path(f).expanduser()
+        if not p.exists():
+            raise FileNotFoundError(f"File not found: {{f}}")
+        return p.read_bytes()
+    if isinstance({files_param}, list):
+        {files_param} = [_read_file(f) for f in {files_param}]
+    elif isinstance({files_param}, str):
+        {files_param} = [_read_file({files_param})]
+'''
+
     return f'''
 def {name}({sig}):
     """{doc}"""
+    {preprocess}
     def _serialize(x):
         if isinstance(x, bytes):
             import base64
@@ -478,10 +520,10 @@ def {name}({sig}):
         if isinstance(x, dict):
             return {{k: _serialize(v) for k, v in x.items()}}
         return x
-        
+
     _args = {args}
     _safe_args = {{k: _serialize(v) for k, v in _args.items()}}
-    
+
     _send_tool_request(_json.dumps({{"tool": "{name}", "args": _safe_args}}))
     _response = _json.loads(_recv_tool_response())
     if "error" in _response:

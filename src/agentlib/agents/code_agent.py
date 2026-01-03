@@ -112,35 +112,32 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         '''Load images into context for visual analysis on next turn.'''
         images = []
         total_bytes = 0
-        
+
         if not isinstance(files, list):
             files = [files]
-            
-        for f in files:
-            if isinstance(f, bytes):
-                data = f
-            else:
-                p = Path(f).expanduser()
-                if not p.exists():
-                    raise FileNotFoundError(f"Image not found: {f}")
-                data = p.read_bytes()
-            
+
+        for data in files:
+            # Stub reads files in REPL, so we should only get bytes here
+            if not isinstance(data, bytes):
+                raise TypeError(f"Expected bytes, got {type(data).__name__}")
+
             # Validate JPEG or PNG
             if len(data) < 4:
                 raise ValueError("Invalid image data (too short)")
-            
+
             is_jpeg = data.startswith(b'\xff\xd8\xff')
             is_png = data.startswith(b'\x89PNG')
-            
+
             if not (is_jpeg or is_png):
-                name = f if isinstance(f, str) else f"{len(data)} bytes"
-                raise ValueError(f"Unsupported image format: {name} (only JPEG and PNG supported)")
+                raise ValueError(f"Unsupported image format ({len(data)} bytes) - only JPEG and PNG supported")
 
             images.append(data)
             total_bytes += len(data)
-        
+
         self._pending_images = getattr(self, '_pending_images', []) + images
         return f"{len(images)} image(s) queued ({total_bytes // 1000}KB) - {notes}"
+
+    view_images._tool_files_param = "files"
 
     def usermsg(self, content, **kwargs):
         """Override to attach pending images."""
@@ -164,15 +161,14 @@ The code you write is executed directly.
 1. You write Python code as your response
 2. The code executes in a persistent REPL environment
 3. Output is shown back to you IN YOUR NEXT TURN
-4. Call `submit(value)` or `respond(text)` to return to the user:
-   - submit(value): Return the final result of a task
-   - respond(text): Send conversational messages (explanations, questions)
+4. Call `respond(text)` or `submit(value)` to return to the user:
+   - respond(text): Send messages, answers, explanations, or questions
+   - submit(value): End the task with a final result (yields control to user)
    - print(): Output visible to YOU in your next turn (does NOT return to user)
 
-respond() and submit() end your turn. Complete simple tasks in one turn.
-
-Multi-step tasks that require several rounds are expected. Only call
-respond/submit when you're truly finished and ready to return to the user.
+Both respond() and submit() end your turn. Use respond() for conversational
+replies or when follow-up is expected. Use submit() ONLY when the task is
+conclusively complete—no further input or analysis required.
 
 You have full access to Python's standard library and file system.
 The user can also execute code directly in the shared REPL.
