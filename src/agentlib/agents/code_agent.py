@@ -424,7 +424,9 @@ If you don't immediately know the answer:
             return
         try:
             with open(filename) as f:
-                self.conversation.messages = json.load(f)
+                messages = json.load(f)
+                messages = [ {k: v for k, v in row.items() if k in {'role', 'content'}} for row in messages ]
+                self.conversation.messages = messages
         except json.JSONDecodeError:
             print(f"{DIM}Error: {filename} is not a valid JSON session file{RESET}")
             return
