@@ -517,10 +517,10 @@ class SandboxedToolREPL:
                 os.close(fd)
             logger.info(f"Restoring {len(self._accumulated_tarball)} bytes of accumulated changes")
 
-        # Pass worker code as -c argument (inline)
-        worker_bootstrap = f'''
-import base64, sys
-exec(base64.b64decode({repr(base64.b64encode(WORKER_CODE.encode()).decode())}).decode())
+        # Pass worker bootstrap over stdin to avoid huge argv (ps spam)
+        worker_bootstrap = f'''\
+import sys
+exec({repr(WORKER_CODE)})
 worker_main({port}, bytes.fromhex({repr(authkey.hex())}))
 '''
 
@@ -534,7 +534,7 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}))
         cmd.extend([
             self.target_dir,
             '--',
-            sys.executable, '-c', worker_bootstrap
+            sys.executable, '-'
         ])
         
         # Track restore path for cleanup
@@ -542,12 +542,17 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}))
 
         self._proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             # Create new session to isolate from terminal signals (SIGINT from Ctrl+C)
             # Without this, Ctrl+C at terminal kills sandbox_helper, losing all edits
             start_new_session=True,
         )
+
+        assert self._proc.stdin is not None
+        self._proc.stdin.write(worker_bootstrap.encode())
+        self._proc.stdin.close()
 
         # Track session info for diagnostics
         self._session_start_time = time.time()

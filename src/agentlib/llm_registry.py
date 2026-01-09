@@ -95,18 +95,24 @@ register_provider("openai",
     tools=True,
     api_type="completions",
 )
-register_model("openai","gpt-5.2",
-    model="gpt-5.2",
-    input_cost=1.75,
-    cached_cost=0.175,
-    output_cost=14.0,
-)
-register_model("openai","gpt-5.1",
+reasoning_none = {"config":{"reasoning_effort": "none"}}
+reasoning_medium = {"config":{"reasoning_effort": "medium"}}
+reasoning_high = {"config":{"reasoning_effort": "high"}}
+gpt52 = {
+    'model': 'gpt-5.2',
+    'input_cost': 1.75,
+    'cached_cost': 0.175,
+    'output_cost': 14.0
+}
+register_model("openai", "gpt-5.2", **gpt52, **reasoning_none)
+register_model("openai", "gpt-5.2-medium", **gpt52, **reasoning_medium)
+register_model("openai", "gpt-5.2-high", **gpt52, **reasoning_high)
+register_model("openai", "gpt-5.1",
     model="gpt-5.1",
     input_cost=1.25,
     cached_cost=0.125,
     output_cost=10.0,
-    config={"reasoning_effort": "none"},
+    **reasoning_none
 )
 register_model("openai","gpt-5-mini",
     model="gpt-5-mini",
@@ -114,7 +120,7 @@ register_model("openai","gpt-5-mini",
     input_cost=0.25,
     cached_cost=0.025,
     output_cost=2.0,
-    config={"reasoning_effort": "high"},
+    **reasoning_high
 )
 register_model("openai","gpt-5-mini-flex",
     model="gpt-5-mini",
