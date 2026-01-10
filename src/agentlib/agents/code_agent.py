@@ -579,8 +579,9 @@ If you don't immediately know the answer:
                             # Clear cached client so new model takes effect
                             if hasattr(self, '_llm_client'):
                                 delattr(self, '_llm_client')
+                            # Update conversation's client reference (preserves message history)
                             if hasattr(self, '_conversation'):
-                                delattr(self, '_conversation')
+                                self._conversation.llm_client = self.llm_client
                             print(f"{DIM}Model changed: {old_model} → {new_model}{RESET}")
                         except ModelNotFoundError as e:
                             print(f"{DIM}{str(e)}{RESET}")
