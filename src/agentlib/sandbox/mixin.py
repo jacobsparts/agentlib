@@ -783,17 +783,9 @@ def submit(result):
                 pass
             self._conn = None
 
-        # Wait for process
+        # Wait for process to finish (tarball generation can take time for large changesets)
         if self._proc:
-            try:
-                self._proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                # Kill entire process group (sandbox runs in its own session)
-                try:
-                    os.killpg(self._proc.pid, signal.SIGKILL)
-                except (ProcessLookupError, OSError):
-                    self._proc.kill()
-                self._proc.wait()
+            self._proc.wait()
             self._proc = None
 
         # Read tarball
