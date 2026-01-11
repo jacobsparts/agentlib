@@ -760,7 +760,13 @@ def respond(text):
                         else:
                             resp = self.llm_client.call(messages, tools=None)
                     except KeyboardInterrupt:
-                        # User interrupted LLM call - close delimiter and return to prompt
+                        # User interrupted LLM call - subprocess may also have received SIGINT
+                        # Drain any stale output before returning
+                        while True:
+                            try:
+                                repl._output_queue.get_nowait()
+                            except Empty:
+                                break
                         raise _InterruptedError("")
 
                     content = resp.get('content', '').strip()
@@ -935,20 +941,10 @@ def respond(text):
                         pass
             except KeyboardInterrupt:
                 # User pressed Ctrl+C - interrupt the subprocess
-                repl.interrupt()
-                # Drain until we get done for current command, streaming any output
-                while True:
-                    try:
-                        msg_type, msg_data = repl._output_queue.get(timeout=0.5)
-                        if msg_type == "output":
-                            stream(msg_data)
-                        elif msg_type == "done":
-                            seq_id, _ = msg_data
-                            if seq_id == current_seq:
-                                break
-                            # Stale done, keep draining
-                    except Empty:
-                        break
+                # interrupt() drains and returns all output, so stream it immediately
+                interrupted_output = repl.interrupt()
+                if interrupted_output:
+                    stream(interrupted_output)
                 repl._running = False
                 raise _InterruptedError()
 
