@@ -936,11 +936,13 @@ def respond(text):
             except KeyboardInterrupt:
                 # User pressed Ctrl+C - interrupt the subprocess
                 repl.interrupt()
-                # Drain and discard until we get done for current command
+                # Drain until we get done for current command, streaming any output
                 while True:
                     try:
                         msg_type, msg_data = repl._output_queue.get(timeout=0.5)
-                        if msg_type == "done":
+                        if msg_type == "output":
+                            stream(msg_data)
+                        elif msg_type == "done":
                             seq_id, _ = msg_data
                             if seq_id == current_seq:
                                 break
