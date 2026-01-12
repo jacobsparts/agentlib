@@ -761,12 +761,14 @@ def respond(text):
                             resp = self.llm_client.call(messages, tools=None)
                     except KeyboardInterrupt:
                         # User interrupted LLM call - subprocess may also have received SIGINT
-                        # Drain any stale output before returning
+                        # Wait briefly for subprocess to handle signal, then drain
                         while True:
                             try:
-                                repl._output_queue.get_nowait()
+                                msg_type, _ = repl._output_queue.get(timeout=0.1)
+                                if msg_type == "done":
+                                    break  # Subprocess finished handling interrupt
                             except Empty:
-                                break
+                                break  # No pending output
                         raise _InterruptedError("")
 
                     content = resp.get('content', '').strip()
