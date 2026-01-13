@@ -172,7 +172,8 @@ Import statements persist - no need to re-import modules."""
         """
         self._ensure_setup()
         t = timeout if timeout is not None else getattr(self, 'repl_timeout', 30.0)
-        return self._get_repl().execute(code, timeout=t)
+        result = self._get_repl().execute(code, timeout=t)
+        return result if result else "[No output]"
 
     def python_read(self, timeout: Optional[float] = None) -> str:
         """
