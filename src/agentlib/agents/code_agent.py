@@ -326,11 +326,14 @@ If you don't know how to proceed:
         if getattr(self, '_in_user_repl', False):
             return
         if msg_type == "echo":
-            # Clear "Working... (turn N)" before first output of each turn
+            # Clear "Working... (turn N)" and print header atomically on first output
             if not getattr(self, '_turn_output_started', False):
-                self.console.clear_line()
+                # Combine clear + header into one write to avoid interleaving
+                header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
+                print(f"\x1b[1G\x1b[K{header}")
                 self._turn_output_started = True
-            if not getattr(self, '_repl_printed_header', False):
+                self._repl_printed_header = True
+            elif not getattr(self, '_repl_printed_header', False):
                 print("\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m")
                 self._repl_printed_header = True
             # Echo lines already have >>> or ... prefix

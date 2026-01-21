@@ -501,4 +501,4 @@ class Console:
 
     def clear_line(self):
         """Clear the current line."""
-        print("\r\x1b[K", end="")
+        print("\x1b[1G\x1b[K", end="", flush=True)
