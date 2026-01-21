@@ -971,14 +971,12 @@ Call help(function_name) for parameter descriptions.
             Tuple of (output, is_pure_syntax_error) where is_pure_syntax_error is True
             when no statements executed successfully (first statement had syntax error).
         """
-        # Split original code for echo, transform for execution
+        # Split into statements, then transform each individually
+        # (Can't transform whole code first because AST strips comments,
+        # which would cause misalignment between original and transformed statements)
         original_statements = _split_into_statements(code)
-        transformed_code = self._transform_toplevel_print(code)
-        transformed_statements = _split_into_statements(transformed_code)
-        # Pair original (for echo) with transformed (for exec)
-        statements = list(zip(original_statements, transformed_statements))
-        if not statements:
-            return "", False
+        if not original_statements:
+            return "", False, []
 
         repl._ensure_session()
         output_chunks = []  # List of (msg_type, chunk) tuples for entire turn
@@ -993,7 +991,10 @@ Call help(function_name) for parameter descriptions.
             if hasattr(self, 'on_repl_chunk'):
                 self.on_repl_chunk(chunk, msg_type)
 
-        for original_stmt, exec_stmt in statements:
+        for original_stmt in original_statements:
+            # Transform this statement (print -> _print for output tagging)
+            exec_stmt = self._transform_toplevel_print(original_stmt)
+
             # Pre-validate syntax before echoing (use transformed for validation)
             try:
                 compile(exec_stmt, '<repl>', 'exec')

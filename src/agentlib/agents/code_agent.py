@@ -326,16 +326,11 @@ If you don't know how to proceed:
         if getattr(self, '_in_user_repl', False):
             return
         if msg_type == "echo":
-            # Clear "Working... (turn N)" and print header atomically on first output
+            # Mark that we've started processing output (for clearing "Working..." line)
+            # but defer header printing until we know we have visible content
             if not getattr(self, '_turn_output_started', False):
-                # Combine clear + header into one write to avoid interleaving
-                header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
-                print(f"\x1b[1G\x1b[K{header}")
                 self._turn_output_started = True
-                self._repl_printed_header = True
-            elif not getattr(self, '_repl_printed_header', False):
-                print("\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m")
-                self._repl_printed_header = True
+                self._header_pending = True
             # Echo lines already have >>> or ... prefix
             # Skip emit() calls - user sees progress/result via green text
             for line in chunk.rstrip('\n').split('\n'):
@@ -344,12 +339,30 @@ If you don't know how to proceed:
                     self._in_emit_echo = line.startswith('>>> emit(')
                 # Continuation lines keep current state
                 if not getattr(self, '_in_emit_echo', False):
+                    # We have visible content - print header first if pending
+                    if getattr(self, '_header_pending', False):
+                        header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
+                        print(f"\x1b[1G\x1b[K{header}")
+                        self._header_pending = False
+                        self._repl_printed_header = True
                     print(line, flush=True)
         elif msg_type == "progress":
             # Show progress updates immediately (emit with release=False)
+            # This should open the Python block since more output is expected
+            if getattr(self, '_header_pending', False):
+                header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
+                print(f"\x1b[1G\x1b[K{header}")
+                self._header_pending = False
+                self._repl_printed_header = True
             for line in chunk.rstrip('\n').split('\n'):
                 print(f"\x1b[92m{line}\x1b[0m", flush=True)  # Bright green
         elif msg_type in ("output", "print"):
+            # Print header if pending (in case output comes before visible echo)
+            if getattr(self, '_header_pending', False):
+                header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
+                print(f"\x1b[1G\x1b[K{header}")
+                self._header_pending = False
+                self._repl_printed_header = True
             # Show output with truncation: up to 240 chars or 3 lines
             text = chunk.rstrip('\n')
             # For string literals (return values), show value instead of repr
@@ -726,6 +739,7 @@ If you don't know how to proceed:
                 self._repl_has_output = False
                 self._turn_number = 1
                 self._turn_output_started = False
+                self._header_pending = False
                 self._in_emit_echo = False
                 print()  # Blank line after user input
                 print(f"{DIM}{thinking} (turn 1){RESET}\r", end="", flush=True)
