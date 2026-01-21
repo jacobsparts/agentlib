@@ -192,6 +192,7 @@ def worker_main(port, authkey):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(60)  # Periodic timeout to check if we should exit
     sock.connect(('127.0.0.1', port))
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # Disable Nagle's algorithm
 
     # Authenticate
     _send_msg(sock, authkey)
@@ -200,7 +201,9 @@ def worker_main(port, authkey):
         raise RuntimeError("Authentication failed")
 
     repl_locals = {
+        '_sock': sock,  # For _send_output() in builtins
         '_tool_request_sock': sock,
+        '_send_msg': _send_msg,  # For SOCKET_SEND_OUTPUT_CODE
     }
 
     def sigint_handler(signum, frame):
@@ -566,6 +569,7 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}))
         # Accept connection from worker
         try:
             self._conn, addr = self._server.accept()
+            self._conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # Disable Nagle
         except socket.timeout:
             self._proc.kill()
             stdout, stderr = self._proc.communicate()
@@ -591,6 +595,7 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}))
             self._restore_path = None
 
         self._tools_injected = False
+        self._builtins_injected = False
 
     def inject_tools(self, tools: dict) -> None:
         """Inject tool functions into the sandbox.
@@ -636,8 +641,12 @@ from pathlib import Path
         self._tools_injected = True
 
     def inject_builtins(self) -> None:
-        """Inject built-in functions like submit()."""
+        """Inject built-in functions like emit() and patched print()."""
+        from agentlib.repl_agent import BUILTINS_CODE, SOCKET_SEND_OUTPUT_CODE
+
         self._ensure_session()
+        if getattr(self, '_builtins_injected', False):
+            return
 
         # Inject socket-based tool call helpers
         self._inject_code('''
@@ -670,16 +679,10 @@ def _recv_tool_response():
     return _pickle.loads(b''.join(chunks))
 ''')
 
-        # submit() function
-        self._inject_code('''
-def submit(result):
-    """Submit your final result and end the task."""
-    _send_tool_request(_json.dumps({
-        "tool": "__submit__",
-        "args": {"result": result}
-    }))
-    _recv_tool_response()  # Wait for ack
-''')
+        # Inject shared builtins (emit, patched print)
+        self._inject_code(SOCKET_SEND_OUTPUT_CODE)
+        self._inject_code(BUILTINS_CODE)
+        self._builtins_injected = True
 
     def _inject_code(self, code: str, timeout: float = 10.0) -> None:
         """Override to use socket transport."""
@@ -745,7 +748,7 @@ def submit(result):
                 _send_msg(self._conn, json.dumps({"result": repr(result)}))
 
     def send_ack(self) -> None:
-        """Send simple acknowledgment (for submit())."""
+        """Send simple acknowledgment (for emit())."""
         if self._conn is None:
             raise RuntimeError("No active session")
         _send_msg(self._conn, "ack")
@@ -859,6 +862,9 @@ class SandboxMixin:
 
         repl = self._sandbox_repl
 
+        # Inject builtins first so tools can use _send_output, _original_print, etc.
+        repl.inject_builtins()
+
         # Inject tools - check both _toolimpl and instance methods
         tools = {}
         for name, spec in self.toolspecs.items():
@@ -869,7 +875,6 @@ class SandboxMixin:
             tools[name] = (impl, spec)
 
         repl.inject_tools(tools)
-        repl.inject_builtins()
         
         # Inject startup code if defined
         if not getattr(self, '_repl_startup_injected', False):
@@ -891,32 +896,43 @@ class SandboxMixin:
         from agentlib.tools.subrepl import _split_into_statements, _format_echo
         from agentlib.agent import _CompleteException
 
-        statements = _split_into_statements(code)
+        # Split original code for echo, transform for execution
+        original_statements = _split_into_statements(code)
+        transformed_code = self._transform_toplevel_print(code)
+        transformed_statements = _split_into_statements(transformed_code)
+        # Pair original (for echo) with transformed (for exec)
+        statements = list(zip(original_statements, transformed_statements))
         if not statements:
             return "", False
 
         repl._ensure_session()
-        output_chunks = []
+        output_chunks = []  # List of (msg_type, chunk) tuples for entire turn
         any_executed = False
 
-        def stream(chunk):
-            output_chunks.append(chunk)
-            if hasattr(self, 'on_repl_chunk'):
-                self.on_repl_chunk(chunk)
+        # Per-statement tracking for on_statement_output hook
+        statement_chunks = []
 
-        for stmt in statements:
-            # Pre-validate syntax
+        def stream(chunk, msg_type="echo"):
+            output_chunks.append((msg_type, chunk))
+            statement_chunks.append((msg_type, chunk))
+            if hasattr(self, 'on_repl_chunk'):
+                self.on_repl_chunk(chunk, msg_type)
+
+        for original_stmt, exec_stmt in statements:
+            # Pre-validate syntax (use transformed for validation)
             try:
-                compile(stmt, '<repl>', 'exec')
+                compile(exec_stmt, '<repl>', 'exec')
             except SyntaxError as e:
-                stream(_format_echo(stmt))
-                stream(self._format_syntax_error(e))
+                stream(_format_echo(original_stmt), "echo")
+                stream(self._format_syntax_error(e), "error")
+                if hasattr(self, 'on_statement_output'):
+                    self.on_statement_output(statement_chunks)
                 break
 
-            # Valid syntax - echo and execute
+            # Valid syntax - echo original, execute transformed
             any_executed = True
-            stream(_format_echo(stmt))
-            repl.execute(stmt)
+            stream(_format_echo(original_stmt), "echo")
+            repl.execute(exec_stmt)
 
             # Poll loop for this statement
             statement_had_error = False
@@ -928,29 +944,37 @@ class SandboxMixin:
 
                     msg_type, msg_data = msg
 
-                    if msg_type == "output":
-                        stream(msg_data)
+                    if msg_type in ("output", "print", "emit", "read", "progress"):
+                        stream(msg_data, msg_type)
 
                     elif msg_type == "tool_request":
                         # Tool call from REPL
                         req = json.loads(msg_data)
                         self._handle_tool_request(repl, req)
                         if self.complete:
-                            # submit() was called - drain and return
+                            # emit(release=True) was called - drain and return
                             while True:
                                 drain_msg = repl.poll_output(timeout=0.1)
                                 if drain_msg is None:
                                     break
-                                if drain_msg[0] == "output":
-                                    stream(drain_msg[1])
+                                if drain_msg[0] in ("output", "print", "emit", "read", "progress"):
+                                    stream(drain_msg[1], drain_msg[0])
                                 elif drain_msg[0] == "done":
                                     break
                             repl._running = False
-                            return "".join(output_chunks), False
+                            output = "".join(chunk for _, chunk in output_chunks)
+                            return output, False, output_chunks
 
                     elif msg_type == "done":
                         repl._running = False
                         statement_had_error = msg_data
+                        # Drain any remaining output that arrived with "done"
+                        while True:
+                            drain = repl.poll_output(timeout=0.01)
+                            if drain is None:
+                                break
+                            if drain[0] in ("output", "print", "emit", "read", "progress"):
+                                stream(drain[1], drain[0])
                         break
 
             except KeyboardInterrupt:
@@ -960,20 +984,25 @@ class SandboxMixin:
                     drain_msg = repl.poll_output(timeout=0.5)
                     if drain_msg is None:
                         break
-                    if drain_msg[0] == "output":
-                        stream(drain_msg[1])
+                    if drain_msg[0] in ("output", "print", "emit", "read", "progress"):
+                        stream(drain_msg[1], drain_msg[0])
                     elif drain_msg[0] == "done":
                         break
                 repl._running = False
                 from agentlib.repl_agent import _InterruptedError
-                raise _InterruptedError("".join(output_chunks))
+                raise _InterruptedError("".join(chunk for _, chunk in output_chunks))
+
+            # Statement complete - call hook and reset per-statement tracking
+            if hasattr(self, 'on_statement_output'):
+                self.on_statement_output(statement_chunks)
+            statement_chunks.clear()  # Must use clear() to preserve closure reference
 
             if statement_had_error:
                 break
 
-        output = "".join(output_chunks)
+        output = "".join(chunk for _, chunk in output_chunks)
         is_pure_syntax_error = not any_executed and bool(output_chunks)
-        return output, is_pure_syntax_error
+        return output, is_pure_syntax_error, output_chunks
 
     def _handle_tool_request(self, repl: SandboxedToolREPL, req: dict) -> None:
         """Handle a tool request from the sandboxed REPL."""
@@ -995,9 +1024,12 @@ class SandboxMixin:
             
         args = {k: _deserialize(v) for k, v in args.items()}
 
-        if tool_name == '__submit__':
-            self._final_result = args.get('result')
-            self.complete = True
+        if tool_name == '__emit__':
+            value = args.get('value')
+            release = args.get('release', False)
+            self._final_result = value
+            if release:
+                self.complete = True
             repl.send_ack()
 
         elif tool_name:

@@ -26,7 +26,7 @@ the response IS Python code. Tools become callable functions in the REPL.
 Built-in Functions
 ------------------
 
-The REPL always has `submit(result)` available for returning the final answer.
+emit(value, release=False) - Emit output. release=True yields control.
 
 How It Works
 ------------
@@ -35,7 +35,7 @@ How It Works
 2. Code executes statement-by-statement in isolated subprocess
 3. Tool calls bridge back to main process via queues
 4. Output streams back to LLM as REPL feedback
-5. Loop continues until submit() is called
+5. Loop continues until emit(..., release=True) is called
 """
 
 from __future__ import annotations
@@ -68,6 +68,63 @@ from agentlib.tools.subrepl import (
     _split_into_statements,
 )
 from agentlib.tools.source_extract import extract_method_source as _extract_tool_source
+
+
+# =============================================================================
+# Shared REPL builtins code (used by both ToolREPL and SandboxedToolREPL)
+# =============================================================================
+# These functions are injected into the subprocess. They rely on transport-specific
+# implementations of _send_output() being injected first.
+
+BUILTINS_CODE = '''
+# Tagged print for top-level REPL output (normal print stays available for functions)
+def _print(*args, **kwargs):
+    """Print with output tagging for display control."""
+    import io
+    # If printing to a file, use original print
+    if kwargs.get('file') is not None:
+        return print(*args, **kwargs)
+    # Capture output and send tagged
+    buf = io.StringIO()
+    print(*args, **{**kwargs, 'file': buf})
+    _send_output("print", buf.getvalue())
+
+def emit(value, release=False):
+    """Emit a value to the output.
+
+    Args:
+        value: The value to emit.
+        release: If True, release control to the user (for questions or completion).
+                 If False (default), the value is emitted but execution continues.
+    """
+    # Use different message types: "emit" for release=True (shown at turn end),
+    # "progress" for release=False (shown inline immediately)
+    msg_type = "emit" if release else "progress"
+    _send_output(msg_type, str(value) + "\\n")
+    import json as _json
+    _send_tool_request(_json.dumps({
+        "tool": "__emit__",
+        "args": {"value": value, "release": release}
+    }))
+    _recv_tool_response()  # Wait for ack
+'''
+
+# Queue-based transport for ToolREPL
+QUEUE_TRANSPORT_CODE = '''
+def _send_output(msg_type, data):
+    _output_queue.put((msg_type, data))
+def _send_tool_request(msg):
+    _tool_request_queue.put(msg)
+def _recv_tool_response():
+    return _tool_response_queue.get()
+'''
+
+# Socket-based transport for SandboxedToolREPL (adds _send_output only;
+# _send_tool_request and _recv_tool_response are defined separately due to complexity)
+SOCKET_SEND_OUTPUT_CODE = '''
+def _send_output(msg_type, data):
+    _send_msg(_sock, (msg_type, data))
+'''
 
 
 class _StreamingWriter:
@@ -106,6 +163,7 @@ def _tool_worker_main(
     execute tools in the main process where the actual implementations live.
     """
     repl_locals: dict[str, Any] = {
+        '_output_queue': output_queue,
         '_tool_request_queue': tool_request_queue,
         '_tool_response_queue': tool_response_queue,
     }
@@ -224,6 +282,7 @@ class ToolREPL(SubREPL):
             self._worker.start()
             self._running = False
             self._tools_injected = False
+            self._builtins_injected = False
             self._cmd_seq = 0  # Reset sequence on new session
 
     def inject_tools(self, tools: dict[str, tuple[Callable, Any]]) -> None:
@@ -260,20 +319,13 @@ class ToolREPL(SubREPL):
         self._tools_injected = True
 
     def inject_builtins(self) -> None:
-        """Inject built-in functions like submit()."""
+        """Inject built-in functions like emit() and patched print()."""
         self._ensure_session()
-
-        # submit() - signals task completion
-        self._inject_code('''
-def submit(result):
-    """Submit your final result and end the task."""
-    import json as _json
-    _tool_request_queue.put(_json.dumps({
-        "tool": "__submit__",
-        "args": {"result": result}
-    }))
-    _tool_response_queue.get()  # Wait for ack
-''')
+        if getattr(self, '_builtins_injected', False):
+            return
+        self._inject_code(QUEUE_TRANSPORT_CODE)
+        self._inject_code(BUILTINS_CODE)
+        self._builtins_injected = True
 
     def _inject_code(self, code: str, timeout: float = 10.0) -> None:
         """Override to use queue directly and handle tool worker."""
@@ -326,7 +378,7 @@ def submit(result):
                 self._tool_response_queue.put(json.dumps({"result": repr(result)}))
 
     def send_ack(self) -> None:
-        """Send simple acknowledgment (for submit())."""
+        """Send simple acknowledgment (for emit())."""
         if self._tool_response_queue is None:
             raise RuntimeError("No active session")
         self._tool_response_queue.put("ack")
@@ -567,11 +619,11 @@ class REPLMixin:
     The model's response is passed directly to the REPL - no markdown
     code blocks, no extraction. The response IS the code.
 
-    Set `interactive = True` for CLI/chat agents to enable `respond(text)`
-    as a more natural alternative to `submit(result)`.
+    Use emit(value, release=False) to output values. Only emit(..., release=True)
+    releases control to the user.
     """
 
-    interactive: bool = False  # Set True to enable respond() function
+    interactive: bool = False  # Legacy flag, kept for compatibility
 
     def usermsg(self, content, **kwargs):
         """
@@ -579,7 +631,7 @@ class REPLMixin:
 
         When the last message was REPL output (from a previous turn), new user
         messages are appended to maintain the illusion of a continuous REPL
-        session. The message appears as if submitted via submit().
+        session. The message appears as if emitted via emit().
         """
         # Check if we should append to last REPL output
         if getattr(self, '_last_was_repl_output', False) and self.conversation.messages:
@@ -593,8 +645,8 @@ class REPLMixin:
             if not has_pending:
                 last_msg = self.conversation.messages[-1]
                 if last_msg.get("role") == "user":
-                    # Append as output of the previous submit() call
-                    # Add trailing \n since this simulates print() output from submit()
+                    # Append as output of the previous emit() call
+                    # Add trailing \n since this simulates print() output from emit()
                     prev = last_msg["content"]
                     sep = "" if prev.endswith("\n") else "\n"
                     last_msg["content"] = prev + sep + content + "\n"
@@ -621,12 +673,13 @@ class REPLMixin:
     def _get_tool_repl(self) -> ToolREPL:
         """Get or create the ToolREPL instance, with tools and startup code injected."""
         self._ensure_setup()
+        # Inject builtins first so tools can use _send_output, _original_print, etc.
+        self._tool_repl.inject_builtins()
         tools = {
             name: (self._toolimpl.get(name), spec)
             for name, spec in self.toolspecs.items()
         }
         self._tool_repl.inject_tools(tools)
-        self._tool_repl.inject_builtins()
         
         # Inject startup code if defined
         if not getattr(self, '_repl_startup_injected', False):
@@ -706,8 +759,6 @@ class REPLMixin:
             tool_list.append(tool_entry)
 
         tools_str = "\n".join(tool_list) if tool_list else "(no tools defined)"
-        if getattr(self, 'interactive', False):
-            tools_str += "\nrespond(text) - Send a message to the user."
 
         return f"""You are in a Python REPL. Respond with unescaped Python.
 
@@ -715,7 +766,7 @@ class REPLMixin:
 
 You have full access to Python. These additional functions are available:
 {tools_str}
-submit(result) - Submit your final answer.
+emit(value, release=False) - Emit output. release=True yields control.
 
 Call help(function_name) for parameter descriptions.
 """
@@ -725,25 +776,18 @@ Call help(function_name) for parameter descriptions.
         Main agent loop using REPL-first paradigm.
 
         The LLM writes Python code, we execute it, feed output back.
-        Loop continues until submit() is called or max_turns reached.
+        Loop continues until emit(release=True) is called or max_turns reached.
 
         Pure syntax errors (where no statements executed) are retried without
         polluting the conversation history - only successful attempts are committed.
         """
         self._ensure_setup()
-        repl = self._get_tool_repl()
-
-        # In interactive mode, add respond()
-        if getattr(self, 'interactive', False):
-            repl._inject_code('''
-def respond(text):
-    """Respond to the user."""
-    submit(text)
-''')
 
         self.complete = False
 
         for turn in range(max_turns):
+            # Get REPL each turn to handle session restart (re-injects tools if needed)
+            repl = self._get_tool_repl()
             messages = self.conversation._messages()
 
             # Fire execute hook once at start of turn (before any attempts)
@@ -762,13 +806,20 @@ def respond(text):
                     except KeyboardInterrupt:
                         # User interrupted LLM call - subprocess may also have received SIGINT
                         # Wait briefly for subprocess to handle signal, then drain
-                        while True:
-                            try:
-                                msg_type, _ = repl._output_queue.get(timeout=0.1)
-                                if msg_type == "done":
-                                    break  # Subprocess finished handling interrupt
-                            except Empty:
-                                break  # No pending output
+                        # Use poll_output if available (SandboxedToolREPL), else _output_queue (ToolREPL)
+                        if hasattr(repl, 'poll_output'):
+                            while True:
+                                msg = repl.poll_output(timeout=0.1)
+                                if msg is None or msg[0] == "done":
+                                    break
+                        elif hasattr(repl, '_output_queue'):
+                            while True:
+                                try:
+                                    msg_type, _ = repl._output_queue.get(timeout=0.1)
+                                    if msg_type == "done":
+                                        break
+                                except Empty:
+                                    break
                         raise _InterruptedError("")
 
                     content = resp.get('content', '').strip()
@@ -783,7 +834,7 @@ def respond(text):
                         if content.endswith("```"):
                             content = content[:-3].rstrip('\n')
 
-                    output, pure_syntax_error = self._execute_with_tool_handling(repl, content)
+                    output, pure_syntax_error, output_chunks = self._execute_with_tool_handling(repl, content)
 
                     if not pure_syntax_error:
                         break
@@ -820,7 +871,7 @@ def respond(text):
 
             # Fire output hook after successful execution
             if hasattr(self, 'on_repl_output'):
-                self.on_repl_output(output)
+                self.on_repl_output(output_chunks)
 
             # Commit successful response to conversation
             self.conversation.messages.append(resp)
@@ -864,6 +915,55 @@ def respond(text):
         lines.append(f'SyntaxError: {e.msg}')
         return '\n'.join(lines) + '\n'
 
+    def _transform_toplevel_print(self, code: str) -> str:
+        """Transform top-level print() calls to _print() for output tagging.
+
+        Only transforms print calls at module level, not inside function/class definitions.
+        This allows tools and user-defined functions to use normal print().
+        """
+        import ast
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return code  # Let the REPL handle syntax errors
+
+        class PrintTransformer(ast.NodeTransformer):
+            def __init__(self):
+                self.in_function = False
+
+            def visit_FunctionDef(self, node):
+                # Don't transform inside function bodies
+                old = self.in_function
+                self.in_function = True
+                self.generic_visit(node)
+                self.in_function = old
+                return node
+
+            def visit_AsyncFunctionDef(self, node):
+                return self.visit_FunctionDef(node)
+
+            def visit_ClassDef(self, node):
+                # Don't transform inside class bodies
+                old = self.in_function
+                self.in_function = True
+                self.generic_visit(node)
+                self.in_function = old
+                return node
+
+            def visit_Call(self, node):
+                self.generic_visit(node)
+                # Transform print() to _print() at top level only
+                if not self.in_function:
+                    if isinstance(node.func, ast.Name) and node.func.id == 'print':
+                        node.func.id = '_print'
+                return node
+
+        transformer = PrintTransformer()
+        new_tree = transformer.visit(tree)
+        ast.fix_missing_locations(new_tree)
+        return ast.unparse(new_tree)
+
     def _execute_with_tool_handling(self, repl: ToolREPL, code: str) -> tuple[str, bool]:
         """Execute code statement-by-statement, handling tool calls as they occur.
 
@@ -871,36 +971,47 @@ def respond(text):
             Tuple of (output, is_pure_syntax_error) where is_pure_syntax_error is True
             when no statements executed successfully (first statement had syntax error).
         """
-        statements = _split_into_statements(code)
+        # Split original code for echo, transform for execution
+        original_statements = _split_into_statements(code)
+        transformed_code = self._transform_toplevel_print(code)
+        transformed_statements = _split_into_statements(transformed_code)
+        # Pair original (for echo) with transformed (for exec)
+        statements = list(zip(original_statements, transformed_statements))
         if not statements:
             return "", False
 
         repl._ensure_session()
-        output_chunks = []
+        output_chunks = []  # List of (msg_type, chunk) tuples for entire turn
         any_executed = False
 
-        def stream(chunk):
-            output_chunks.append(chunk)
-            if hasattr(self, 'on_repl_chunk'):
-                self.on_repl_chunk(chunk)
+        # Per-statement tracking for on_statement_output hook
+        statement_chunks = []
 
-        for stmt in statements:
-            # Pre-validate syntax before echoing
+        def stream(chunk, msg_type="echo"):
+            output_chunks.append((msg_type, chunk))
+            statement_chunks.append((msg_type, chunk))
+            if hasattr(self, 'on_repl_chunk'):
+                self.on_repl_chunk(chunk, msg_type)
+
+        for original_stmt, exec_stmt in statements:
+            # Pre-validate syntax before echoing (use transformed for validation)
             try:
-                compile(stmt, '<repl>', 'exec')
+                compile(exec_stmt, '<repl>', 'exec')
             except SyntaxError as e:
-                # Echo the bad statement, show error, stop processing
-                stream(_format_echo(stmt))
-                stream(self._format_syntax_error(e))
+                # Echo the original statement, show error, stop processing
+                stream(_format_echo(original_stmt), "echo")
+                stream(self._format_syntax_error(e), "error")
+                if hasattr(self, 'on_statement_output'):
+                    self.on_statement_output(statement_chunks)
                 break
 
-            # Valid syntax - echo and execute
+            # Valid syntax - echo original, execute transformed
             any_executed = True
-            stream(_format_echo(stmt))
+            stream(_format_echo(original_stmt), "echo")
             repl._running = True
             repl._cmd_seq += 1
             current_seq = repl._cmd_seq
-            repl._cmd_queue.put((current_seq, stmt))
+            repl._cmd_queue.put((current_seq, exec_stmt))
 
             # Poll loop for this statement
             statement_had_error = False
@@ -911,12 +1022,12 @@ def respond(text):
                     if tool_req:
                         self._handle_tool_request(repl, tool_req)
                         if self.complete:
-                            # submit() was called - drain output and return
+                            # emit(release=True) was called - drain output and return
                             while True:
                                 try:
                                     msg_type, msg_data = repl._output_queue.get(timeout=0.1)
-                                    if msg_type == "output":
-                                        stream(msg_data)
+                                    if msg_type in ("output", "print", "emit", "read", "progress"):
+                                        stream(msg_data, msg_type)
                                     elif msg_type == "done":
                                         seq_id, _ = msg_data
                                         if seq_id == current_seq:
@@ -925,13 +1036,14 @@ def respond(text):
                                 except Empty:
                                     break
                             repl._running = False
-                            return "".join(output_chunks), False
+                            output = "".join(chunk for _, chunk in output_chunks)
+                            return output, False, output_chunks
 
                     # Check for output
                     try:
                         msg_type, msg_data = repl._output_queue.get(timeout=0.05)
-                        if msg_type == "output":
-                            stream(msg_data)
+                        if msg_type in ("output", "print", "emit", "read", "progress"):
+                            stream(msg_data, msg_type)
                         elif msg_type == "done":
                             seq_id, had_error = msg_data
                             if seq_id == current_seq:
@@ -946,17 +1058,22 @@ def respond(text):
                 # interrupt() drains and returns all output, so stream it immediately
                 interrupted_output = repl.interrupt()
                 if interrupted_output:
-                    stream(interrupted_output)
+                    stream(interrupted_output, "output")
                 repl._running = False
                 raise _InterruptedError()
+
+            # Statement complete - call hook and reset per-statement tracking
+            if hasattr(self, 'on_statement_output'):
+                self.on_statement_output(statement_chunks)
+            statement_chunks.clear()  # Must use clear() to preserve closure reference
 
             # Stop processing if this statement had a runtime error
             if statement_had_error:
                 break
 
-        output = "".join(output_chunks)
+        output = "".join(chunk for _, chunk in output_chunks)
         is_pure_syntax_error = not any_executed and bool(output_chunks)
-        return output, is_pure_syntax_error
+        return output, is_pure_syntax_error, output_chunks
 
     def _handle_tool_request(self, repl: ToolREPL, req: dict) -> None:
         """Handle a tool request from the REPL."""
@@ -976,9 +1093,12 @@ def respond(text):
             
         args = {k: _deserialize(v) for k, v in args.items()}
 
-        if tool_name == '__submit__':
-            self._final_result = args.get('result')
-            self.complete = True
+        if tool_name == '__emit__':
+            value = args.get('value')
+            release = args.get('release', False)
+            self._final_result = value
+            if release:
+                self.complete = True
             repl.send_ack()
 
         elif tool_name:

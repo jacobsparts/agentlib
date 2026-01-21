@@ -31,15 +31,17 @@ result = MyAgent().run("Find info about Python")
 2. LLM writes Python code as response
 3. Code executes statement-by-statement in isolated subprocess
 4. Output streams back to LLM as REPL feedback
-5. Loop continues until `submit(result)` is called
+5. Loop continues until `emit(..., release=True)` is called
 
 ## Built-in Functions
 
 | Function | Description |
 |----------|-------------|
-| `submit(result)` | Submit final answer, end task |
-| `respond(text)` | Alias for submit (when `interactive=True`) |
+| `emit(value, release=False)` | Output a value to the user. `release=True` yields control. |
 | `help(func)` | Get parameter descriptions for any tool |
+
+- `print()`: For your own inspection/debugging - output appears in your next turn
+- `emit()`: Deliberate output intended for the user - use `release=True` to yield control
 
 ## Defining Tools
 
@@ -64,19 +66,27 @@ LLM uses them as normal Python:
 data = read_file("config.json")
 processed = transform(data)
 save_file("output.json", processed)
-submit("Done processing config")
+emit("Done processing config", release=True)
 ```
 
 ## Interactive Mode
 
-For CLI/chat agents, enable `respond()` as a friendlier completion function:
+For CLI/chat agents, enable multi-turn autonomous work:
 
 ```python
 class ChatAgent(REPLAgent):
     model = 'google/gemini-2.5-flash'
     system = "You are a helpful assistant."
-    interactive = True  # Enables respond()
+    interactive = True  # Enables multi-turn autonomous workflow
 ```
+
+With `interactive=True`:
+- `emit("progress")` - output emitted, agent keeps working
+- `emit("result", release=True)` - release control to user
+- `emit("question?", release=True)` - ask user a question
+- `print()` - output visible to agent (and user) in next turn
+
+The agent controls the conversation until it explicitly releases with `release=True`.
 
 ## Configuration
 
@@ -84,7 +94,7 @@ class ChatAgent(REPLAgent):
 class MyAgent(REPLAgent):
     model = 'google/gemini-2.5-flash'
     system = "You are helpful."
-    interactive = False  # Enable respond() function (default: False)
+    interactive = False  # Legacy flag (default: False)
 ```
 
 ## Combining with Mixins
@@ -154,7 +164,7 @@ from agentlib import REPLAgent
 class AnalysisAgent(REPLAgent):
     model = 'google/gemini-2.5-flash'
     system = """You are a data analysis assistant.
-    Write Python to analyze data. Use submit() for final answers."""
+    Write Python to analyze data. Use emit(..., release=True) for final answers."""
 
     @REPLAgent.tool
     def load_csv(self, path: str = "Path to CSV"):
@@ -177,7 +187,7 @@ df.head()
 # Turn 2
 top = df.groupby('product')['revenue'].sum().idxmax()
 revenue = df.groupby('product')['revenue'].sum().max()
-submit(f"Top product: {top} with ${revenue:,.2f} revenue")
+emit(f"Top product: {top} with ${revenue:,.2f} revenue", release=True)
 ```
 
 ## Key Differences from BaseAgent
@@ -186,7 +196,7 @@ submit(f"Top product: {top} with ${revenue:,.2f} revenue")
 |--------|-----------|-----------|
 | LLM output | JSON tool calls | Python code |
 | Tool interface | Schema-validated | Python functions |
-| Completion | `self.respond()` | `submit()` |
+| Completion | `self.respond()` | `emit(..., release=True)` |
 | State | Instance variables | REPL + instance vars |
 | Syntax errors | Returned to LLM | Auto-retried |
 
@@ -195,6 +205,6 @@ submit(f"Top product: {top} with ${revenue:,.2f} revenue")
 - LLM response must be pure Python (no markdown blocks)
 - Variables persist across turns in the REPL
 - Tools return values directly to the REPL
-- Use `submit()` to end the task and return a result
+- Use `emit(..., release=True)` to release control to user
 - Syntax errors are retried automatically (up to 3 times)
 - Use context manager for cleanup: `with MyAgent() as agent:`

@@ -17,7 +17,7 @@ Example:
         result = agent.run("What's in the files?")
 
 The agent sees synthetic history like:
-    user: >>> submit("Please read these files to get up to speed before we continue: config.json, settings.yaml")
+    user: >>> emit("Please read these files to get up to speed before we continue: config.json, settings.yaml", release=True)
     Please read these files to get up to speed before we continue: config.json, settings.yaml
 
     assistant: read('config.json')
@@ -171,7 +171,7 @@ class REPLAttachmentMixin:
             else:
                 request_text = f"Please read these files to get up to speed before we continue: {', '.join(reads)}"
             # Format as REPL output to maintain the illusion
-            request_msg = f'>>> submit("{request_text}")\n{request_text}\n'
+            request_msg = f'>>> emit("{request_text}", release=True)\n{request_text}\n'
             result.append({"role": "user", "content": request_msg})
 
         assistant_msg, user_msg = self._render_batch(reads, redactions)

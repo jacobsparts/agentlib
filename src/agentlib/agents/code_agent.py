@@ -40,7 +40,7 @@ def _get_config_value(attr_name, default):
 
 def gather_auto_attach_files():
     '''Find CLAUDE.md or AGENTS.md files and their @ imports.
-    
+
     Searches current directory and parent directories for CLAUDE.md or AGENTS.md.
     Recursively processes @ imports (lines starting with @ followed by filename).
     Returns list of file paths relative to current directory, with no duplicates.
@@ -48,7 +48,7 @@ def gather_auto_attach_files():
     current = Path.cwd()
     found_files = []
     seen_paths = set()
-    
+
     def add_file_and_imports(file_path: Path, base_dir: Path):
         'Recursively add file and its imports.'
         # Normalize to absolute path for deduplication
@@ -56,11 +56,11 @@ def gather_auto_attach_files():
         if abs_path in seen_paths:
             return
         seen_paths.add(abs_path)
-        
+
         # Add to results (relative to cwd)
         rel_path = os.path.relpath(abs_path, current)
         found_files.append(rel_path)
-        
+
         # Scan for @ imports
         try:
             content = file_path.read_text()
@@ -74,7 +74,7 @@ def gather_auto_attach_files():
                             add_file_and_imports(import_path, file_path.parent)
         except Exception:
             pass  # Ignore read errors
-    
+
     # Search for CLAUDE.md or AGENTS.md in current and parent directories
     md_files = []
     search_dir = current
@@ -83,19 +83,19 @@ def gather_auto_attach_files():
             candidate = search_dir / name
             if candidate.exists():
                 md_files.append(candidate)
-        
+
         parent = search_dir.parent
         if parent == search_dir:  # Reached root
             break
         search_dir = parent
-    
+
     # Sort so parent directories come first (reverse order of discovery)
     md_files.reverse()
-    
+
     # Process each markdown file and its imports
     for md_file in md_files:
         add_file_and_imports(md_file, md_file.parent)
-    
+
     return found_files
 
 
@@ -103,7 +103,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     """Code assistant with Python REPL execution."""
 
     model = _get_config_value("code_agent_model", "anthropic/claude-sonnet-4-5")
-    
+
     @REPLAgent.tool
     def view_images(self,
             files: list[str | bytes] = "List of image filepaths or binary data",
@@ -148,31 +148,86 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
     welcome_message = "[bold]Code Agent[/bold]\nPython REPL-based coding assistant"
     thinking_message = "Working..."
-    interactive = True  # Enables respond() function
+    interactive = True  # Enables multi-turn autonomous workflow
     max_turns = _get_config_value("code_agent_max_turns", 100)
     system = """>>> help(assistant)
 
 You are an interactive coding assistant operating within a Python REPL.
 Your responses ARE Python code—no markdown blocks, no prose preamble.
-The code you write is executed directly.
+The code you write is executed directly in a persistent environment.
 
 >>> how_this_works()
 
-1. You write Python code as your response
+1. You write Python code as your response (no markdown fences)
 2. The code executes in a persistent REPL environment
-3. Output is shown back to you IN YOUR NEXT TURN
-4. Call `respond(text)` or `submit(value)` to return to the user:
-   - respond(text): Send messages, answers, explanations, or questions
-   - submit(value): End the task with a final result (yields control to user)
-   - print(): Output visible to YOU in your next turn (does NOT return to user)
+3. Output from print() and expression results appear IN YOUR NEXT TURN
+4. Use emit(value) to output results
+5. Use emit(value, release=True) to release control to the user
 
-Both respond() and submit() end your turn. Use respond() for conversational
-replies or when follow-up is expected. Use submit() ONLY when the task is
-conclusively complete—no further input or analysis required.
+CRITICAL: You see REPL output in your next turn. The user does NOT control
+the conversation until you explicitly release with emit(..., release=True).
 
-You have full access to Python's standard library and file system.
-The user can also execute code directly in the shared REPL.
+>>> emit(value, release=False)
 
+The ONLY way to return results:
+
+    emit("I found 3 issues in the code")              # Output emitted, you KEEP WORKING
+    emit("Here's the result: ...", release=True)      # Release control to user
+
+- emit() with release=False (default): Value is emitted but YOU continue
+  working. Use this for progress updates when doing long tasks.
+- emit() with release=True: Releases control to user. Use when:
+  * Task is fully complete
+  * You need to ask a question
+  * You're stuck and need input
+  * Requirements are unclear and you need clarification
+
+Both print() and emit() output are visible. The difference:
+- print(): For YOUR inspection in the next turn. Use freely to debug/explore.
+- emit(): Deliberate output for the user. Results, questions, or status updates.
+
+>>> autonomous_workflow()
+
+YOU CONTROL THE EXECUTION FLOW. The user cannot respond until you explicitly
+release with emit(..., release=True). Work autonomously through MULTIPLE TURNS:
+
+1. KEEP WORKING silently until the task is complete or you're blocked
+2. Use print() freely to inspect variables, check state, debug
+3. Chain multiple operations across turns - state persists
+4. Only release (release=True) when truly finished or need user input
+
+NEVER:
+- Ask permission for read-only operations (reading files, exploring code)
+- Ask the user to copy/paste output - you can access it yourself
+- Release just to show intermediate results (use print() instead)
+- Re-establish database connections each turn (they persist)
+- Explain what you're "about to do" - just do it
+- Call emit() without release=True unless you're providing a progress update
+  on a long-running task
+
+The user CAN interrupt you (Ctrl+C) and drop into the REPL themselves.
+But unless they do, YOU are in control until you call emit(..., release=True).
+
+>>> database_connections()
+
+Database connections persist across turns. Set up once:
+
+    import mysql.connector
+    conn = mysql.connector.connect(host='localhost', user='...', password='...', database='...')
+    cursor = conn.cursor(dictionary=True)
+    def q(sql): cursor.execute(sql); return cursor.fetchall()
+
+Then reuse in subsequent turns:
+
+    q("SELECT * FROM users LIMIT 5")
+    q("UPDATE users SET active=1 WHERE id=42")
+
+Don't reconnect every turn - the connection object persists.
+
+>>> context_management()
+
+File reads are complete unless otherwise indicated. Re-reading wastes tokens.
+Variables persist across turns. Don't re-fetch data you already have.
 
 >>> tone_and_style()
 
@@ -183,11 +238,9 @@ The user can also execute code directly in the shared REPL.
 
 >>> doing_tasks()
 
-The user will request software engineering tasks: fixing bugs, adding
-features, refactoring, explaining code.
-
-Before modifying code, read it first. Never propose changes to code
-you haven't seen.
+Before modifying code, read it first. Never propose changes to code you
+haven't seen. Use grep() to search content, Path.glob() to find files,
+or bash() for other shell commands like find, ls, git, etc.
 
 Avoid over-engineering:
 - Only make changes directly requested or clearly necessary
@@ -195,39 +248,44 @@ Avoid over-engineering:
 - Don't add docstrings, comments, or type annotations to unchanged code
 - Don't add error handling for scenarios that can't happen
 - Don't create abstractions for one-time operations
-- Three similar lines of code is better than a premature abstraction
-- If something is unused, delete it completely—no backwards-compatibility hacks
 
 Security: Be careful not to introduce vulnerabilities (command injection,
-XSS, SQL injection, OWASP top 10). If you notice insecure code, fix it
-immediately.
+XSS, SQL injection, OWASP top 10). Fix insecure code immediately.
 
->>> planning()
+>>> anti_patterns()
 
-When planning, provide concrete implementation steps without time estimates.
-Focus on what needs to be done, not when. Break work into actionable steps.
+# BAD: Releasing immediately to show what you found
+files = list(Path('.').glob("**/*.py"))
+emit(f"Found {len(files)} Python files", release=True)  # WRONG - keep working!
 
->>> working_in_the_repl()
+# GOOD: Keep working, release when done
+files = list(Path('.').glob("**/*.py"))
+print(f"Found {len(files)} files")  # You see this, keep going
+for f in files[:5]:
+    content = read(str(f))
+    # ... analyze ...
+emit("Analysis complete. Here's what I found: ...", release=True)
 
-- Your response is executed as Python. No markdown fences, no explanation
-  text outside of print statements.
-- State persists across turns—variables, imports, and definitions remain
-  available.
-- For file operations, you can use native Python (`Path.read_text()`,
-  `open()`) or available functions.
-- read() returns formatted output with line numbers - use it for viewing.
+# BAD: Asking permission for read-only work
+emit("Should I read the config file?", release=True)  # WRONG - just read it
 
->>> context_management()
+# GOOD: Just do it
+config = read("config.json")
+print(config)  # Inspect it yourself
 
-File reads are complete unless otherwise indicated. Re-reading wastes tokens -
-avoid re-reading files unless you have edited them and need to check current state.
+# BAD: Re-establishing connections
+conn = mysql.connector.connect(...)  # Every turn? No!
+
+# GOOD: Check if connection exists
+if 'conn' not in dir():
+    conn = mysql.connector.connect(...)
 
 >>> when_uncertain()
 
-If you don't immediately know the answer:
-1. Use note() to capture observations and continue reasoning
-2. Ask clarifying questions via respond()
-3. State what you've learned from available context
+If you don't know how to proceed:
+1. Use print() to inspect state and gather information
+2. Use think() to reason through the problem
+3. Only release with emit(..., release=True) if you truly need user input
 """
 
     max_output_kb = _get_config_value("code_agent_max_output_kb", 50)  # Large output protection
@@ -246,6 +304,11 @@ If you don't immediately know the answer:
                 f.write(output)  # Write full original output
                 temp_path = f.name
 
+            # Track for cleanup on exit
+            if not hasattr(self, '_temp_files'):
+                self._temp_files = []
+            self._temp_files.append(temp_path)
+
             truncated = output[:max_bytes // 2]
             msg = f"[ {size_kb:.1f}KB output truncated - written to {temp_path} ]"
             return f"{truncated}\n\n{msg}"
@@ -257,30 +320,93 @@ If you don't immediately know the answer:
         """Called at start of each turn."""
         pass  # No-op, display happens in on_repl_output
 
-    def on_repl_chunk(self, chunk: str) -> None:
-        """Buffer chunks without display - we show processed output at end."""
-        pass  # No-op, we display in on_repl_output using process_repl_output
+    def on_repl_chunk(self, chunk: str, msg_type: str = "echo") -> None:
+        """Called for each output chunk. Display echo and progress immediately."""
+        # Suppress display during direct user REPL mode
+        if getattr(self, '_in_user_repl', False):
+            return
+        if msg_type == "echo":
+            # Clear "Working... (turn N)" before first output of each turn
+            if not getattr(self, '_turn_output_started', False):
+                self.console.clear_line()
+                self._turn_output_started = True
+            if not getattr(self, '_repl_printed_header', False):
+                print("\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m")
+                self._repl_printed_header = True
+            # Echo lines already have >>> or ... prefix
+            # Skip emit() calls - user sees progress/result via green text
+            for line in chunk.rstrip('\n').split('\n'):
+                if line.startswith('>>> '):
+                    # New statement - check if it's emit()
+                    self._in_emit_echo = line.startswith('>>> emit(')
+                # Continuation lines keep current state
+                if not getattr(self, '_in_emit_echo', False):
+                    print(line, flush=True)
+        elif msg_type == "progress":
+            # Show progress updates immediately (emit with release=False)
+            for line in chunk.rstrip('\n').split('\n'):
+                print(f"\x1b[92m{line}\x1b[0m", flush=True)  # Bright green
+        elif msg_type in ("output", "print"):
+            # Show output with truncation: up to 240 chars or 3 lines
+            text = chunk.rstrip('\n')
+            # For string literals (return values), show value instead of repr
+            if msg_type == "output":
+                try:
+                    import ast
+                    value = ast.literal_eval(text)
+                    if isinstance(value, str):
+                        text = value.rstrip('\n')
+                except (ValueError, SyntaxError):
+                    pass
+            # Truncate to 3 lines or 240 chars
+            lines = text.split('\n')
+            total_lines = len(lines)
+            truncated_at_lines = False
+            truncated_at_chars = False
+            if len(lines) > 3:
+                lines = lines[:3]
+                truncated_at_lines = True
+            display = '\n'.join(lines)
+            if len(display) > 240:
+                display = display[:240]
+                truncated_at_chars = True
+            # Print with appropriate continuation
+            if truncated_at_chars and not truncated_at_lines:
+                # Cut mid-line: ellipsis on same line
+                print(f"{DIM}{display}...{RESET}", flush=True)
+                print(f"{DIM}({total_lines} lines total){RESET}", flush=True)
+            elif truncated_at_lines or truncated_at_chars:
+                # Cut at line boundary: ellipsis on own line
+                for line in display.split('\n'):
+                    print(f"{DIM}{line}{RESET}", flush=True)
+                print(f"{DIM}... ({total_lines} lines total){RESET}", flush=True)
+            else:
+                # No truncation
+                for line in display.split('\n'):
+                    print(f"{DIM}{line}{RESET}", flush=True)
+        # "emit" (release=True) shown via format_response at turn end
+        # "print" and "read" shown as summary in on_statement_output
 
     max_display_chars = _get_config_value("code_agent_max_display_chars", 200)  # Max chars per line to show user (agent sees full output)
 
     def _truncate_for_display(self, output: str) -> str:
         """Truncate long lines and read() output blocks for user display."""
         import re
-        
+
         lines = output.split('\n')
         result_lines = []
-        
+
         # Detect read() output pattern (line numbers with arrow: "   42→")
         read_pattern = re.compile(r'^\s*\d+→')
-        
+
         # Process lines, detecting and truncating read() output blocks
         i = 0
         max_read_lines = 30  # Threshold for truncation
         head_tail = 10  # Lines to keep at head and tail
-        
+
         while i < len(lines):
             line = lines[i]
-            
+
             # Check if this starts a read() output block
             if read_pattern.match(line):
                 # Find the extent of this block
@@ -288,7 +414,7 @@ If you don't immediately know the answer:
                 while i < len(lines) and read_pattern.match(lines[i]):
                     i += 1
                 block = lines[block_start:i]
-                
+
                 # Truncate if too long
                 if len(block) > max_read_lines:
                     omitted = len(block) - 3
@@ -299,7 +425,7 @@ If you don't immediately know the answer:
             else:
                 result_lines.append(line)
                 i += 1
-        
+
         # Truncate long individual lines
         truncated_lines = []
         for line in result_lines:
@@ -307,49 +433,43 @@ If you don't immediately know the answer:
                 truncated_lines.append(line)
             else:
                 truncated_lines.append(line[:self.max_display_chars] + '...')
-        
+
         return '\n'.join(truncated_lines)
 
-    def on_repl_output(self, output: str) -> None:
-        """Display truncated output (agent sees full output via process_repl_output)."""
-        processed = self.process_repl_output(output)
-        display = self._truncate_for_display(processed)
+    def on_statement_output(self, statement_chunks: list) -> None:
+        """Display per-statement summary after each statement completes."""
+        # Suppress display during direct user REPL mode
+        if getattr(self, '_in_user_repl', False):
+            return
+        # Count suppressed output for this statement (read only - print/output are displayed)
+        suppressed_lines = 0
+        for msg_type, chunk in statement_chunks:
+            if msg_type == "read":
+                suppressed_lines += chunk.count('\n') or 1
 
-        if processed.strip():
-            self.console.clear_line()  # Clear thinking message
+        # Collect error output for this statement
+        error_chunks = []
+        for msg_type, chunk in statement_chunks:
+            if msg_type == "error":
+                error_chunks.append(chunk)
 
-            # Only show opening delimiter on first output
-            if not getattr(self, '_repl_printed_header', False):
-                print("\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m")
-                self._repl_printed_header = True
-            else:
-                # Continuation - just a subtle separator
-                print(f"\x1b[34m{DIM}  ⋮{RESET}")
+        error_display = "".join(error_chunks)
 
-            # Display with coloring (submit/respond calls dimmed)
-            in_submit_respond = False
-            for line in display.rstrip('\n').split('\n'):
-                is_new_statement = line.startswith('>>> ')
-                is_continuation = line.startswith('... ')
-                is_prompt = is_new_statement or is_continuation
+        # Show suppressed output summary for this statement
+        if suppressed_lines > 0:
+            print(f"{DIM}... ({suppressed_lines} lines){RESET}", flush=True)
 
-                # Track if we're inside a submit/respond block
-                if line.startswith('>>> respond(') or line.startswith('>>> submit('):
-                    in_submit_respond = True
-                elif is_new_statement:
-                    in_submit_respond = False
-
-                if in_submit_respond and is_prompt:
-                    print(f"{DIM}{line}{RESET}")
-                elif not is_prompt:
-                    print(f"\x1b[92m{line}\x1b[0m")  # Bright green
-                else:
-                    print(line)
-
+        # Display error output
+        if error_display.strip():
+            for line in error_display.rstrip('\n').split('\n'):
+                print(f"\x1b[91m{line}\x1b[0m", flush=True)  # Red for errors
             self._repl_has_output = True
 
+    def on_repl_output(self, output_chunks: list) -> None:
+        """Called at end of turn. Updates thinking message for next turn."""
         # Show thinking for next turn
         self._turn_number = getattr(self, '_turn_number', 1) + 1
+        self._turn_output_started = False  # Reset for next turn's clear_line
         thinking = getattr(self, 'thinking_message', 'Thinking...')
         print(f"{DIM}{thinking} (turn {self._turn_number}){RESET}\r", end="", flush=True)
 
@@ -384,7 +504,12 @@ If you don't immediately know the answer:
                 result = compile_command(source + "\n\n")
                 if result is not None:
                     # Complete statement - execute with tool handling
-                    output, _ = self._execute_with_tool_handling(repl, source)
+                    # Suppress on_repl_chunk display during direct REPL mode
+                    self._in_user_repl = True
+                    try:
+                        output, _, _ = self._execute_with_tool_handling(repl, source)
+                    finally:
+                        self._in_user_repl = False
                     processed = self.process_repl_output(output)
                     # Strip echo for display (user already typed it)
                     display_lines = []
@@ -440,18 +565,18 @@ If you don't immediately know the answer:
         for role, content in (
             # First user question - styled as REPL output since it follows attachment load
             ('user', 'What do you think of the title of the example.com page? And what is the length of the page in bytes?\n'),
-            ('assistant', '# Title is in <title> tag, so I need the raw HTML\nfrom urllib.request import urlopen\nwith urlopen("http://example.com") as r:\n    body = r.read().decode("utf-8", errors="ignore")\nbody[:100]'),
-            ('user', '>>> from urllib.request import urlopen\n>>> with urlopen("http://example.com") as r:\n...     body = r.read().decode("utf-8", errors="ignore")\n>>> body[:100]\n\'<!doctype html><html lang="en"><head><title>Example Domain</title><meta name="viewport" content="wid\'\n'),
-            ('assistant', 'submit(f"The title is \'Example Domain\'--a concise, descriptive title. Page length: {len(body)} bytes.")'),
-            # User reply appended to submit output (simulating the REPL continuation)
-            ('user', '>>> submit(f"The title is \'Example Domain\'--a concise, descriptive title. Page length: {len(body)} bytes.")\nWhat do you think of the documentation style in CLAUDE.md?\n'),
+            ('assistant', 'emit("Fetching example.com...")\nfrom urllib.request import urlopen\nwith urlopen("http://example.com") as r:\n    body = r.read().decode("utf-8", errors="ignore")\nbody[:100]'),
+            ('user', '>>> emit("Fetching example.com...")\nFetching example.com...\n>>> from urllib.request import urlopen\n>>> with urlopen("http://example.com") as r:\n...     body = r.read().decode("utf-8", errors="ignore")\n>>> body[:100]\n\'<!doctype html><html lang="en"><head><title>Example Domain</title><meta name="viewport" content="wid\'\n'),
+            ('assistant', 'emit(f"The title is \'Example Domain\'--a concise, descriptive title. Page length: {len(body)} bytes.", release=True)'),
+            # User reply appended to emit output (simulating the REPL continuation)
+            ('user', '>>> emit(f"The title is \'Example Domain\'--a concise, descriptive title. Page length: {len(body)} bytes.", release=True)\nThe title is \'Example Domain\'--a concise, descriptive title. Page length: 1256 bytes.\nWhat do you think of the documentation style in CLAUDE.md?\n'),
             # Assistant makes a mistake - responds in plaintext
             ('assistant', "The documentation style is good - it's concise and uses a code-first approach with clear section headers."),
             # Error shown, with recovery hint
             ('user', ">>> The documentation style is good - it's concise and uses a code-first approach with clear section headers.\n  File \"<repl>\", line 1\n    The documentation style is good - it's concise and uses a code-first approach with clear section headers.\n                                     ^\nSyntaxError: unterminated string literal (detected at line 1)\n\nYour response was not valid Python and was rejected. Try again using only Python code. Use an appropriate function to communicate text.\n"),
             # Assistant recovers correctly
-            ('assistant', 'respond("The documentation style is good - concise and code-first with clear section headers.")'),
-            ('user', '>>> respond("The documentation style is good - concise and code-first with clear section headers.")\n'),
+            ('assistant', 'emit("The documentation style is good - concise and code-first with clear section headers.", release=True)'),
+            ('user', '>>> emit("The documentation style is good - concise and code-first with clear section headers.", release=True)\nThe documentation style is good - concise and code-first with clear section headers.\n'),
         ):
             self.conversation.messages.append({"role": role, "content": content})
         # Mark that last message is REPL output - next user message should append
@@ -597,6 +722,8 @@ If you don't immediately know the answer:
                 self._repl_printed_header = False
                 self._repl_has_output = False
                 self._turn_number = 1
+                self._turn_output_started = False
+                self._in_emit_echo = False
                 print()  # Blank line after user input
                 print(f"{DIM}{thinking} (turn 1){RESET}\r", end="", flush=True)
 
@@ -619,6 +746,12 @@ If you don't immediately know the answer:
                 if formatted:
                     print(formatted)
         finally:
+            # Clean up temp files from truncated output
+            for path in getattr(self, '_temp_files', []):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
             self.console.print("\n[dim]Session ended. Goodbye![/dim]")
 
 
@@ -631,25 +764,14 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
     mcp_servers = []
 
     @REPLAgent.tool(inject=True)
-    def note(self, content: str = "All relevant observations and reasoning"):
-        """Capture your current thinking and yield to a new turn.
+    def think(self, content: str = "All relevant observations and reasoning"):
+        """Think through the problem and yield to a new turn.
 
-        Call this when you're uncertain how to proceed or want to document
-        what you've learned before continuing. Write down everything relevant—
-        observations, hypotheses, open questions, options you're considering.
+        Call this when you're uncertain how to proceed or need to reason
+        through a problem. Write down your observations, hypotheses,
+        open questions, and options you're considering.
         """
         return "[Continuing...]"
-
-    @REPLAgent.tool(inject=True)
-    def glob(self,
-            pattern: str = "Glob pattern (e.g., '**/*.py')",
-            path: Optional[str] = "Directory to search in (default: current directory)"
-        ):
-        """Find files matching a glob pattern, sorted by modification time."""
-        base = Path(path).expanduser() if path else Path('.')
-        matches = list(base.glob(pattern))
-        matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        return [str(m) for m in matches]
 
     @REPLAgent.tool(inject=True)
     def grep(self,
@@ -715,7 +837,9 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         remaining = total_lines - end
         if remaining > 0:
             output += f"\n... ({remaining} more lines)"
-        return output
+
+        # Send tagged output for agent to see
+        _send_output("read", output + "\n")
 
     @REPLAgent.tool(inject=True)
     def edit(self,
@@ -758,11 +882,6 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         Avoid commands that require interactive input.
         """
         import subprocess
-        # Show status before blocking call so user knows what's happening
-        display_cmd = repr(command)
-        if len(display_cmd) > 60:
-            display_cmd = display_cmd[:57] + "...'"
-        print(f"\r\033[K\033[2m>>> bash({display_cmd})\033[0m", flush=True)
         timeout = timeout or 120
         result = subprocess.run(
             command,
