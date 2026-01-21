@@ -262,8 +262,8 @@ class CLIMixin:
                 # Send to agent
                 self.usermsg(user_input)
 
-                # Show thinking indicator
-                print(f"{DIM}{thinking}{RESET}", end="", flush=True)
+                # Show thinking indicator (cursor left at start so output overwrites)
+                print(f"{DIM}{thinking}{RESET}\r", end="", flush=True)
 
                 # Run agent loop (may be interrupted by Ctrl+C)
                 try:

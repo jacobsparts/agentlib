@@ -351,7 +351,7 @@ If you don't immediately know the answer:
         # Show thinking for next turn
         self._turn_number = getattr(self, '_turn_number', 1) + 1
         thinking = getattr(self, 'thinking_message', 'Thinking...')
-        print(f"{DIM}{thinking} (turn {self._turn_number}){RESET}", end="", flush=True)
+        print(f"{DIM}{thinking} (turn {self._turn_number}){RESET}\r", end="", flush=True)
 
     def user_repl_session(self, history):
         """Drop into the REPL for direct user interaction."""
@@ -525,6 +525,7 @@ If you don't immediately know the answer:
                     filename = user_input.strip()[6:].strip()
                     if filename:
                         self.load_session(filename)
+                        synth = False
                     continue
 
                 if user_input.strip().startswith("/attach "):
@@ -597,7 +598,7 @@ If you don't immediately know the answer:
                 self._repl_has_output = False
                 self._turn_number = 1
                 print()  # Blank line after user input
-                print(f"{DIM}{thinking} (turn 1){RESET}", end="", flush=True)
+                print(f"{DIM}{thinking} (turn 1){RESET}\r", end="", flush=True)
 
                 try:
                     response = self.run_loop(max_turns=max_turns)
