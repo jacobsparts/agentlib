@@ -330,7 +330,9 @@ If you don't know how to proceed:
             # but defer header printing until we know we have visible content
             if not getattr(self, '_turn_output_started', False):
                 self._turn_output_started = True
-                self._header_pending = True
+                # Only set header pending if we haven't already printed it this interaction
+                if not getattr(self, '_repl_printed_header', False):
+                    self._header_pending = True
             # Echo lines already have >>> or ... prefix
             # Skip emit() calls - user sees progress/result via green text
             for line in chunk.rstrip('\n').split('\n'):
@@ -890,27 +892,148 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
     @REPLAgent.tool(inject=True)
     def bash(self,
             command: str = "The command to execute",
-            timeout: Optional[int] = "Timeout in seconds (default: 120)"
+            timeout: Optional[int] = "Timeout in seconds (default: 120)",
+            bg: bool = "Run in background (returns BashProcess object)"
         ):
-        """Execute a bash command and return output.
+        """Execute a bash command.
 
-        Use for terminal operations like git, npm, docker, etc.
-        Stdout and stderr are combined in the output.
-        Avoid commands that require interactive input.
+        Returns string output if successful within timeout.
+        Returns BashProcess object if bg=True or if command times out.
+        
+        The BashProcess object allows interaction (read/write/kill) and 
+        is automatically registered in global `_bash_procs` for recovery.
         """
         import subprocess
-        timeout = timeout or 120
-        result = subprocess.run(
+        import os
+        import fcntl
+        import signal
+        import time
+
+        # Initialize global registry if missing
+        if '_bash_procs' not in globals():
+            globals()['_bash_procs'] = {}
+
+        class BashProcess:
+            def __init__(self, popen, command):
+                self.proc = popen
+                self.command = command
+                self.pid = popen.pid
+                self._register()
+                self._set_nonblocking(self.proc.stdout)
+            
+            def _register(self):
+                globals()['_bash_procs'][self.pid] = self
+
+            def _set_nonblocking(self, f):
+                if f:
+                    fd = f.fileno()
+                    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
+            def read(self, timeout=120):
+                """Read output.
+                
+                If timeout is provided (seconds), block until process completes or timeout expires,
+                accumulating output.
+                If timeout is None, return currently available output immediately (non-blocking).
+                """
+                output = []
+                start = time.time()
+                
+                # Helper to read all available
+                def _read_chunk():
+                    found_any = False
+                    while True:
+                        try:
+                            chunk = self.proc.stdout.read(4096)
+                            if not chunk:
+                                break
+                            output.append(chunk)
+                            found_any = True
+                        except Exception:
+                            break
+                    return found_any
+
+                if timeout is None:
+                    _read_chunk()
+                    return b"".join(output).decode('utf-8', errors='replace')
+                
+                # With timeout: loop until done or timeout
+                while True:
+                    _read_chunk()
+                    
+                    if self.proc.poll() is not None:
+                        # Finished, ensure we get everything
+                        while _read_chunk(): pass
+                        break
+                        
+                    if time.time() - start > timeout:
+                        break
+                        
+                    time.sleep(0.01)
+                
+                return b"".join(output).decode('utf-8', errors='replace')
+
+            def write(self, text):
+                """Write text to stdin."""
+                if self.proc.stdin:
+                    self.proc.stdin.write(text.encode())
+                    self.proc.stdin.flush()
+            
+            def kill(self):
+                """Kill the process group."""
+                try:
+                    os.killpg(self.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                return f"Sent SIGKILL to process group {self.pid}"
+
+            def wait(self, timeout=None):
+                """Wait for process to exit."""
+                try:
+                    self.proc.wait(timeout=timeout)
+                    return True
+                except subprocess.TimeoutExpired:
+                    return False
+
+            @property
+            def returncode(self):
+                return self.proc.poll()
+
+            def __repr__(self):
+                status = "running" if self.returncode is None else f"exited code={self.returncode}"
+                return f"[BashProcess pid={self.pid} status={status} cmd={self.command!r} (global object _bash_procs[{self.pid}])]"
+
+        # Start process
+        # start_new_session=True creates a new process group, so we can kill the whole tree
+        proc = subprocess.Popen(
             command,
             shell=True,
-            text=True,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout
+            stderr=subprocess.STDOUT,  # Combine stderr into stdout
+            start_new_session=True
         )
-        if result.returncode != 0:
-            return f"[Exit code {result.returncode}]\n{result.stdout}"
-        return result.stdout
+        
+        bp = BashProcess(proc, command)
+
+        # Immediate return if background requested
+        if bg:
+            return bp
+
+        # Wait for completion or timeout
+        timeout = timeout or 120
+        
+        output = bp.read(timeout=timeout)
+        
+        if bp.returncode is None:
+             # Timeout occurred
+             return bp
+        
+        if bp.returncode != 0:
+            return f"[Exit code {bp.returncode}]\n{output}"
+        
+        return output.strip()
 
 
 def main():
