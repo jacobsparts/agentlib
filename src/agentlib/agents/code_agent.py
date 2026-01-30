@@ -335,11 +335,46 @@ If you don't know how to proceed:
                     self._header_pending = True
             # Echo lines already have >>> or ... prefix
             # Skip emit() calls - user sees progress/result via green text
+            # Buffer print() calls - decide display based on output truncation
             for line in chunk.rstrip('\n').split('\n'):
                 if line.startswith('>>> '):
-                    # New statement - check if it's emit()
+                    # New statement starting - flush any pending print buffer first
+                    # (handles print() with no output or empty output)
+                    if getattr(self, '_print_echo_buffer', []):
+                        # No output came, show the echo
+                        for echo_line in self._print_echo_buffer:
+                            if getattr(self, '_header_pending', False):
+                                header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
+                                print(f"\x1b[1G\x1b[K{header}")
+                                self._header_pending = False
+                                self._repl_printed_header = True
+                            print(echo_line, flush=True)
+                        self._print_echo_buffer = []
+                        self._in_print_echo = False
+                    # New statement - check if it's emit() or print()
                     self._in_emit_echo = line.startswith('>>> emit(')
-                # Continuation lines keep current state
+                    if line.startswith('>>> print('):
+                        self._in_print_echo = True
+                        self._print_echo_buffer = [line]
+                        # Check if argument is a variable (not a string literal)
+                        # String literals start with quotes after print(
+                        arg_start = line[10:].lstrip()
+                        self._print_uses_variable = not (
+                            arg_start.startswith('"') or
+                            arg_start.startswith("'") or
+                            arg_start.startswith('f"') or
+                            arg_start.startswith("f'") or
+                            arg_start.startswith('r"') or
+                            arg_start.startswith("r'")
+                        )
+                        continue
+                    else:
+                        self._in_print_echo = False
+                # Buffer continuation lines for print()
+                if getattr(self, '_in_print_echo', False):
+                    self._print_echo_buffer.append(line)
+                    continue
+                # Skip emit() echo
                 if not getattr(self, '_in_emit_echo', False):
                     # We have visible content - print header first if pending
                     if getattr(self, '_header_pending', False):
@@ -388,18 +423,35 @@ If you don't know how to proceed:
             if len(display) > 240:
                 display = display[:240]
                 truncated_at_chars = True
+            is_truncated = truncated_at_lines or truncated_at_chars
+            # For print(): show echo only if truncated or uses a variable
+            is_print_output = msg_type == "print"
+            print_echo_buffer = getattr(self, '_print_echo_buffer', [])
+            print_uses_variable = getattr(self, '_print_uses_variable', False)
+            if is_print_output and print_echo_buffer:
+                if is_truncated or print_uses_variable:
+                    # Show the buffered echo
+                    for echo_line in print_echo_buffer:
+                        print(echo_line, flush=True)
+                # Clear the buffer
+                self._print_echo_buffer = []
+                self._in_print_echo = False
             # Print with appropriate continuation
             if truncated_at_chars and not truncated_at_lines:
                 # Cut mid-line: ellipsis on same line
                 print(f"{DIM}{display}...{RESET}", flush=True)
                 print(f"{DIM}({total_lines} lines total){RESET}", flush=True)
-            elif truncated_at_lines or truncated_at_chars:
+            elif is_truncated:
                 # Cut at line boundary: ellipsis on own line
                 for line in display.split('\n'):
                     print(f"{DIM}{line}{RESET}", flush=True)
                 print(f"{DIM}... ({total_lines} lines total){RESET}", flush=True)
+            elif is_print_output:
+                # No truncation for print(): show in yellow, echo already handled
+                for line in display.split('\n'):
+                    print(f"\x1b[33m{line}\x1b[0m", flush=True)
             else:
-                # No truncation
+                # No truncation for expression output: show in dim
                 for line in display.split('\n'):
                     print(f"{DIM}{line}{RESET}", flush=True)
         # "emit" (release=True) shown via format_response at turn end
