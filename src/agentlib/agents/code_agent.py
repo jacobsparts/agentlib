@@ -252,6 +252,37 @@ Avoid over-engineering:
 Security: Be careful not to introduce vulnerabilities (command injection,
 XSS, SQL injection, OWASP top 10). Fix insecure code immediately.
 
+>>> file_editing()
+
+Two methods for editing files:
+
+edit(file_path, old_string, new_string, replace_all=False)
+    Replace exact string matches.
+    - old_string must match exactly (whitespace, indentation)
+    - Fails if not found or multiple matches (unless replace_all=True)
+
+apply_patch(patch)
+    Diff-like format with context lines.
+    - Context lines must match file content exactly
+    - Use ~3 lines of context to locate the change position
+    - Batch multiple changes across files in one call
+    - Add/Update/Delete files
+
+    *** Begin Patch
+    *** Update File: path/to/file.py
+    @@ class MyClass (optional anchor)
+     context line
+    -old line
+    +new line
+     context line
+    *** Add File: new_file.py
+    +content
+    *** Delete File: obsolete.py
+    *** End Patch
+
+    Prefixes: space=context, -=remove, +=add
+    Use @@ with function/class if context isn't unique
+
 >>> anti_patterns()
 
 # BAD: Releasing immediately to show what you found
@@ -358,8 +389,10 @@ If you don't know how to proceed:
                         self._print_echo_buffer = [line]
                         # Check if argument is a variable (not a string literal)
                         # String literals start with quotes after print(
+                        # Bare print() is treated like a string literal
                         arg_start = line[10:].lstrip()
                         self._print_uses_variable = not (
+                            arg_start.startswith(')') or  # print()
                             arg_start.startswith('"') or
                             arg_start.startswith("'") or
                             arg_start.startswith('f"') or
@@ -942,6 +975,14 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         return "Edit applied."
 
     @REPLAgent.tool(inject=True)
+    def apply_patch(self,
+            patch: str = "Patch text in apply_patch format"
+        ):
+        """Apply a patch to add, update, or delete files."""
+        from agentlib.tools.apply_patch import process_patch
+        return process_patch(patch)
+
+    @REPLAgent.tool(inject=True)
     def bash(self,
             command: str = "The command to execute",
             timeout: Optional[int] = "Timeout in seconds (default: 120)",
@@ -961,15 +1002,28 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         import signal
         import time
 
-        # Initialize global registry if missing
+        # Initialize global registry and atexit handler if missing
         if '_bash_procs' not in globals():
             globals()['_bash_procs'] = {}
 
+            # Register atexit handler to kill orphaned processes on Python exit
+            import atexit
+            def _cleanup_bash_procs():
+                for pid, bp in list(globals().get('_bash_procs', {}).items()):
+                    if bp.returncode is None:
+                        try:
+                            os.killpg(pid, signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError):
+                            pass
+            atexit.register(_cleanup_bash_procs)
+
         class BashProcess:
-            def __init__(self, popen, command):
+            def __init__(self, popen, command, timeout=None):
                 self.proc = popen
                 self.command = command
                 self.pid = popen.pid
+                self.timeout = timeout  # None or number
+                self._output = ""
                 self._register()
                 self._set_nonblocking(self.proc.stdout)
             
@@ -982,13 +1036,14 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                     fl = fcntl.fcntl(fd, fcntl.F_GETFL)
                     fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
-            def read(self, timeout=120):
+            def read(self, timeout=-1):
                 """Read output.
-                
-                If timeout is provided (seconds), block until process completes or timeout expires,
-                accumulating output.
-                If timeout is None, return currently available output immediately (non-blocking).
+
+                Blocks until process completes or timeout expires.
+                Default: uses self.timeout if set, else 120s.
                 """
+                if timeout == -1:
+                    timeout = self.timeout if self.timeout is not None else 120
                 output = []
                 start = time.time()
                 
@@ -1008,23 +1063,28 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
                 if timeout is None:
                     _read_chunk()
-                    return b"".join(output).decode('utf-8', errors='replace')
-                
-                # With timeout: loop until done or timeout
-                while True:
-                    _read_chunk()
-                    
-                    if self.proc.poll() is not None:
-                        # Finished, ensure we get everything
-                        while _read_chunk(): pass
-                        break
-                        
-                    if time.time() - start > timeout:
-                        break
-                        
-                    time.sleep(0.01)
-                
-                return b"".join(output).decode('utf-8', errors='replace')
+                else:
+                    # With timeout: loop until done or timeout
+                    while True:
+                        _read_chunk()
+
+                        if self.proc.poll() is not None:
+                            # Finished, ensure we get everything
+                            while _read_chunk(): pass
+                            break
+
+                        if time.time() - start > timeout:
+                            break
+
+                        time.sleep(0.01)
+
+                # Prepend any buffered output, then clear buffer
+                new_output = b"".join(output).decode('utf-8', errors='replace')
+                if self._output:
+                    result = self._output + new_output
+                    self._output = ""
+                    return result
+                return new_output
 
             def write(self, text):
                 """Write text to stdin."""
@@ -1040,13 +1100,38 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                     pass
                 return f"Sent SIGKILL to process group {self.pid}"
 
-            def wait(self, timeout=None):
-                """Wait for process to exit."""
-                try:
-                    self.proc.wait(timeout=timeout)
-                    return True
-                except subprocess.TimeoutExpired:
-                    return False
+            def wait(self, timeout=-1):
+                """Wait for process to exit, draining output to prevent deadlock.
+
+                Output is stored in .output property. Prints notice if output was captured.
+                Default: uses self.timeout if set, else waits forever.
+                """
+                if timeout == -1:
+                    timeout = self.timeout  # None means forever
+
+                # Loop with internal timeout to handle timeout=None (wait forever)
+                start = time.time()
+                while True:
+                    # Use 60s chunks to drain output while waiting
+                    chunk_timeout = 60 if timeout is None else min(60, timeout - (time.time() - start))
+                    if chunk_timeout <= 0:
+                        break
+                    self._output += self.read(timeout=chunk_timeout)  # Buffer for later read()
+                    if self.returncode is not None:
+                        break
+                    if timeout is not None and time.time() - start >= timeout:
+                        break
+
+                if self.returncode is None:
+                    elapsed = time.time() - start
+                    output_info = f", {len(self._output)} bytes captured" if self._output else ""
+                    print(f"[wait() timed out after {elapsed:.1f}s{output_info}]")
+                return self.returncode is not None
+
+            @property
+            def output(self):
+                """Output captured during wait(). Call read() for new output."""
+                return self._output
 
             @property
             def returncode(self):
@@ -1054,7 +1139,19 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
             def __repr__(self):
                 status = "running" if self.returncode is None else f"exited code={self.returncode}"
-                return f"[BashProcess pid={self.pid} status={status} cmd={self.command!r} (global object _bash_procs[{self.pid}])]"
+                output_info = f" output={len(self._output)}B" if self._output else ""
+                return f"[BashProcess pid={self.pid} status={status}{output_info} cmd={self.command!r}]"
+
+        # Set up preexec_fn for Linux to kill child when parent dies
+        # PR_SET_PDEATHSIG makes kernel send signal to child on parent death
+        def _set_pdeathsig():
+            try:
+                import ctypes
+                libc = ctypes.CDLL("libc.so.6", use_errno=True)
+                PR_SET_PDEATHSIG = 1
+                libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+            except Exception:
+                pass  # Non-Linux or ctypes unavailable
 
         # Start process
         # start_new_session=True creates a new process group, so we can kill the whole tree
@@ -1064,19 +1161,18 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,  # Combine stderr into stdout
-            start_new_session=True
+            start_new_session=True,
+            preexec_fn=_set_pdeathsig
         )
         
-        bp = BashProcess(proc, command)
+        bp = BashProcess(proc, command, timeout=timeout)
 
         # Immediate return if background requested
         if bg:
             return bp
 
-        # Wait for completion or timeout
-        timeout = timeout or 120
-        
-        output = bp.read(timeout=timeout)
+        # Foreground: wait for completion (read uses configured/default timeout)
+        output = bp.read()
         
         if bp.returncode is None:
              # Timeout occurred

@@ -749,23 +749,21 @@ def generate_unified_diff(
 # --------------------------------------------------------------------------- #
 #  File-system operations
 # --------------------------------------------------------------------------- #
-def _assert_absolute_path(path: str) -> None:
-    """Ensure path is absolute. Raises ValueError if not."""
-    if not path.startswith("/"):
-        raise ValueError(f"Path must be absolute (start with '/'): {path}")
+def _resolve_path(path: str) -> pathlib.Path:
+    """Resolve path to absolute, expanding ~ and resolving relative paths."""
+    return pathlib.Path(path).expanduser().resolve()
 
 
 def _read_file(path: str) -> str:
     """Read file contents as UTF-8 text."""
-    _assert_absolute_path(path)
-    with open(path, "rt", encoding="utf-8") as fh:
+    target = _resolve_path(path)
+    with open(target, "rt", encoding="utf-8") as fh:
         return fh.read()
 
 
 def _write_file(path: str, content: str) -> None:
     """Write content to file, creating parent directories if needed."""
-    _assert_absolute_path(path)
-    target = pathlib.Path(path)
+    target = _resolve_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("wt", encoding="utf-8") as fh:
         fh.write(content)
@@ -773,8 +771,8 @@ def _write_file(path: str, content: str) -> None:
 
 def _remove_file(path: str) -> None:
     """Remove file if it exists."""
-    _assert_absolute_path(path)
-    pathlib.Path(path).unlink(missing_ok=True)
+    target = _resolve_path(path)
+    target.unlink(missing_ok=True)
 
 
 def _load_files(paths: List[str]) -> Dict[str, str]:

@@ -865,14 +865,10 @@ class SandboxMixin:
         # Inject builtins first so tools can use _send_output, _original_print, etc.
         repl.inject_builtins()
 
-        # Inject tools - check both _toolimpl and instance methods
-        tools = {}
-        for name, spec in self.toolspecs.items():
-            impl = self._toolimpl.get(name)
-            if impl is None:
-                # Try to find as instance method (e.g., JinaMixin tools)
-                impl = getattr(self, name, None)
-            tools[name] = (impl, spec)
+        tools = {
+            name: (self._toolimpl.get(name), spec)
+            for name, spec in self.toolspecs.items()
+        }
 
         repl.inject_tools(tools)
         
