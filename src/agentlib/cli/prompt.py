@@ -9,6 +9,8 @@ import os
 import termios
 from typing import Optional, Callable
 
+from .alt_history import AltHistoryMode
+
 _PRINTABLE = set(range(32, 127))
 
 
@@ -42,6 +44,9 @@ def prompt(
     history: Optional[list] = None,
     on_submit: Optional[Callable[[str], None]] = None,
     add_to_history: bool = True,
+    get_screen_content: Optional[Callable[[int], str]] = None,
+    on_alt_enter: Optional[Callable[[], None]] = None,
+    on_alt_exit: Optional[Callable[[], None]] = None,
 ) -> str:
     """
     Read a line of input with editing support.
@@ -79,7 +84,9 @@ def prompt(
     # Strip leading newlines from prompt - they're only for initial display
     display_prompt = prompt_str.lstrip('\n')
     display_continuation = continuation_str.lstrip('\n')
-    
+    # Alt mode for history navigation (prevents scrollback pollution)
+    alt_history = AltHistoryMode(display_prompt, display_continuation, get_screen_content,
+                                  on_enter=on_alt_enter, on_exit=on_alt_exit)
     def _redraw(buf, cursor):
         nonlocal prev_lines, prev_cursor_row
         
@@ -172,89 +179,126 @@ def prompt(
         history_idx = len(history)
         saved_line = []
         
-        while True:
-            k = os.read(sys.stdin.fileno(), 4096)
-            if not k:
-                raise EOFError()
+        try:
+            while True:
+                k = os.read(sys.stdin.fileno(), 4096)
+                if not k:
+                    raise EOFError()
             
-            i = 0
-            while i < len(k):
-                c = k[i]
+                i = 0
+                while i < len(k):
+                    c = k[i]
                 
-                # Ctrl+D - EOF
-                if c == 4:
-                    if not buf:
+                    # Ctrl+D - EOF
+                    if c == 4:
+                        if not buf:
+                            sys.stdout.write('\n')
+                            sys.stdout.flush()
+                            raise EOFError()
+                        i += 1
+                        continue
+                
+                    # Ctrl+C - interrupt
+                    if c == 3:
                         sys.stdout.write('\n')
                         sys.stdout.flush()
-                        raise EOFError()
-                    i += 1
-                    continue
+                        raise KeyboardInterrupt()
                 
-                # Ctrl+C - interrupt
-                if c == 3:
-                    sys.stdout.write('\n')
-                    sys.stdout.flush()
-                    raise KeyboardInterrupt()
-                
-                # Alt+Enter - insert newline
-                if c == 27 and i + 1 < len(k) and k[i+1] in (10, 13):
-                    buf.insert(cursor, '\n')
-                    cursor += 1
-                    _redraw(buf, cursor)
-                    i += 2
-                    continue
-                
-                # ESC [ sequences
-                if c == 27 and i + 2 < len(k) and k[i+1] == 91:
-                    seq = k[i+2]
-                    i += 3
-                    
-                    # Bracketed paste start: ESC[200~
-                    if seq == 50 and i + 2 < len(k) and k[i] == 48 and k[i+1] == 48 and k[i+2] == 126:
-                        i += 3
-                        paste_content = []
-                        paste_end = bytes([27, 91, 50, 48, 49, 126])  # ESC[201~
-                        paste_buf = bytearray(k[i:])
-                        while paste_end not in paste_buf:
-                            paste_buf.extend(os.read(sys.stdin.fileno(), 4096))
-                        end_pos = paste_buf.find(paste_end)
-                        for b in paste_buf[:end_pos]:
-                            if b == 10 or b in _PRINTABLE:
-                                paste_content.append(chr(b))
-                        buf[cursor:cursor] = paste_content
-                        cursor += len(paste_content)
-                        _redraw(buf, cursor)
-                        i = len(k)
-                    elif seq == 68 and cursor > 0:  # Left
-                        cursor -= 1
-                        _redraw(buf, cursor)
-                    elif seq == 67 and cursor < len(buf):  # Right
+                    # Alt+Enter - insert newline
+                    if c == 27 and i + 1 < len(k) and k[i+1] in (10, 13):
+                        buf.insert(cursor, '\n')
                         cursor += 1
                         _redraw(buf, cursor)
-                    elif seq == 65:  # Up - history previous
-                        if history_idx > 0:
-                            if history_idx == len(history):
-                                saved_line = buf[:]
-                            history_idx -= 1
-                            buf = list(history[history_idx])
-                            cursor = len(buf)
+                        i += 2
+                        continue
+                
+                    # ESC [ sequences
+                    if c == 27 and i + 2 < len(k) and k[i+1] == 91:
+                        seq = k[i+2]
+                        i += 3
+                    
+                        # Bracketed paste start: ESC[200~
+                        if seq == 50 and i + 2 < len(k) and k[i] == 48 and k[i+1] == 48 and k[i+2] == 126:
+                            i += 3
+                            paste_content = []
+                            paste_end = bytes([27, 91, 50, 48, 49, 126])  # ESC[201~
+                            paste_buf = bytearray(k[i:])
+                            while paste_end not in paste_buf:
+                                paste_buf.extend(os.read(sys.stdin.fileno(), 4096))
+                            end_pos = paste_buf.find(paste_end)
+                            for b in paste_buf[:end_pos]:
+                                if b == 10 or b in _PRINTABLE:
+                                    paste_content.append(chr(b))
+                            buf[cursor:cursor] = paste_content
+                            cursor += len(paste_content)
                             _redraw(buf, cursor)
-                    elif seq == 66:  # Down - history next
-                        if history_idx < len(history):
-                            history_idx += 1
-                            if history_idx == len(history):
-                                buf = saved_line[:]
-                            else:
+                            i = len(k)
+                        elif seq == 68 and cursor > 0:  # Left
+                            cursor -= 1
+                            _redraw(buf, cursor)
+                        elif seq == 67 and cursor < len(buf):  # Right
+                            cursor += 1
+                            _redraw(buf, cursor)
+                        elif seq == 65:  # Up - history previous
+                            if history_idx > 0:
+                                if history_idx == len(history):
+                                    saved_line = buf[:]
+                                # Enter alt mode before loading history
+                                if not alt_history.active:
+                                    alt_history.enter(buf, cursor, prev_cursor_row)
+                                history_idx -= 1
                                 buf = list(history[history_idx])
-                            cursor = len(buf)
-                            _redraw(buf, cursor)
-                    elif seq == 72:  # Home - start of current line
+                                cursor = len(buf)
+                                alt_history.redraw(buf, cursor)
+                        elif seq == 66:  # Down - history next
+                            if history_idx < len(history):
+                                history_idx += 1
+                                if history_idx == len(history):
+                                    # Returning to current input - just exit alt mode
+                                    # Terminal restores main buffer automatically
+                                    buf = saved_line[:]
+                                    cursor = len(buf)
+                                    if alt_history.active:
+                                        alt_history.exit_silent()
+                                    else:
+                                        _redraw(buf, cursor)
+                                else:
+                                    buf = list(history[history_idx])
+                                    cursor = len(buf)
+                                    alt_history.redraw(buf, cursor)
+                        elif seq == 72:  # Home - start of current line
+                            content = ''.join(buf)
+                            line_start = content.rfind('\n', 0, cursor) + 1
+                            if cursor != line_start:
+                                cursor = line_start
+                                _redraw(buf, cursor)
+                        elif seq == 70:  # End - end of current line
+                            content = ''.join(buf)
+                            line_end = content.find('\n', cursor)
+                            if line_end == -1:
+                                line_end = len(buf)
+                            if cursor != line_end:
+                                cursor = line_end
+                                _redraw(buf, cursor)
+                        elif seq == 51 and i < len(k) and k[i] == 126:  # Delete
+                            i += 1
+                            if cursor < len(buf):
+                                del buf[cursor]
+                                _redraw(buf, cursor)
+                        continue
+                
+                    # Ctrl+A - start of current line
+                    if c == 1:
                         content = ''.join(buf)
                         line_start = content.rfind('\n', 0, cursor) + 1
                         if cursor != line_start:
                             cursor = line_start
                             _redraw(buf, cursor)
-                    elif seq == 70:  # End - end of current line
+                        i += 1
+                        continue
+                
+                    # Ctrl+E - end of current line
+                    if c == 5:
                         content = ''.join(buf)
                         line_end = content.find('\n', cursor)
                         if line_end == -1:
@@ -262,105 +306,84 @@ def prompt(
                         if cursor != line_end:
                             cursor = line_end
                             _redraw(buf, cursor)
-                    elif seq == 51 and i < len(k) and k[i] == 126:  # Delete
                         i += 1
-                        if cursor < len(buf):
-                            del buf[cursor]
-                            _redraw(buf, cursor)
-                    continue
+                        continue
                 
-                # Ctrl+A - start of current line
-                if c == 1:
-                    content = ''.join(buf)
-                    line_start = content.rfind('\n', 0, cursor) + 1
-                    if cursor != line_start:
+                    # Ctrl+K - kill to end of current line
+                    if c == 11:
+                        content = ''.join(buf)
+                        line_end = content.find('\n', cursor)
+                        if line_end == -1:
+                            line_end = len(buf)
+                        del buf[cursor:line_end]
+                        _redraw(buf, cursor)
+                        i += 1
+                        continue
+                
+                    # Ctrl+U - kill to start of current line
+                    if c == 21:
+                        content = ''.join(buf)
+                        line_start = content.rfind('\n', 0, cursor) + 1
+                        del buf[line_start:cursor]
                         cursor = line_start
                         _redraw(buf, cursor)
-                    i += 1
-                    continue
+                        i += 1
+                        continue
                 
-                # Ctrl+E - end of current line
-                if c == 5:
-                    content = ''.join(buf)
-                    line_end = content.find('\n', cursor)
-                    if line_end == -1:
-                        line_end = len(buf)
-                    if cursor != line_end:
-                        cursor = line_end
+                    # Ctrl+L - clear screen
+                    if c == 12:
+                        sys.stdout.write('\x1b[2J\x1b[H')
                         _redraw(buf, cursor)
-                    i += 1
-                    continue
+                        i += 1
+                        continue
                 
-                # Ctrl+K - kill to end of current line
-                if c == 11:
-                    content = ''.join(buf)
-                    line_end = content.find('\n', cursor)
-                    if line_end == -1:
-                        line_end = len(buf)
-                    del buf[cursor:line_end]
-                    _redraw(buf, cursor)
-                    i += 1
-                    continue
+                    # Backspace
+                    if c in (127, 8) and cursor > 0:
+                        cursor -= 1
+                        del buf[cursor]
+                        _redraw(buf, cursor)
+                        i += 1
+                        continue
                 
-                # Ctrl+U - kill to start of current line
-                if c == 21:
-                    content = ''.join(buf)
-                    line_start = content.rfind('\n', 0, cursor) + 1
-                    del buf[line_start:cursor]
-                    cursor = line_start
-                    _redraw(buf, cursor)
-                    i += 1
-                    continue
+                    # Enter - submit
+                    if c in (10, 13):
+                        line = ''.join(buf)
+                        if alt_history.active:
+                            alt_history.exit(buf, len(buf))
+                        sys.stdout.write('\n')
+                        sys.stdout.flush()
+                        if add_to_history and line and (not history or history[-1] != line):
+                            history.append(line)
+                            if on_submit:
+                                on_submit(line)
+                        return line
                 
-                # Ctrl+L - clear screen
-                if c == 12:
-                    sys.stdout.write('\x1b[2J\x1b[H')
-                    _redraw(buf, cursor)
-                    i += 1
-                    continue
-                
-                # Backspace
-                if c in (127, 8) and cursor > 0:
-                    cursor -= 1
-                    del buf[cursor]
-                    _redraw(buf, cursor)
-                    i += 1
-                    continue
-                
-                # Enter - submit
-                if c in (10, 13):
-                    sys.stdout.write('\n')
-                    sys.stdout.flush()
-                    line = ''.join(buf)
-                    if add_to_history and line and (not history or history[-1] != line):
-                        history.append(line)
-                        if on_submit:
-                            on_submit(line)
-                    return line
-                
-                # Printable character
-                if c in _PRINTABLE:
-                    ch = chr(c)
-                    buf.insert(cursor, ch)
-                    cursor += 1
-                    if cursor == len(buf) and '\n' not in buf:
-                        # Fast path: typing at end of single-line input
-                        try:
-                            tw = os.get_terminal_size().columns
-                        except OSError:
-                            tw = 80
-                        if tw > 0 and (len(display_prompt) + len(buf)) % tw == 0:
-                            # At wrap boundary - terminal enters pending-wrap state
-                            # where cursor hasn't actually moved to new row yet.
-                            # Full redraw needed to correctly position cursor.
-                            _redraw(buf, cursor)
+                    # Printable character
+                    if c in _PRINTABLE:
+                        ch = chr(c)
+                        buf.insert(cursor, ch)
+                        cursor += 1
+                        if cursor == len(buf) and '\n' not in buf:
+                            # Fast path: typing at end of single-line input
+                            try:
+                                tw = os.get_terminal_size().columns
+                            except OSError:
+                                tw = 80
+                            if tw > 0 and (len(display_prompt) + len(buf)) % tw == 0:
+                                # At wrap boundary - terminal enters pending-wrap state
+                                # where cursor hasn't actually moved to new row yet.
+                                # Full redraw needed to correctly position cursor.
+                                _redraw(buf, cursor)
+                            else:
+                                sys.stdout.write(ch)
                         else:
-                            sys.stdout.write(ch)
-                    else:
-                        _redraw(buf, cursor)
-                    i += 1
-                    continue
+                            _redraw(buf, cursor)
+                        i += 1
+                        continue
                 
-                i += 1
-            
-            sys.stdout.flush()
+                    i += 1
+
+                sys.stdout.flush()
+        finally:
+            # Ensure we exit alt mode on any exit
+            alt_history.ensure_exit()

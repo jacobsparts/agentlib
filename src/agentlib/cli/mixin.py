@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Optional, Any
 
 from .prompt import prompt as raw_prompt
+from .stdout_capture import StdoutCapture
 
 from .terminal import (
     Console, Panel, Markdown, render_markdown, parse_markup,
@@ -95,16 +96,30 @@ class InputSession:
     Pasted multiline content is buffered as a single input.
     """
 
-    def __init__(self, history: Optional[SQLiteHistory] = None):
+    def __init__(self, history: Optional[SQLiteHistory] = None,
+                 stdout_capture: Optional[StdoutCapture] = None):
         self.history = history or SQLiteHistory()
         self._history_list = self.history.load_history()
+        self.stdout_capture = stdout_capture
 
     def prompt(self, prompt_str: str = "> ") -> str:
         """Get input from user."""
+        # Create callbacks for captured output and alt buffer pause/resume
+        get_screen_content = None
+        on_alt_enter = None
+        on_alt_exit = None
+        if self.stdout_capture:
+            get_screen_content = self.stdout_capture.get_recent_for_screen
+            on_alt_enter = self.stdout_capture.pause
+            on_alt_exit = self.stdout_capture.resume
+
         user_input = raw_prompt(
             prompt_str=prompt_str,
             history=self._history_list,
             on_submit=self.history.add,
+            get_screen_content=get_screen_content,
+            on_alt_enter=on_alt_enter,
+            on_alt_exit=on_alt_exit,
         )
         return user_input
 
@@ -227,10 +242,14 @@ class CLIMixin:
         """
         self._ensure_setup()
 
+        # Set up stdout capture for alt-buffer replay
+        stdout_capture = StdoutCapture()
+        stdout_capture.install()
+
         # Set up history
         history_path = getattr(self, 'history_db', None)
         history = SQLiteHistory(history_path)
-        session = InputSession(history)
+        session = InputSession(history, stdout_capture=stdout_capture)
 
         # Display welcome
         welcome = getattr(self, 'welcome_message', '')
@@ -280,6 +299,7 @@ class CLIMixin:
                     print(formatted)
 
         finally:
+            stdout_capture.uninstall()
             self.console.print("\n[dim]Session ended. Goodbye![/dim]")
 
     def _run_pre_exit_hooks(self) -> bool:

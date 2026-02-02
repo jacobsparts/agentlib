@@ -688,16 +688,21 @@ If you don't know how to proceed:
     def cli_run(self, max_turns: int | None = None, synth: bool = True):
         """Run CLI loop with Python block delimiters."""
         from agentlib.cli.mixin import SQLiteHistory, InputSession
+        from agentlib.cli.stdout_capture import StdoutCapture
 
         self._ensure_setup()
 
         if max_turns is None:
             max_turns = getattr(self, 'max_turns', 10)
 
+        # Set up stdout capture for alt-buffer replay
+        stdout_capture = StdoutCapture()
+        stdout_capture.install()
+
         # Set up history
         history_path = getattr(self, 'history_db', None)
         history = SQLiteHistory(history_path)
-        session = InputSession(history)
+        session = InputSession(history, stdout_capture=stdout_capture)
 
         # Display welcome banner with model and sandbox info
         welcome = getattr(self, 'welcome_message', '')
@@ -850,6 +855,7 @@ If you don't know how to proceed:
                 if formatted:
                     print(formatted)
         finally:
+            stdout_capture.uninstall()
             # Clean up temp files from truncated output
             for path in getattr(self, '_temp_files', []):
                 try:
