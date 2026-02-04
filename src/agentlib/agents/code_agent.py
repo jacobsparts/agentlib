@@ -587,12 +587,20 @@ If you don't know how to proceed:
         buffer = []
         repl_history = []  # Separate history for REPL session
 
+        # Get altmode for history navigation (if stdout capture available)
+        altmode = getattr(self, 'altmode', None)
+
         print(f"{DIM}Entering REPL. Ctrl+D to exit.{RESET}")
 
         while True:
             prompt_str = "... " if buffer else ">>> "
             try:
-                line = raw_prompt(prompt_str, history=repl_history, add_to_history=False)
+                line = raw_prompt(
+                    prompt_str,
+                    history=repl_history,
+                    add_to_history=False,
+                    altmode=altmode,
+                )
             except EOFError:
                 break
             except KeyboardInterrupt:
@@ -623,7 +631,8 @@ If you don't know how to proceed:
                     if display:
                         print(f"\x1b[92m{display}\x1b[0m")
                     transcript.append(processed)
-                    repl_history.append(source)
+                    if source.strip():
+                        repl_history.append(source)
                     buffer = []
                 # else: incomplete, continue accumulating
             except SyntaxError as e:
@@ -688,7 +697,7 @@ If you don't know how to proceed:
     def cli_run(self, max_turns: int | None = None, synth: bool = True):
         """Run CLI loop with Python block delimiters."""
         from agentlib.cli.mixin import SQLiteHistory, InputSession
-        from agentlib.cli.stdout_capture import StdoutCapture
+        from agentlib.cli.altmode import AltMode
 
         self._ensure_setup()
 
@@ -696,13 +705,14 @@ If you don't know how to proceed:
             max_turns = getattr(self, 'max_turns', 10)
 
         # Set up stdout capture for alt-buffer replay
-        stdout_capture = StdoutCapture()
-        stdout_capture.install()
+        altmode = AltMode()
+        altmode.install()
+        self.altmode = altmode  # Make available to user_repl_session
 
         # Set up history
         history_path = getattr(self, 'history_db', None)
         history = SQLiteHistory(history_path)
-        session = InputSession(history, stdout_capture=stdout_capture)
+        session = InputSession(history, altmode=altmode)
 
         # Display welcome banner with model and sandbox info
         welcome = getattr(self, 'welcome_message', '')
@@ -720,7 +730,7 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name][/dim]")
+        self.console.print("[dim]Commands: /repl, /subagents [model], /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name][/dim]")
 
         if files := gather_auto_attach_files():
             print(f"Loading {', '.join(files)}")
@@ -821,6 +831,40 @@ If you don't know how to proceed:
                             print(f"{DIM}{str(e)}{RESET}")
                     continue
 
+                if user_input.strip().startswith("/subagents"):
+                    # Import subagent module into REPL and show docstring to agent
+                    # Optional model parameter: /subagents [model]
+                    parts = user_input.strip().split(None, 1)
+                    if len(parts) > 1:
+                        # Model specified administratively
+                        subagent_model = parts[1].strip()
+                        model_locked = True
+                    else:
+                        # Inherit parent's model
+                        subagent_model = self.model
+                        model_locked = False
+
+                    repl = self._get_tool_repl()
+                    # Import and set default model (silent injection)
+                    repl._inject_code(f"from agentlib.subagent import Subagent, SubagentError, SubagentResponse, _subagents; Subagent.default_model = {repr(subagent_model)}")
+
+                    # Only show docstring on first load; subsequent calls just update model
+                    already_loaded = getattr(self, '_subagents_loaded', False)
+                    if already_loaded:
+                        print(f"{DIM}Subagent default model changed to: {subagent_model}{RESET}")
+                    else:
+                        self._subagents_loaded = True
+                        # Build docstring, optionally hiding model config section
+                        from agentlib import subagent
+                        docstring = subagent.__doc__
+                        if model_locked:
+                            # Strip "## Model Configuration" section so agent doesn't try to override
+                            import re
+                            docstring = re.sub(r'## Model Configuration\n.*?(?=\n## |\n"""|\Z)', '', docstring, flags=re.DOTALL)
+                        self.usermsg(f">>> # Subagent module loaded (model: {subagent_model})\n{docstring}")
+                        print(f"{DIM}Subagent module loaded into REPL (model: {subagent_model}){RESET}")
+                    continue
+
                 if synth:
                     self._synthetic_exchange()
                     synth = False
@@ -855,7 +899,7 @@ If you don't know how to proceed:
                 if formatted:
                     print(formatted)
         finally:
-            stdout_capture.uninstall()
+            altmode.uninstall()
             # Clean up temp files from truncated output
             for path in getattr(self, '_temp_files', []):
                 try:

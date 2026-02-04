@@ -7,9 +7,12 @@ Provides terminal input handling without requiring GNU readline >= 8.0.
 import sys
 import os
 import termios
-from typing import Optional, Callable
+from typing import Optional, Callable, TYPE_CHECKING
 
 from .alt_history import AltHistoryMode
+
+if TYPE_CHECKING:
+    from .altmode import AltMode
 
 _PRINTABLE = set(range(32, 127))
 
@@ -44,9 +47,7 @@ def prompt(
     history: Optional[list] = None,
     on_submit: Optional[Callable[[str], None]] = None,
     add_to_history: bool = True,
-    get_screen_content: Optional[Callable[[int], str]] = None,
-    on_alt_enter: Optional[Callable[[], None]] = None,
-    on_alt_exit: Optional[Callable[[], None]] = None,
+    altmode: Optional['AltMode'] = None,
 ) -> str:
     """
     Read a line of input with editing support.
@@ -85,8 +86,7 @@ def prompt(
     display_prompt = prompt_str.lstrip('\n')
     display_continuation = continuation_str.lstrip('\n')
     # Alt mode for history navigation (prevents scrollback pollution)
-    alt_history = AltHistoryMode(display_prompt, display_continuation, get_screen_content,
-                                  on_enter=on_alt_enter, on_exit=on_alt_exit)
+    alt_history = AltHistoryMode(altmode, display_prompt, display_continuation) if altmode else None
     def _redraw(buf, cursor):
         nonlocal prev_lines, prev_cursor_row
         
@@ -216,6 +216,29 @@ def prompt(
                     if c == 27 and i + 2 < len(k) and k[i+1] == 91:
                         seq = k[i+2]
                         i += 3
+
+                        # Ignore cursor position responses (ESC[<row>;<col>R)
+                        if 48 <= seq <= 57:
+                            j = i
+                            saw_semicolon = False
+                            found_dsr = False
+                            while j < len(k):
+                                b = k[j]
+                                if b == 59:
+                                    saw_semicolon = True
+                                elif b == 82:
+                                    if saw_semicolon:
+                                        found_dsr = True
+                                        j += 1
+                                    break
+                                elif 48 <= b <= 57:
+                                    pass
+                                else:
+                                    break
+                                j += 1
+                            if found_dsr:
+                                i = j
+                                continue
                     
                         # Bracketed paste start: ESC[200~
                         if seq == 50 and i + 2 < len(k) and k[i] == 48 and k[i+1] == 48 and k[i+2] == 126:
@@ -244,12 +267,15 @@ def prompt(
                                 if history_idx == len(history):
                                     saved_line = buf[:]
                                 # Enter alt mode before loading history
-                                if not alt_history.active:
-                                    alt_history.enter(buf, cursor, prev_cursor_row)
+                                if alt_history and not alt_history.active:
+                                    alt_history.enter(buf, cursor)
                                 history_idx -= 1
                                 buf = list(history[history_idx])
                                 cursor = len(buf)
-                                alt_history.redraw(buf, cursor)
+                                if alt_history:
+                                    alt_history.redraw(buf, cursor)
+                                else:
+                                    _redraw(buf, cursor)
                         elif seq == 66:  # Down - history next
                             if history_idx < len(history):
                                 history_idx += 1
@@ -258,14 +284,17 @@ def prompt(
                                     # Terminal restores main buffer automatically
                                     buf = saved_line[:]
                                     cursor = len(buf)
-                                    if alt_history.active:
+                                    if alt_history and alt_history.active:
                                         alt_history.exit_silent()
                                     else:
                                         _redraw(buf, cursor)
                                 else:
                                     buf = list(history[history_idx])
                                     cursor = len(buf)
-                                    alt_history.redraw(buf, cursor)
+                                    if alt_history:
+                                        alt_history.redraw(buf, cursor)
+                                    else:
+                                        _redraw(buf, cursor)
                         elif seq == 72:  # Home - start of current line
                             content = ''.join(buf)
                             line_start = content.rfind('\n', 0, cursor) + 1
@@ -348,11 +377,11 @@ def prompt(
                     # Enter - submit
                     if c in (10, 13):
                         line = ''.join(buf)
-                        if alt_history.active:
+                        if alt_history and alt_history.active:
                             alt_history.exit(buf, len(buf))
                         sys.stdout.write('\n')
                         sys.stdout.flush()
-                        if add_to_history and line and (not history or history[-1] != line):
+                        if add_to_history and line.strip() and (not history or history[-1] != line):
                             history.append(line)
                             if on_submit:
                                 on_submit(line)
@@ -386,4 +415,5 @@ def prompt(
                 sys.stdout.flush()
         finally:
             # Ensure we exit alt mode on any exit
-            alt_history.ensure_exit()
+            if alt_history:
+                alt_history.ensure_exit()

@@ -249,6 +249,16 @@ register_model("openrouter","glm-4.7",
     output_cost=1.5,
     tools=False,
 )
+moonshotai_config = {'provider': {'order': ['moonshotai'], 'allow_fallbacks': False}, 'temperature': 0}
+register_model("openrouter","kimi-k2.5",
+    model="moonshotai/kimi-k2.5",
+    aliases="kimi",
+    config=moonshotai_config,
+    input_cost=0.6,
+    output_cost=3.0,
+    tools=False,
+)
+
 
 # --- User Configuration ---
 from agentlib.config import get_config_spec, get_user_config

@@ -282,7 +282,7 @@ class LLMClient:
                 return self._call(messages)
         except Exception as e:
             err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
-            logger.error(f"text_call {type(e).__name__}: {err}")
+            logger.error(f"text_call {type(e).__name__}: {err} (line {sys.exc_info()[2].tb_lineno})")
             if retry:
                 self._sleep_backoff(attempt)
                 return self.text_call(messages, retry-1, attempt+1)

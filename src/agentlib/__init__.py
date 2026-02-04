@@ -10,6 +10,7 @@ from .jina_mixin import JinaMixin
 from .attachment_mixin import AttachmentMixin
 from .repl_attachment_mixin import REPLAttachmentMixin
 from .sandbox import SandboxMixin, SandboxedToolREPL
+from .subagent import Subagent, SubagentError, SubagentResponse
 from .tools.subshell import SubShell, STILL_RUNNING
 from .tools.subrepl import SubREPL
 from .cli import CLIMixin, CLIAgent
@@ -30,6 +31,9 @@ __all__ = [
     "REPLAttachmentMixin",
     "SandboxMixin",
     "SandboxedToolREPL",
+    "Subagent",
+    "SubagentError",
+    "SubagentResponse",
     "SubShell",
     "SubREPL",
     "STILL_RUNNING",
