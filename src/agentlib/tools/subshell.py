@@ -141,8 +141,8 @@ class SubShell:
     def _ensure_session(self) -> None:
         """Start worker if needed."""
         if self._worker is None or not self._worker.is_alive():
-            self._cmd_queue = Queue()
-            self._output_queue = Queue()
+            self._cmd_queue = Queue(maxsize=1)
+            self._output_queue = Queue(maxsize=1)
             self._worker = Process(
                 target=_worker_main,
                 args=(self._cmd_queue, self._output_queue),

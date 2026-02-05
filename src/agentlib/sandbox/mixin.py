@@ -734,24 +734,51 @@ def _recv_tool_response():
             self._running = False
             return ("done", True)
 
-    def send_tool_response(self, result: Any = None, error: str = None) -> None:
-        """Send tool execution result back to REPL."""
+    def _check_worker_alive(self) -> None:
+        """Check if worker is alive, close connection and raise if dead."""
+        if self._proc is None or self._proc.poll() is not None:
+            # Worker dead - close connection
+            if self._conn:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
+            raise RuntimeError("Worker process died")
+
+    def send_reply(self, request_id: int, result: Any = None, error: str = None) -> None:
+        """Send application-level reply with result or error.
+
+        Args:
+            request_id: The request ID this reply is for.
+            result: The result value (if successful).
+            error: The error message (if failed).
+        """
         if self._conn is None:
             raise RuntimeError("No active session")
+        self._check_worker_alive()
 
-        if error:
-            _send_msg(self._conn, json.dumps({"error": error}))
+        msg = {"type": "reply", "request_id": request_id}
+        if error is not None:
+            msg["error"] = error
         else:
             try:
-                _send_msg(self._conn, json.dumps({"result": result}))
+                json.dumps(result)  # Test serializability
+                msg["result"] = result
             except TypeError:
-                _send_msg(self._conn, json.dumps({"result": repr(result)}))
+                msg["result"] = repr(result)
+        _send_msg(self._conn, json.dumps(msg))
 
-    def send_ack(self) -> None:
-        """Send simple acknowledgment (for emit())."""
+    def send_ack(self, request_id: int) -> None:
+        """Send transport-level ACK to unblock the sender.
+
+        Args:
+            request_id: The request ID this ACK is for.
+        """
         if self._conn is None:
             raise RuntimeError("No active session")
-        _send_msg(self._conn, "ack")
+        self._check_worker_alive()
+        _send_msg(self._conn, json.dumps({"type": "ack", "request_id": request_id}))
 
     def interrupt(self) -> None:
         """Send SIGINT to worker process group."""
@@ -1006,6 +1033,7 @@ class SandboxMixin:
         from agentlib.agent import _CompleteException
 
         tool_name = req.get('tool')
+        request_id = req.get('request_id')
         args = req.get('args', {})
 
         # Deserialize special types (like bytes) - copied from REPLAgent
@@ -1018,25 +1046,31 @@ class SandboxMixin:
             if isinstance(x, dict):
                 return {k: _deserialize(v) for k, v in x.items()}
             return x
-            
+
         args = {k: _deserialize(v) for k, v in args.items()}
 
-        if tool_name == '__emit__':
-            value = args.get('value')
-            release = args.get('release', False)
-            self._final_result = value
-            if release:
-                self.complete = True
-            repl.send_ack()
+        try:
+            if tool_name == '__emit__':
+                value = args.get('value')
+                release = args.get('release', False)
+                self._final_result = value
+                if release:
+                    self.complete = True
+                # No reply needed for emit, just ACK
 
-        elif tool_name:
-            try:
-                result = self.toolcall(tool_name, args)
-                repl.send_tool_response(result=result)
-            except _CompleteException:
-                raise
-            except Exception as e:
-                repl.send_tool_response(error=str(e))
+            elif tool_name:
+                # Regular tool call - send reply with result
+                try:
+                    result = self.toolcall(tool_name, args)
+                    repl.send_reply(request_id, result=result)
+                except _CompleteException:
+                    # Tool called self.respond() - still need ACK
+                    raise
+                except Exception as e:
+                    repl.send_reply(request_id, error=str(e))
+        finally:
+            # Always send ACK to unblock the sender
+            repl.send_ack(request_id)
 
     def _cleanup(self) -> None:
         """Close sandbox and capture tarball."""

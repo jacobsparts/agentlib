@@ -226,6 +226,7 @@ def worker_main(port, authkey, model, max_turns):
         def _handle_tool_request(self, repl, req):
             """Override to send progress/result via socket."""
             tool_name = req.get('tool')
+            request_id = req.get('request_id')
             args = req.get('args', {})
 
             # Deserialize special types (bytes encoded as base64)
@@ -241,28 +242,32 @@ def worker_main(port, authkey, model, max_turns):
 
             args = {k: _deserialize(v) for k, v in args.items()}
 
-            if tool_name == '__emit__':
-                value = args.get('value')
-                release = args.get('release', False)
-                self._final_result = value
+            try:
+                if tool_name == '__emit__':
+                    value = args.get('value')
+                    release = args.get('release', False)
+                    self._final_result = value
 
-                if release:
-                    self.complete = True
-                    _send_msg(self._host_sock, ("result", str(value) if value is not None else ""))
+                    if release:
+                        self.complete = True
+                        _send_msg(self._host_sock, ("result", str(value) if value is not None else ""))
+                    else:
+                        _send_msg(self._host_sock, ("progress", str(value) if value is not None else ""))
+                    # No reply needed for emit, just ACK
+
                 else:
-                    _send_msg(self._host_sock, ("progress", str(value) if value is not None else ""))
-
-                repl.send_ack()
-            else:
-                # Normal tool call
-                from agentlib.agent import _CompleteException
-                try:
-                    result = self.toolcall(tool_name, args)
-                    repl.send_tool_response(result=result)
-                except _CompleteException:
-                    raise
-                except Exception as e:
-                    repl.send_tool_response(error=str(e))
+                    # Normal tool call - send reply with result
+                    from agentlib.agent import _CompleteException
+                    try:
+                        result = self.toolcall(tool_name, args)
+                        repl.send_reply(request_id, result=result)
+                    except _CompleteException:
+                        raise
+                    except Exception as e:
+                        repl.send_reply(request_id, error=str(e))
+            finally:
+                # Always send ACK to unblock the sender
+                repl.send_ack(request_id)
 
     # Create agent
     agent = SubagentWorker(sock, model, max_turns)

@@ -78,6 +78,9 @@ from agentlib.tools.source_extract import extract_method_source as _extract_tool
 # implementations of _send_output() being injected first.
 
 BUILTINS_CODE = '''
+# Request ID counter for matching requests with responses
+_request_id = 0
+
 # Tagged print for top-level REPL output (normal print stays available for functions)
 def _print(*args, **kwargs):
     """Print with output tagging for display control."""
@@ -98,6 +101,10 @@ def emit(value, release=False):
         release: If True, release control to the user (for questions or completion).
                  If False (default), the value is emitted but execution continues.
     """
+    global _request_id
+    _request_id += 1
+    req_id = _request_id
+
     # Use different message types: "emit" for release=True (shown at turn end),
     # "progress" for release=False (shown inline immediately)
     msg_type = "emit" if release else "progress"
@@ -105,9 +112,43 @@ def emit(value, release=False):
     import json as _json
     _send_tool_request(_json.dumps({
         "tool": "__emit__",
-        "args": {"value": value, "release": release}
+        "args": {"value": value, "release": release},
+        "request_id": req_id
     }))
-    _recv_tool_response()  # Wait for ack
+    _wait_for_ack(req_id)
+
+def _wait_for_ack(expected_id):
+    """Wait for ACK with matching request_id, capturing reply data."""
+    import json as _json
+    _result = None
+    _error = None
+    while True:
+        raw = _recv_tool_response()
+        # Parse JSON if string
+        if isinstance(raw, str):
+            try:
+                msg = _json.loads(raw)
+            except (ValueError, _json.JSONDecodeError):
+                continue  # Not JSON, discard
+        elif isinstance(raw, dict):
+            msg = raw
+        else:
+            continue  # Unknown format, discard
+
+        # Check for matching request_id
+        if msg.get("request_id") != expected_id:
+            continue  # Wrong ID, discard stale message
+
+        msg_type = msg.get("type")
+        if msg_type == "reply":
+            # Capture result/error from reply
+            _result = msg.get("result")
+            _error = msg.get("error")
+        elif msg_type == "ack":
+            # ACK received - return result or raise error
+            if _error is not None:
+                raise Exception(_error)
+            return _result
 '''
 
 # Queue-based transport for ToolREPL
@@ -265,10 +306,10 @@ class ToolREPL(SubREPL):
     def _ensure_session(self) -> None:
         """Override to use tool-aware worker and add tool queues."""
         if self._worker is None or not self._worker.is_alive():
-            self._cmd_queue = Queue()
-            self._output_queue = Queue()
-            self._tool_request_queue = Queue()
-            self._tool_response_queue = Queue()
+            self._cmd_queue = Queue(maxsize=1)
+            self._output_queue = Queue(maxsize=1)
+            self._tool_request_queue = Queue(maxsize=1)
+            self._tool_response_queue = Queue(maxsize=1)
 
             self._worker = Process(
                 target=_tool_worker_main,
@@ -364,25 +405,52 @@ class ToolREPL(SubREPL):
         except Empty:
             return None
 
-    def send_tool_response(self, result: Any = None, error: str = None) -> None:
-        """Send tool execution result back to REPL."""
+    def _check_worker_alive(self) -> None:
+        """Check if worker is alive, drain queues and raise if dead."""
+        if self._worker is None or not self._worker.is_alive():
+            # Drain all queues to prevent blocking
+            for q in (self._tool_response_queue, self._tool_request_queue, self._output_queue):
+                if q is not None:
+                    try:
+                        while True:
+                            q.get_nowait()
+                    except Empty:
+                        pass
+            raise RuntimeError("Worker process died")
+
+    def send_reply(self, request_id: int, result: Any = None, error: str = None) -> None:
+        """Send application-level reply with result or error.
+
+        Args:
+            request_id: The request ID this reply is for.
+            result: The result value (if successful).
+            error: The error message (if failed).
+        """
         if self._tool_response_queue is None:
             raise RuntimeError("No active session")
+        self._check_worker_alive()
 
-        if error:
-            self._tool_response_queue.put(json.dumps({"error": error}))
+        msg = {"type": "reply", "request_id": request_id}
+        if error is not None:
+            msg["error"] = error
         else:
             try:
-                self._tool_response_queue.put(json.dumps({"result": result}))
+                json.dumps(result)  # Test serializability
+                msg["result"] = result
             except TypeError:
-                # Fall back to repr for non-JSON-serializable
-                self._tool_response_queue.put(json.dumps({"result": repr(result)}))
+                msg["result"] = repr(result)
+        self._tool_response_queue.put(json.dumps(msg))
 
-    def send_ack(self) -> None:
-        """Send simple acknowledgment (for emit())."""
+    def send_ack(self, request_id: int) -> None:
+        """Send transport-level ACK to unblock the sender.
+
+        Args:
+            request_id: The request ID this ACK is for.
+        """
         if self._tool_response_queue is None:
             raise RuntimeError("No active session")
-        self._tool_response_queue.put("ack")
+        self._check_worker_alive()
+        self._tool_response_queue.put(json.dumps({"type": "ack", "request_id": request_id}))
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +632,10 @@ def _generate_socket_relay_stub(name: str, impl: Optional[Callable], spec: Any) 
 def {name}({sig}):
     """{doc}"""
     {preprocess}
+    global _request_id
+    _request_id += 1
+    _req_id = _request_id
+
     def _serialize(x):
         if isinstance(x, bytes):
             import base64
@@ -577,11 +649,8 @@ def {name}({sig}):
     _args = {args}
     _safe_args = {{k: _serialize(v) for k, v in _args.items()}}
 
-    _send_tool_request(_json.dumps({{"tool": "{name}", "args": _safe_args}}))
-    _response = _json.loads(_recv_tool_response())
-    if "error" in _response:
-        raise Exception(_response["error"])
-    return _response["result"]
+    _send_tool_request(_json.dumps({{"tool": "{name}", "args": _safe_args, "request_id": _req_id}}))
+    return _wait_for_ack(_req_id)
 '''
 
 
@@ -1092,6 +1161,7 @@ Call help(function_name) for parameter descriptions.
     def _handle_tool_request(self, repl: ToolREPL, req: dict) -> None:
         """Handle a tool request from the REPL."""
         tool_name = req.get('tool')
+        request_id = req.get('request_id')
         args = req.get('args', {})
 
         # Deserialize special types (like bytes)
@@ -1104,27 +1174,31 @@ Call help(function_name) for parameter descriptions.
             if isinstance(x, dict):
                 return {k: _deserialize(v) for k, v in x.items()}
             return x
-            
+
         args = {k: _deserialize(v) for k, v in args.items()}
 
-        if tool_name == '__emit__':
-            value = args.get('value')
-            release = args.get('release', False)
-            self._final_result = value
-            if release:
-                self.complete = True
-            repl.send_ack()
+        try:
+            if tool_name == '__emit__':
+                value = args.get('value')
+                release = args.get('release', False)
+                self._final_result = value
+                if release:
+                    self.complete = True
+                # No reply needed for emit, just ACK
 
-        elif tool_name:
-            # Regular tool call
-            try:
-                result = self.toolcall(tool_name, args)
-                repl.send_tool_response(result=result)
-            except _CompleteException:
-                # Tool called self.respond()
-                raise
-            except Exception as e:
-                repl.send_tool_response(error=str(e))
+            elif tool_name:
+                # Regular tool call - send reply with result
+                try:
+                    result = self.toolcall(tool_name, args)
+                    repl.send_reply(request_id, result=result)
+                except _CompleteException:
+                    # Tool called self.respond() - still need ACK
+                    raise
+                except Exception as e:
+                    repl.send_reply(request_id, error=str(e))
+        finally:
+            # Always send ACK to unblock the sender
+            repl.send_ack(request_id)
 
 # ---------------------------------------------------------------------------
 # REPLAgent: First-class agent type
