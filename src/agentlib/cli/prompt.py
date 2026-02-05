@@ -268,12 +268,14 @@ def prompt(
                                     saved_line = buf[:]
                                 # Enter alt mode before loading history
                                 if alt_history and not alt_history.active:
+                                    alt_history.saved_prev_cursor_row = prev_cursor_row
                                     alt_history.enter(buf, cursor)
                                 history_idx -= 1
                                 buf = list(history[history_idx])
                                 cursor = len(buf)
                                 if alt_history:
                                     alt_history.redraw(buf, cursor)
+                                    prev_cursor_row = alt_history.cursor_row_in_input
                                 else:
                                     _redraw(buf, cursor)
                         elif seq == 66:  # Down - history next
@@ -286,6 +288,7 @@ def prompt(
                                     cursor = len(buf)
                                     if alt_history and alt_history.active:
                                         alt_history.exit_silent()
+                                        prev_cursor_row = alt_history.saved_prev_cursor_row
                                     else:
                                         _redraw(buf, cursor)
                                 else:
@@ -293,6 +296,7 @@ def prompt(
                                     cursor = len(buf)
                                     if alt_history:
                                         alt_history.redraw(buf, cursor)
+                                        prev_cursor_row = alt_history.cursor_row_in_input
                                     else:
                                         _redraw(buf, cursor)
                         elif seq == 72:  # Home - start of current line

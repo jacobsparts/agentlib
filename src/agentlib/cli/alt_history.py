@@ -27,6 +27,8 @@ class AltHistoryMode:
         self.screen_content = None  # Cached screen content for redraws
         self.term_height = 24  # Cached terminal height
         self.max_input_rows = 0  # High water mark for input height (prevents bounce)
+        self.cursor_row_in_input = 0  # Cursor row offset within input area
+        self.saved_prev_cursor_row = 0  # Saved from main screen for restore
 
     def enter(self, buf: list, cursor: int, screen_content: str = None):
         """Enter alternate screen buffer, copying current display.
@@ -201,6 +203,7 @@ class AltHistoryMode:
         cursor_display_col = prefix_len + cursor_col
         cursor_phys_col = cursor_display_col % term_width
         cursor_row_in_input = sum(line_phys[:cursor_line]) + cursor_display_col // term_width
+        self.cursor_row_in_input = cursor_row_in_input  # Store for prompt.py to sync prev_cursor_row
         total_input_rows = max(sum(line_phys), cursor_row_in_input + 1)
 
         # Update high water mark (cap at 5 to avoid large items permanently shifting content)
