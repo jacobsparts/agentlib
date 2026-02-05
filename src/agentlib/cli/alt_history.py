@@ -29,6 +29,7 @@ class AltHistoryMode:
         self.max_input_rows = 0  # High water mark for input height (prevents bounce)
         self.cursor_row_in_input = 0  # Cursor row offset within input area
         self.saved_prev_cursor_row = 0  # Saved from main screen for restore
+        self.blank_lines = 0  # Fixed blank lines above content (set on enter)
 
     def enter(self, buf: list, cursor: int, screen_content: str = None):
         """Enter alternate screen buffer, copying current display.
@@ -86,8 +87,14 @@ class AltHistoryMode:
         # Cache the screen content for redraws (strip trailing newlines)
         self.screen_content = screen_content.rstrip('\n') if screen_content else screen_content
 
+        # Base blank_lines from entry position; reduced by high water mark as items grow
+        input_start_row = max(1, self.main_screen_row - self.main_cursor_row)
+        content_height = (self.screen_content.count('\n') + 1) if self.screen_content else 0
+        self.base_blank_lines = max(0, input_start_row - content_height - 1)
+        self.original_input_rows = self.main_cursor_row + 1  # Input size at entry
+
         self.in_alt_mode = True
-        self.max_input_rows = 0  # Reset high water mark for new session
+        self.max_input_rows = self.original_input_rows  # Start at entry size
 
         # Draw everything (content + input)
         self._redraw(buf, cursor)
@@ -209,12 +216,11 @@ class AltHistoryMode:
         # Update high water mark (cap at 5 to avoid large items permanently shifting content)
         if total_input_rows <= 5:
             self.max_input_rows = max(self.max_input_rows, total_input_rows)
-        input_area = max(self.max_input_rows, total_input_rows)
 
-        # Layout: input area anchored to bottom, content fills above
-        content_height = (self.screen_content.count('\n') + 2) if self.screen_content else 0
-        input_start_row = term_height - input_area + 1
-        blank_lines = max(0, input_start_row - content_height - 1)
+        # Layout: input area ratchets up via high water mark, never back down
+        scroll_up = max(0, self.max_input_rows - self.original_input_rows)
+        blank_lines = max(0, self.base_blank_lines - scroll_up)
+        input_start_row = max(1, self.main_screen_row - (self.max_input_rows - 1))
 
         out = ['\x1b[?25l', '\x1b[2J', '\x1b[H']  # Hide cursor, clear screen, home
 
@@ -223,17 +229,16 @@ class AltHistoryMode:
         if self.screen_content:
             out.append(self.screen_content + '\n')
 
-        # Reserve input_area rows, then draw actual input
-        out.append(f'\x1b[{input_start_row};1H')
-        out.append('\x1b[K\n' * (input_area - 1) + '\x1b[K')
+        # Draw input at calculated position
         out.append(f'\x1b[{input_start_row};1H')
         for i, line in enumerate(lines):
             prefix = self.display_prompt if i == 0 else self.display_continuation
             out.append(f'{prefix}{line}\x1b[K')
             if i < len(lines) - 1:
                 out.append('\n')
+        out.append('\x1b[J')  # Clear to end of screen (removes remnants of larger items)
 
-        # Position cursor
+        # Position cursor within input area
         out.append(f'\x1b[{input_start_row + cursor_row_in_input};{cursor_phys_col + 1}H')
         out.append('\x1b[?25h')  # Show cursor
         sys.stdout.write(''.join(out))
