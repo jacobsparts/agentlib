@@ -910,7 +910,7 @@ class SandboxMixin:
 
         return repl
 
-    def _execute_with_tool_handling(self, repl: SandboxedToolREPL, code: str) -> tuple[str, bool]:
+    def _execute_with_tool_handling(self, repl: SandboxedToolREPL, code: str) -> tuple[str, bool, list, str]:
         """
         Execute code in sandboxed REPL, handling tool calls.
 
@@ -919,12 +919,16 @@ class SandboxMixin:
         from agentlib.tools.subrepl import _split_into_statements, _format_echo
         from agentlib.agent import _CompleteException
 
+        # Allow subclasses to preprocess code before splitting
+        if hasattr(self, 'preprocess_code'):
+            code = self.preprocess_code(code)
+
         # Split into statements, then transform each individually
         # (Can't transform whole code first because AST strips comments,
         # which would cause misalignment between original and transformed statements)
         original_statements = _split_into_statements(code)
         if not original_statements:
-            return "", False, []
+            return "", False, [], code
 
         repl._ensure_session()
         output_chunks = []  # List of (msg_type, chunk) tuples for entire turn
@@ -987,7 +991,7 @@ class SandboxMixin:
                                     break
                             repl._running = False
                             output = "".join(chunk for _, chunk in output_chunks)
-                            return output, False, output_chunks
+                            return output, False, output_chunks, code
 
                     elif msg_type == "done":
                         repl._running = False
@@ -1026,7 +1030,7 @@ class SandboxMixin:
 
         output = "".join(chunk for _, chunk in output_chunks)
         is_pure_syntax_error = not any_executed and bool(output_chunks)
-        return output, is_pure_syntax_error, output_chunks
+        return output, is_pure_syntax_error, output_chunks, code
 
     def _handle_tool_request(self, repl: SandboxedToolREPL, req: dict) -> None:
         """Handle a tool request from the sandboxed REPL."""

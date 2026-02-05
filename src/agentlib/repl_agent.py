@@ -72,6 +72,64 @@ from agentlib.tools.source_extract import extract_method_source as _extract_tool
 
 
 # =============================================================================
+# Syntax Correction Helpers
+# =============================================================================
+
+def fix_triple_quote_conflict(code: str) -> str:
+    '''
+    Fix triple-quote conflicts where outer """ contains inner """ docstrings.
+
+    When an LLM writes code like:
+        print("""
+            def foo():
+                """docstring"""
+        """)
+
+    The inner """ prematurely closes the outer string. This function detects
+    and fixes such cases by converting outer """ to single quotes.
+
+    Returns the fixed code, or original if no fix needed/possible.
+    '''
+    # Check if code already compiles
+    try:
+        compile(code, '<repl>', 'exec')
+        return code
+    except SyntaxError:
+        pass
+
+    # Find all """ positions
+    positions = []
+    i = 0
+    while True:
+        pos = code.find('"""', i)
+        if pos == -1:
+            break
+        positions.append(pos)
+        i = pos + 3
+
+    if len(positions) < 4:
+        return code  # Need at least 4 (outer open/close + inner open/close)
+
+    # Try swapping first and last """ to '''
+    first_pos = positions[0]
+    last_pos = positions[-1]
+
+    fixed = (
+        code[:first_pos] + "'''" +
+        code[first_pos + 3:last_pos] +
+        "'''" + code[last_pos + 3:]
+    )
+
+    try:
+        compile(fixed, '<repl>', 'exec')
+        return fixed
+    except SyntaxError:
+        pass
+
+    return code
+
+
+# =============================================================================
 # Shared REPL builtins code (used by both ToolREPL and SandboxedToolREPL)
 # =============================================================================
 # These functions are injected into the subprocess. They rely on transport-specific
@@ -916,7 +974,12 @@ Call help(function_name) for parameter descriptions.
                         if content.endswith("```"):
                             content = content[:-3].rstrip('\n')
 
-                    output, pure_syntax_error, output_chunks = self._execute_with_tool_handling(repl, content)
+                    output, pure_syntax_error, output_chunks, corrected_code = self._execute_with_tool_handling(repl, content)
+
+                    # Apply silent corrections to conversation (both sides see corrected code)
+                    if corrected_code != content:
+                        resp['content'] = corrected_code
+                        content = corrected_code
 
                     if not pure_syntax_error:
                         break
@@ -1046,19 +1109,26 @@ Call help(function_name) for parameter descriptions.
         ast.fix_missing_locations(new_tree)
         return ast.unparse(new_tree)
 
-    def _execute_with_tool_handling(self, repl: ToolREPL, code: str) -> tuple[str, bool]:
+    def _execute_with_tool_handling(self, repl: ToolREPL, code: str) -> tuple[str, bool, list, str]:
         """Execute code statement-by-statement, handling tool calls as they occur.
 
         Returns:
-            Tuple of (output, is_pure_syntax_error) where is_pure_syntax_error is True
-            when no statements executed successfully (first statement had syntax error).
+            Tuple of (output, is_pure_syntax_error, output_chunks, corrected_code) where:
+            - is_pure_syntax_error is True when no statements executed successfully
+            - output_chunks is list of (msg_type, chunk) tuples
+            - corrected_code is the code after any preprocessing corrections
         """
+        # Allow subclasses to preprocess code before splitting
+        # (e.g., fix triple-quote conflicts that would break statement parsing)
+        if hasattr(self, 'preprocess_code'):
+            code = self.preprocess_code(code)
+
         # Split into statements, then transform each individually
         # (Can't transform whole code first because AST strips comments,
         # which would cause misalignment between original and transformed statements)
         original_statements = _split_into_statements(code)
         if not original_statements:
-            return "", False, []
+            return "", False, [], code
 
         repl._ensure_session()
         output_chunks = []  # List of (msg_type, chunk) tuples for entire turn
@@ -1120,7 +1190,7 @@ Call help(function_name) for parameter descriptions.
                                     break
                             repl._running = False
                             output = "".join(chunk for _, chunk in output_chunks)
-                            return output, False, output_chunks
+                            return output, False, output_chunks, code
 
                     # Check for output
                     try:
@@ -1156,7 +1226,7 @@ Call help(function_name) for parameter descriptions.
 
         output = "".join(chunk for _, chunk in output_chunks)
         is_pure_syntax_error = not any_executed and bool(output_chunks)
-        return output, is_pure_syntax_error, output_chunks
+        return output, is_pure_syntax_error, output_chunks, code
 
     def _handle_tool_request(self, repl: ToolREPL, req: dict) -> None:
         """Handle a tool request from the REPL."""
