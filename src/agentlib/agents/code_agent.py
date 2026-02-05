@@ -593,21 +593,36 @@ If you don't know how to proceed:
 
         print(f"{DIM}Entering REPL. Ctrl+D to exit.{RESET}")
 
+        pending_lines = []  # Lines queued from pasted input
+
         while True:
             prompt_str = "... " if buffer else ">>> "
-            try:
-                line = raw_prompt(
-                    prompt_str,
-                    history=repl_history,
-                    add_to_history=False,
-                    altmode=altmode,
-                )
-            except EOFError:
-                break
-            except KeyboardInterrupt:
-                print()
-                buffer = []
-                continue
+
+            # Get next line: from pending queue or from user input
+            if pending_lines:
+                line = pending_lines.pop(0)
+                # Echo the line since it came from paste
+                print(f"{prompt_str}{line}")
+            else:
+                try:
+                    line = raw_prompt(
+                        prompt_str,
+                        history=repl_history,
+                        add_to_history=False,
+                        altmode=altmode,
+                    )
+                except EOFError:
+                    break
+                except KeyboardInterrupt:
+                    print()
+                    buffer = []
+                    continue
+
+                # If pasted content has multiple lines, queue them
+                if '\n' in line:
+                    lines = line.split('\n')
+                    line = lines[0]
+                    pending_lines.extend(lines[1:])
 
             buffer.append(line)
             source = "\n".join(buffer)
