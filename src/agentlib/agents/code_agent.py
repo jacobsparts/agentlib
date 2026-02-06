@@ -751,7 +751,7 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /subagents [model], /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name][/dim]")
+        self.console.print("[dim]Commands: /repl, /subagents [model], /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
 
         if files := gather_auto_attach_files():
             print(f"Loading {', '.join(files)}")
@@ -850,6 +850,23 @@ If you don't know how to proceed:
                             print(f"{DIM}Model changed: {old_model} → {new_model}{RESET}")
                         except ModelNotFoundError as e:
                             print(f"{DIM}{str(e)}{RESET}")
+                    continue
+
+                if user_input.strip() == "/tokens":
+                    tracker = self.llm_client.usage_tracker
+                    if not tracker.history:
+                        print(f"{DIM}No API calls yet{RESET}")
+                    else:
+                        model_name, raw = tracker.history[-1]
+                        n = tracker._normalize(model_name, raw)
+                        total = n['prompt_tokens'] + n['cached_tokens'] + n['completion_tokens'] + n['reasoning_tokens']
+                        parts = [p for p in [
+                            f"{n['prompt_tokens']:,} in" if n['prompt_tokens'] else None,
+                            f"{n['cached_tokens']:,} cached" if n['cached_tokens'] else None,
+                            f"{n['reasoning_tokens']:,} reasoning" if n['reasoning_tokens'] else None,
+                            f"{n['completion_tokens']:,} out" if n['completion_tokens'] else None,
+                        ] if p]
+                        print(f"{DIM}[Last request: {total:,} tokens ({', '.join(parts)})]{RESET}")
                     continue
 
                 if user_input.strip().startswith("/subagents"):
