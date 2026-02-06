@@ -48,6 +48,7 @@ def prompt(
     on_submit: Optional[Callable[[str], None]] = None,
     add_to_history: bool = True,
     altmode: Optional['AltMode'] = None,
+    initial_text: str = '',
 ) -> str:
     """
     Read a line of input with editing support.
@@ -172,10 +173,10 @@ def prompt(
         prev_cursor_row = cursor_target_row
 
     with RawMode():
-        sys.stdout.write(prompt_str)
+        sys.stdout.write(prompt_str + initial_text)
         sys.stdout.flush()
-        buf = []
-        cursor = 0
+        buf = list(initial_text)
+        cursor = len(buf)
         history_idx = len(history)
         saved_line = []
         

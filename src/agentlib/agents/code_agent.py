@@ -604,12 +604,25 @@ If you don't know how to proceed:
                 # Echo the line since it came from paste
                 print(f"{prompt_str}{line}")
             else:
+                # Auto-indent for continuation lines
+                auto_indent = ''
+                if buffer:
+                    last_line = buffer[-1]
+                    indent = len(last_line) - len(last_line.lstrip(' '))
+                    stripped = last_line.rstrip()
+                    if stripped.endswith(':'):
+                        indent += 4
+                    elif stripped == '' and indent >= 4:
+                        indent -= 4
+                    auto_indent = ' ' * indent
+
                 try:
                     line = raw_prompt(
                         prompt_str,
                         history=repl_history,
                         add_to_history=False,
                         altmode=altmode,
+                        initial_text=auto_indent,
                     )
                 except EOFError:
                     break
@@ -628,7 +641,7 @@ If you don't know how to proceed:
             source = "\n".join(buffer)
 
             try:
-                result = compile_command(source + "\n\n")
+                result = compile_command(source)
                 if result is not None:
                     # Complete statement - execute with tool handling
                     # Suppress on_repl_chunk display during direct REPL mode
