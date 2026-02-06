@@ -143,6 +143,8 @@ def _format_echo(stmt: str, redact_long_strings: bool = True) -> str:
         stmt = _redact_long_strings(stmt)
 
     lines = stmt.split('\n')
+    while len(lines) > 1 and not lines[-1].strip():
+        lines.pop()
     result = [f">>> {lines[0]}"]
     for line in lines[1:]:
         result.append(f"... {line}")
