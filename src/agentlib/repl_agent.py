@@ -950,16 +950,6 @@ Call help(function_name) for parameter descriptions.
                                     break
                         raise _InterruptedError("")
                     except BadRequestError:
-                        # API error (e.g., prompt too long) - save conversation before crashing
-                        import tempfile
-                        import json
-                        import sys
-                        crash_file = tempfile.NamedTemporaryFile(
-                            mode='w', suffix='.json', prefix='repl_crash_', delete=False
-                        )
-                        json.dump(self.conversation._messages(), crash_file, indent=2)
-                        crash_file.close()
-                        print(f"\n*** Conversation saved to: {crash_file.name} ***", file=sys.stderr)
                         raise
 
                     content = resp.get('content', '').strip()
@@ -996,17 +986,8 @@ Call help(function_name) for parameter descriptions.
                         {"role": "user", "content": f"{output}\n{hint}"}
                     ]
                 else:
-                    # All retries exhausted - save conversation and crash
-                    import tempfile
-                    import json
-                    import sys
-                    crash_file = tempfile.NamedTemporaryFile(
-                        mode='w', suffix='.json', prefix='repl_crash_', delete=False
-                    )
-                    json.dump(self.conversation._messages(), crash_file, indent=2)
-                    crash_file.close()
+                    # All retries exhausted
                     print(f"\n*** CRASH: Model failed to produce valid Python after {max_syntax_retries} retries ***", file=sys.stderr)
-                    print(f"*** Conversation saved to: {crash_file.name} ***", file=sys.stderr)
                     raise SyntaxError(
                         f"Your response must be valid Python code without preamble or markdown.\n\n{output}"
                     )

@@ -923,6 +923,10 @@ If you don't know how to proceed:
                     self.console.clear_line()
                     print()
                     continue
+                except Exception as e:
+                    self.console.clear_line()
+                    print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
+                    continue
 
                 self.console.clear_line()  # Clear thinking message
 
@@ -937,6 +941,15 @@ If you don't know how to proceed:
                     print(formatted)
         finally:
             altmode.uninstall()
+            # Save conversation on crash
+            if sys.exc_info()[1] is not None:
+                import tempfile
+                crash_file = tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.json', prefix='repl_crash_', delete=False
+                )
+                json.dump(self.conversation._messages(), crash_file, indent=2)
+                crash_file.close()
+                print(f"\n*** Conversation saved to: {crash_file.name} ***", file=sys.stderr)
             # Clean up temp files from truncated output
             for path in getattr(self, '_temp_files', []):
                 try:
