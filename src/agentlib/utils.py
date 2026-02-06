@@ -21,51 +21,62 @@ def throttle(name='default', tps=5):
 class UsageTracker:
     lock = threading.BoundedSemaphore()
     def __init__(self):
-        self.model_usage = defaultdict(lambda: {
-            'prompt_tokens': 0,
-            'cached_tokens': 0,
-            'completion_tokens': 0,
-            'reasoning_tokens': 0,
-            'cost': 0.0
-        })
+        self.history = []
 
     def log(self, model_name, usage):
         with self.lock:
-            from .llm_registry import get_model_config
-            model_config = get_model_config(model_name)
-            cached_tokens = (usage.get('prompt_tokens_details') or {}).get('cached_tokens',0)
-            prompt_tokens = usage.get('prompt_tokens', 0) - cached_tokens
-            assert prompt_tokens >= 0, f"negative prompt token count: {usage}"
-            reasoning_tokens = (usage.get('completion_tokens_details') or {}).get('reasoning_tokens',0)
-            completion_tokens = usage.get('completion_tokens', 0)
-            if total := usage.get('total_tokens'):
-                if reasoning_tokens > 0 and completion_tokens > 0 and (prompt_tokens + cached_tokens + completion_tokens) == total:
-                    total += reasoning_tokens # Gemini
-                elif reasoning_tokens > 0:
-                    completion_tokens = total - (prompt_tokens + cached_tokens + reasoning_tokens)
-                else:
-                    reasoning_tokens = total - (prompt_tokens + cached_tokens + completion_tokens)
-                if not prompt_tokens + cached_tokens + completion_tokens + reasoning_tokens == total or not completion_tokens >= 0 or not reasoning_tokens >= 0:
-                    tokens = {
-                        "prompt_tokens": prompt_tokens,
-                        "cached_tokens": cached_tokens,
-                        "reasoning_tokens": reasoning_tokens,
-                        "completion_tokens": completion_tokens,
-                    }
-                    logger.warning(f"⚠️ Tokens don't add up: {usage} -> {tokens}")
-            self.model_usage[model_name]['prompt_tokens'] += prompt_tokens
-            self.model_usage[model_name]['cached_tokens'] += cached_tokens
-            self.model_usage[model_name]['completion_tokens'] += completion_tokens
-            self.model_usage[model_name]['reasoning_tokens'] += reasoning_tokens 
-            input_cost = prompt_tokens * (model_config.get('input_cost',0) / 1000000.0)
-            cached_cost = cached_tokens * ((model_config.get('cached_cost') or input_cost) / 1000000.0)
-            output_cost = completion_tokens * (model_config.get('output_cost',0) / 1000000.0)
-            reasoning_cost = reasoning_tokens * ((model_config.get('reasoning_cost', model_config.get('output_cost')) or output_cost) / 1000000.0)
-            if model_name.startswith('gemini') and prompt_tokens > 200000:
-                input_cost *= 2
-                output_cost *= 1.5
-                reasoning_cost *= 1.5
-            self.model_usage[model_name]['cost'] += input_cost + output_cost + reasoning_cost
+            self.history.append((model_name, usage))
+
+    def _normalize(self, model_name, usage):
+        from .llm_registry import get_model_config
+        model_config = get_model_config(model_name)
+        cached_tokens = (usage.get('prompt_tokens_details') or {}).get('cached_tokens',0)
+        prompt_tokens = usage.get('prompt_tokens', 0) - cached_tokens
+        assert prompt_tokens >= 0, f"negative prompt token count: {usage}"
+        reasoning_tokens = (usage.get('completion_tokens_details') or {}).get('reasoning_tokens',0)
+        completion_tokens = usage.get('completion_tokens', 0)
+        if total := usage.get('total_tokens'):
+            if reasoning_tokens > 0 and completion_tokens > 0 and (prompt_tokens + cached_tokens + completion_tokens) == total:
+                total += reasoning_tokens # Gemini
+            elif reasoning_tokens > 0:
+                completion_tokens = total - (prompt_tokens + cached_tokens + reasoning_tokens)
+            else:
+                reasoning_tokens = total - (prompt_tokens + cached_tokens + completion_tokens)
+            if not prompt_tokens + cached_tokens + completion_tokens + reasoning_tokens == total or not completion_tokens >= 0 or not reasoning_tokens >= 0:
+                tokens = {
+                    "prompt_tokens": prompt_tokens,
+                    "cached_tokens": cached_tokens,
+                    "reasoning_tokens": reasoning_tokens,
+                    "completion_tokens": completion_tokens,
+                }
+                logger.warning(f"⚠️ Tokens don't add up: {usage} -> {tokens}")
+        input_cost = prompt_tokens * (model_config.get('input_cost',0) / 1000000.0)
+        cached_cost = cached_tokens * ((model_config.get('cached_cost') or input_cost) / 1000000.0)
+        output_cost = completion_tokens * (model_config.get('output_cost',0) / 1000000.0)
+        reasoning_cost = reasoning_tokens * ((model_config.get('reasoning_cost', model_config.get('output_cost')) or output_cost) / 1000000.0)
+        if model_name.startswith('gemini') and prompt_tokens > 200000:
+            input_cost *= 2
+            output_cost *= 1.5
+            reasoning_cost *= 1.5
+        return {
+            'prompt_tokens': prompt_tokens,
+            'cached_tokens': cached_tokens,
+            'completion_tokens': completion_tokens,
+            'reasoning_tokens': reasoning_tokens,
+            'cost': input_cost + cached_cost + output_cost + reasoning_cost,
+        }
+
+    @property
+    def model_usage(self):
+        totals = defaultdict(lambda: {
+            'prompt_tokens': 0, 'cached_tokens': 0,
+            'completion_tokens': 0, 'reasoning_tokens': 0, 'cost': 0.0
+        })
+        for model_name, usage in self.history:
+            n = self._normalize(model_name, usage)
+            for k in n:
+                totals[model_name][k] += n[k]
+        return totals
 
     def print_stats(self):
         for model_name, usage in self.model_usage.items():
@@ -78,6 +89,6 @@ class UsageTracker:
             ] if part ]
             if parts:
                 print(f"{model_name}: {', '.join(parts)}")
-    
+
     def __del__(self):
         self.print_stats()
