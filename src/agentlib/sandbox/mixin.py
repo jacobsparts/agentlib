@@ -628,7 +628,6 @@ from pathlib import Path
             should_inject = impl is not None and getattr(impl, '_tool_inject', False)
             
             if should_inject:
-                # Direct source injection - raises on failure
                 code = _extract_tool_source(impl, name)
             elif impl is not None or spec is not None:
                 # Socket relay stub - calls back to host process

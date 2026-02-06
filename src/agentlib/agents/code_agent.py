@@ -776,7 +776,10 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip() == "/repl":
-                    self.user_repl_session(history)
+                    try:
+                        self.user_repl_session(history)
+                    except Exception as e:
+                        print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
                     continue
 
                 if user_input.strip() == "/rewind":
@@ -878,41 +881,47 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/subagents"):
-                    # Import subagent module into REPL and show docstring to agent
-                    # Optional model parameter: /subagents [model]
-                    parts = user_input.strip().split(None, 1)
-                    if len(parts) > 1:
-                        # Model specified administratively
-                        subagent_model = parts[1].strip()
-                        model_locked = True
-                    else:
-                        # Inherit parent's model
-                        subagent_model = self.model
-                        model_locked = False
+                    try:
+                        # Import subagent module into REPL and show docstring to agent
+                        # Optional model parameter: /subagents [model]
+                        parts = user_input.strip().split(None, 1)
+                        if len(parts) > 1:
+                            # Model specified administratively
+                            subagent_model = parts[1].strip()
+                            model_locked = True
+                        else:
+                            # Inherit parent's model
+                            subagent_model = self.model
+                            model_locked = False
 
-                    repl = self._get_tool_repl()
-                    # Import and set default model (silent injection)
-                    repl._inject_code(f"from agentlib.subagent import Subagent, SubagentError, SubagentResponse, _subagents; Subagent.default_model = {repr(subagent_model)}")
+                        repl = self._get_tool_repl()
+                        # Import and set default model (silent injection)
+                        repl._inject_code(f"from agentlib.subagent import Subagent, SubagentError, SubagentResponse, _subagents; Subagent.default_model = {repr(subagent_model)}")
 
-                    # Only show docstring on first load; subsequent calls just update model
-                    already_loaded = getattr(self, '_subagents_loaded', False)
-                    if already_loaded:
-                        print(f"{DIM}Subagent default model changed to: {subagent_model}{RESET}")
-                    else:
-                        self._subagents_loaded = True
-                        # Build docstring, optionally hiding model config section
-                        from agentlib import subagent
-                        docstring = subagent.__doc__
-                        if model_locked:
-                            # Strip "## Model Configuration" section so agent doesn't try to override
-                            import re
-                            docstring = re.sub(r'## Model Configuration\n.*?(?=\n## |\n"""|\Z)', '', docstring, flags=re.DOTALL)
-                        self.usermsg(f">>> # Subagent module loaded (model: {subagent_model})\n{docstring}")
-                        print(f"{DIM}Subagent module loaded into REPL (model: {subagent_model}){RESET}")
+                        # Only show docstring on first load; subsequent calls just update model
+                        already_loaded = getattr(self, '_subagents_loaded', False)
+                        if already_loaded:
+                            print(f"{DIM}Subagent default model changed to: {subagent_model}{RESET}")
+                        else:
+                            self._subagents_loaded = True
+                            # Build docstring, optionally hiding model config section
+                            from agentlib import subagent
+                            docstring = subagent.__doc__
+                            if model_locked:
+                                # Strip "## Model Configuration" section so agent doesn't try to override
+                                import re
+                                docstring = re.sub(r'## Model Configuration\n.*?(?=\n## |\n"""|\Z)', '', docstring, flags=re.DOTALL)
+                            self.usermsg(f">>> # Subagent module loaded (model: {subagent_model})\n{docstring}")
+                            print(f"{DIM}Subagent module loaded into REPL (model: {subagent_model}){RESET}")
+                    except Exception as e:
+                        print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
                     continue
 
                 if synth:
-                    self._synthetic_exchange()
+                    try:
+                        self._synthetic_exchange()
+                    except Exception as e:
+                        print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
                     synth = False
                 self.usermsg(user_input)
 
