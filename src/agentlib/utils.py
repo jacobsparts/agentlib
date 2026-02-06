@@ -2,6 +2,7 @@ import threading
 import time
 import logging
 from collections import defaultdict
+from .llm_registry import get_model_config
 
 logger = logging.getLogger('agentlib')
 
@@ -28,7 +29,6 @@ class UsageTracker:
             self.history.append((model_name, usage))
 
     def _normalize(self, model_name, usage):
-        from .llm_registry import get_model_config
         model_config = get_model_config(model_name)
         cached_tokens = (usage.get('prompt_tokens_details') or {}).get('cached_tokens',0)
         prompt_tokens = usage.get('prompt_tokens', 0) - cached_tokens
@@ -73,9 +73,9 @@ class UsageTracker:
             'completion_tokens': 0, 'reasoning_tokens': 0, 'cost': 0.0
         })
         for model_name, usage in self.history:
-            n = self._normalize(model_name, usage)
-            for k in n:
-                totals[model_name][k] += n[k]
+            normalized = self._normalize(model_name, usage)
+            for k in normalized:
+                totals[model_name][k] += normalized[k]
         return totals
 
     def print_stats(self):
