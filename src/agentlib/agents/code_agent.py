@@ -635,6 +635,11 @@ If you don't know how to proceed:
                     self._in_user_repl = True
                     try:
                         output, _, _, _ = self._execute_with_tool_handling(repl, source)
+                    except KeyboardInterrupt:
+                        self._in_user_repl = False
+                        print()
+                        buffer = []
+                        continue
                     finally:
                         self._in_user_repl = False
                     processed = self.process_repl_output(output)
