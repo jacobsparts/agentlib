@@ -267,6 +267,15 @@ class CLIMixin:
                 if not user_input.strip():
                     continue
 
+                if user_input.strip() == "/rewind":
+                    from .rewind import rewind_ui
+                    last_response = rewind_ui(altmode, self.conversation)
+                    if last_response is not None:
+                        self.console.print("[dim]Conversation rewound.[/dim]")
+                        if last_response:
+                            print(self.format_response(last_response))
+                    continue
+
                 # Send to agent
                 self.usermsg(user_input)
 

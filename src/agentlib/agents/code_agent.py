@@ -751,7 +751,7 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /subagents [model], /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
+        self.console.print("[dim]Commands: /repl, /rewind, /subagents [model], /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
 
         if files := gather_auto_attach_files():
             print(f"Loading {', '.join(files)}")
@@ -777,6 +777,15 @@ If you don't know how to proceed:
 
                 if user_input.strip() == "/repl":
                     self.user_repl_session(history)
+                    continue
+
+                if user_input.strip() == "/rewind":
+                    from agentlib.cli.rewind import rewind_ui
+                    last_response = rewind_ui(altmode, self.conversation)
+                    if last_response is not None:
+                        print(f"{DIM}Conversation rewound.{RESET}")
+                        if last_response:
+                            print(self.format_response(last_response))
                     continue
 
                 if user_input.strip().startswith("/save "):
