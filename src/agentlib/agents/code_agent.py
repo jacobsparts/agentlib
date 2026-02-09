@@ -105,6 +105,10 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
     model = _get_config_value("code_agent_model", "anthropic/claude-sonnet-4-5")
 
+    def build_output_for_llm(self, output_chunks):
+        """Exclude emit output — agent doesn't need its own emit echoed back."""
+        return "".join(chunk for msg_type, chunk in output_chunks if msg_type != "emit")
+
     @REPLAgent.tool
     def view_images(self,
             files: list[str | bytes] = "List of image filepaths or binary data",
@@ -696,7 +700,7 @@ If you don't know how to proceed:
         try:
             with open(filename) as f:
                 messages = json.load(f)
-                messages = [ {k: v for k, v in row.items() if k in {'role', 'content'}} for row in messages ]
+                messages = [ {k: v for k, v in row.items() if k in {'role', 'content', '_stdout'}} for row in messages ]
                 self.conversation.messages = messages
         except json.JSONDecodeError:
             print(f"{DIM}Error: {filename} is not a valid JSON session file{RESET}")

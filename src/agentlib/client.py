@@ -262,6 +262,8 @@ class LLMClient:
     def _call(self, messages, tools=None):
         if not self.native:
             messages = [ self.prepare_message(msg) for msg in messages ]
+        # Strip internal metadata keys (underscore-prefixed) before sending to API
+        messages = [{k: v for k, v in m.items() if not k.startswith('_')} for m in messages]
         if self.model_config['api_type'] == "completions":
             return self._call_completions(messages, tools)
         elif self.model_config['api_type'] == "messages":

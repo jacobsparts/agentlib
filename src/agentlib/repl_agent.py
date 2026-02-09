@@ -750,6 +750,15 @@ class REPLMixin:
     releases control to the user.
     """
 
+    def build_output_for_llm(self, output_chunks):
+        """Build the output string sent to the LLM from typed output chunks.
+
+        Override to filter specific chunk types (e.g., exclude "emit" output).
+        Each chunk is a (msg_type, text) tuple where msg_type is one of:
+        "echo", "output", "print", "emit", "read", "progress", "error".
+        """
+        return "".join(chunk for _, chunk in output_chunks)
+
     interactive: bool = False  # Legacy flag, kept for compatibility
 
     def usermsg(self, content, **kwargs):
@@ -777,7 +786,13 @@ class REPLMixin:
                     prev = last_msg["content"]
                     sep = "" if prev.endswith("\n") else "\n"
                     last_msg["content"] = prev + sep + content + "\n"
-                    
+
+                    # Also update _stdout with the appended content
+                    if '_stdout' in last_msg:
+                        prev_stdout = last_msg['_stdout']
+                        sep_stdout = "" if prev_stdout.endswith("\n") else "\n"
+                        last_msg['_stdout'] = prev_stdout + sep_stdout + content + "\n"
+
                     # If new content has images, append them too
                     if 'images' in kwargs:
                         last_msg['images'] = last_msg.get('images', []) + kwargs['images']
@@ -1005,17 +1020,22 @@ Call help(function_name) for parameter descriptions.
                 continue
 
             # Feed output back to LLM as the REPL response
-            # Allow subclasses to process/truncate large outputs
-            output_for_llm = output
+            # build_output_for_llm lets subclasses filter chunk types (e.g., exclude emit)
+            output_for_llm = self.build_output_for_llm(output_chunks)
             if hasattr(self, 'process_repl_output'):
-                output_for_llm = self.process_repl_output(output)
+                output_for_llm = self.process_repl_output(output_for_llm)
+
+            # Store full output as _stdout when it differs from filtered content
+            kwargs = {}
+            if output_for_llm != output:
+                kwargs['_stdout'] = output
 
             if output_for_llm.strip():
                 self._last_was_repl_output = False  # Clear before usermsg check
-                self.usermsg(output_for_llm)
+                self.usermsg(output_for_llm, **kwargs)
             else:
                 self._last_was_repl_output = False
-                self.usermsg("(no output)")
+                self.usermsg("# [no output]", **kwargs)
 
             if self.complete:
                 # Mark that last message is REPL output - next user message appends
