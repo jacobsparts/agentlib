@@ -771,34 +771,26 @@ class REPLMixin:
         """
         # Check if we should append to last REPL output
         if getattr(self, '_last_was_repl_output', False) and self.conversation.messages:
-            # Don't append if there are pending attachments (from REPLAttachmentMixin)
-            # They need to be injected between the REPL output and the new message
-            has_pending = False
-            if hasattr(self, '_attachment_state') and hasattr(self, '_non_system_count'):
-                current_idx = self._non_system_count()
-                has_pending = any(idx >= current_idx for idx in self._attachment_state)
+            last_msg = self.conversation.messages[-1]
+            if last_msg.get("role") == "user":
+                # Append as output of the previous emit() call
+                # Add trailing \n since this simulates print() output from emit()
+                prev = last_msg["content"]
+                sep = "" if prev.endswith("\n") else "\n"
+                last_msg["content"] = prev + sep + content + "\n"
 
-            if not has_pending:
-                last_msg = self.conversation.messages[-1]
-                if last_msg.get("role") == "user":
-                    # Append as output of the previous emit() call
-                    # Add trailing \n since this simulates print() output from emit()
-                    prev = last_msg["content"]
-                    sep = "" if prev.endswith("\n") else "\n"
-                    last_msg["content"] = prev + sep + content + "\n"
+                # Also update _stdout with the appended content
+                if '_stdout' in last_msg:
+                    prev_stdout = last_msg['_stdout']
+                    sep_stdout = "" if prev_stdout.endswith("\n") else "\n"
+                    last_msg['_stdout'] = prev_stdout + sep_stdout + content + "\n"
 
-                    # Also update _stdout with the appended content
-                    if '_stdout' in last_msg:
-                        prev_stdout = last_msg['_stdout']
-                        sep_stdout = "" if prev_stdout.endswith("\n") else "\n"
-                        last_msg['_stdout'] = prev_stdout + sep_stdout + content + "\n"
+                # If new content has images, append them too
+                if 'images' in kwargs:
+                    last_msg['images'] = last_msg.get('images', []) + kwargs['images']
 
-                    # If new content has images, append them too
-                    if 'images' in kwargs:
-                        last_msg['images'] = last_msg.get('images', []) + kwargs['images']
-                        
-                    self._last_was_repl_output = False
-                    return
+                self._last_was_repl_output = False
+                return
 
         # Fall back to normal message append
         self._last_was_repl_output = False

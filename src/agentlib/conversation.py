@@ -7,7 +7,17 @@ class Conversation:
         self.messages = [ {"role": "system", "content": system_prompt} ]
 
     def _messages(self):
-        return self.messages
+        result = []
+        for msg in self.messages:
+            attachments = msg.get('_attachments')
+            if attachments:
+                out = {k: v for k, v in msg.items() if k != '_attachments'}
+                for name, content in attachments.items():
+                    out['content'] = out['content'].replace(f'[Attachment: {name}]', content)
+                result.append(out)
+            else:
+                result.append(msg)
+        return result
 
     def _append_message(self, message):
         self.messages.append(message)

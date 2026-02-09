@@ -2,7 +2,8 @@
 AttachmentMixin - Mixin that adds persistent context attachments to agents.
 
 Attachments are named pieces of content that persist in the conversation context.
-They can be added, updated, or removed, and are rendered into messages for the LLM.
+They can be added, updated, or removed. Content is injected via placeholders in
+message content, replaced at render time by Conversation._messages().
 
 Example:
     from agentlib import BaseAgent, AttachmentMixin
@@ -21,10 +22,10 @@ Example:
         result = agent.run("Update the timeout to 60")
 
 Behavior:
-    - attach(name, content): Add or update an attachment
-    - detach(name): Remove an attachment from context
-    - Attachments are rendered as delimited blocks in messages
-    - When an attachment changes, the old version is invalidated
+    - attach(name, content): Add or update — buffers until next usermsg()
+    - detach(name): Remove — invalidates across all messages
+    - Placeholders [Attachment: name] remain as tiny breadcrumbs when invalidated
+    - Content is rendered as delimited blocks (-------- BEGIN/END --------)
 """
 
 import json
@@ -37,101 +38,68 @@ class AttachmentMixin:
         if hasattr(super(), '_ensure_setup'):
             super()._ensure_setup()
 
-        # Fast path - already initialized
-        if hasattr(self, '_message_attachments'):
+        if hasattr(self, '_pending_attachments'):
             return
 
-        # {message_index: {name: content}} - content is None for invalidation
-        self._message_attachments = {}
-        self._conversation_wrapped = False
-
-    def _wrap_conversation(self):
-        """Wrap conversation._messages lazily on first use."""
-        if self._conversation_wrapped:
-            return
-        self._conversation_wrapped = True
-        conv = self.conversation
-        original_messages = conv._messages
-        def _messages_with_attachments():
-            return self._inject_attachments(original_messages())
-        conv._messages = _messages_with_attachments
+        self._pending_attachments = {}
 
     def attach(self, name: str, content):
         """
         Add or update an attachment.
-        
+
         Args:
             name: Identifier for this attachment
             content: String, dict, or list content (dicts/lists are JSON-serialized)
         """
-        self._wrap_conversation()
         if isinstance(content, (dict, list)):
             content = json.dumps(content, indent=2)
-        
-        idx = len(self.conversation.messages)
-        if idx not in self._message_attachments:
-            self._message_attachments[idx] = {}
-        self._message_attachments[idx][name] = content
+
+        self._invalidate_attachment(name)
+        self._pending_attachments[name] = self._render_attachment(name, content)
 
     def detach(self, name: str):
         """
         Remove an attachment from context.
-        
+
         Args:
             name: Identifier of attachment to remove
         """
-        self._wrap_conversation()
-        idx = len(self.conversation.messages)
-        if idx not in self._message_attachments:
-            self._message_attachments[idx] = {}
-        self._message_attachments[idx][name] = None
+        self._invalidate_attachment(name)
+        self._pending_attachments.pop(name, None)
+
+    def list_attachments(self) -> dict[str, str]:
+        """Get currently active attachments."""
+        active = {}
+        for msg in self.conversation.messages:
+            for name, content in msg.get('_attachments', {}).items():
+                active[name] = content
+        active.update(self._pending_attachments)
+        return active
+
+    def _invalidate_attachment(self, name: str):
+        """Remove an attachment from all messages."""
+        for msg in self.conversation.messages:
+            attachments = msg.get('_attachments')
+            if attachments and name in attachments:
+                del attachments[name]
+                if not attachments:
+                    del msg['_attachments']
 
     def _render_attachment(self, name: str, content: str) -> str:
         """Render an attachment as a delimited block."""
         return f"-------- BEGIN {name} --------\n{content}\n-------- END {name} ----------"
 
-    def _inject_attachments(self, messages: list) -> list:
-        """
-        Transform messages to include attachment content.
-        
-        Walks through messages and attachment state, rendering active attachments
-        and invalidation markers into the message stream.
-        """
-        if not self._message_attachments:
-            return messages
-        
-        result = []
-        # Track current state of each attachment: {name: (content, last_seen_idx)}
-        active = {}
-        
-        for idx, msg in enumerate(messages):
-            msg_attachments = self._message_attachments.get(idx, {})
-            
-            # Build attachment text for this message
-            attachment_parts = []
-            
-            # Check for invalidations (content changed or removed)
-            for name, content in msg_attachments.items():
-                if name in active and active[name][0] != content:
-                    # Content changed or removed - mark old as invalid
-                    attachment_parts.append(f"[Attachment removed: {name}]")
-                
-                if content is not None:
-                    # Add new/updated content
-                    attachment_parts.append(self._render_attachment(name, content))
-                    active[name] = (content, idx)
-                else:
-                    # Removal - clear from active
-                    if name in active:
-                        del active[name]
-            
-            if attachment_parts and msg["role"] in ("user", "tool"):
-                # Prepend attachments to message content
-                attachment_text = "\n\n".join(attachment_parts)
-                new_msg = msg.copy()
-                new_msg["content"] = attachment_text + "\n\n" + msg["content"]
-                result.append(new_msg)
-            else:
-                result.append(msg)
-        
-        return result
+    def _render_placeholder(self, name: str) -> str:
+        """Render a placeholder for an attachment."""
+        return f"[Attachment: {name}]"
+
+    def usermsg(self, content, **kwargs):
+        if self._pending_attachments:
+            placeholders = "\n\n".join(
+                self._render_placeholder(name)
+                for name in self._pending_attachments
+            )
+            content = placeholders + "\n\n" + (content if isinstance(content, str) else json.dumps(content))
+            kwargs['_attachments'] = dict(self._pending_attachments)
+            self._pending_attachments.clear()
+        super().usermsg(content, **kwargs)

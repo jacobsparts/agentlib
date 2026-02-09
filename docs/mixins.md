@@ -143,7 +143,7 @@ See [python_tools.md](python_tools.md) for `PythonToolMixin`, `PythonToolRespons
 
 ## AttachmentMixin (Persistent Context)
 
-Adds named attachments that persist in conversation context. Attachments are rendered into messages for the LLM and can be updated or removed.
+Adds named attachments that persist in conversation context. Content is injected via placeholders in message content, replaced at render time by `Conversation._messages()`.
 
 ```python
 from agentlib import BaseAgent, AttachmentMixin
@@ -163,28 +163,22 @@ with MyAgent() as agent:
 ```
 
 **Methods:**
-- `attach(name, content)` - Add or update attachment (str, dict, or list)
+- `attach(name, content)` - Add or update attachment (str, dict, or list). Buffered until next `usermsg()`.
 - `detach(name)` - Remove attachment from context
+- `list_attachments()` - Get currently active attachments
 
-**Rendering:** Attachments appear as delimited blocks prepended to user/tool messages:
+**How it works:** Attachments are buffered and flushed into the next user message as `_attachments` metadata. The message content contains `[Attachment: name]` placeholders that `Conversation._messages()` replaces with the rendered content at LLM call time.
+
+**Invalidation:** When an attachment is updated or detached, the old content is removed from the message. Only the small placeholder `[Attachment: name]` remains as a breadcrumb.
+
+**Rendering (AttachmentMixin):** Delimited blocks:
 ```
 -------- BEGIN config --------
 {"debug": true, "timeout": 30}
 -------- END config ----------
-
-Update the timeout to 60
 ```
 
-**Updates:** When an attachment changes, the old version is marked as removed:
-```
-[Attachment removed: config]
-
--------- BEGIN config --------
-{"debug": false, "timeout": 60}
--------- END config ----------
-```
-
-**Variant:** `REPLAttachmentMixin` renders attachments as synthetic REPL file-read exchanges for use with `REPLAgent`.
+**Variant:** `REPLAttachmentMixin` renders as line-numbered content (like `read()` output) for use with `REPLAgent`.
 
 ## Combining Mixins
 
