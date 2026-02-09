@@ -106,8 +106,54 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     model = _get_config_value("code_agent_model", "anthropic/claude-sonnet-4-5")
 
     def build_output_for_llm(self, output_chunks):
-        """Exclude emit output — agent doesn't need its own emit echoed back."""
-        return "".join(chunk for msg_type, chunk in output_chunks if msg_type != "emit")
+        """Build LLM output, converting complete reads to attachments."""
+        self._read_attachments = {}
+        result = []
+        attach_path = None
+        written_files = []
+        for msg_type, chunk in output_chunks:
+            if msg_type == "emit":
+                continue
+            if msg_type == "read_attach":
+                attach_path = chunk.strip()
+                continue
+            if msg_type == "read" and attach_path:
+                path = attach_path
+                attach_path = None
+                self._invalidate_attachment(path)
+                self._read_attachments[path] = chunk.rstrip('\n')
+                result.append(f"[Attachment: {path}]\n")
+                continue
+            if msg_type == "file_written":
+                written_files.append(chunk.strip())
+                continue
+            attach_path = None
+            result.append(chunk)
+
+        # Auto-refresh: re-read attached files that were written but not re-read by agent
+        for path in written_files:
+            if path in self._read_attachments:
+                continue  # Agent already re-read this file
+            if not self._is_attached(path):
+                continue  # File wasn't attached
+            try:
+                content = Path(path).read_text()
+                lines = content.split('\n')
+                formatted = '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
+                self._invalidate_attachment(path)
+                self._read_attachments[path] = formatted
+                result.append(f">>> read({path!r})\n[Attachment: {path}]\n")
+            except Exception:
+                pass
+
+        return "".join(result)
+
+    def _is_attached(self, name: str) -> bool:
+        """Check if a file is currently attached in any message."""
+        for msg in self.conversation.messages:
+            if name in msg.get('_attachments', {}):
+                return True
+        return False
 
     @REPLAgent.tool
     def view_images(self,
@@ -145,7 +191,12 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     view_images._tool_files_param = "files"
 
     def usermsg(self, content, **kwargs):
-        """Override to attach pending images."""
+        """Override to attach pending images and read-attachments."""
+        if pending := getattr(self, '_read_attachments', None):
+            existing = kwargs.get('_attachments', {})
+            existing.update(pending)
+            kwargs['_attachments'] = existing
+            self._read_attachments = {}
         if pending := getattr(self, '_pending_images', None):
             kwargs['images'] = kwargs.get('images', []) + pending
             self._pending_images = []
@@ -1081,6 +1132,10 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         if remaining > 0:
             output += f"\n... ({remaining} more lines)"
 
+        # Signal complete-file reads for attachment tracking
+        if offset is None and limit is None:
+            _send_output("read_attach", file_path + "\n")
+
         # Send tagged output for agent to see
         _send_output("read", output + "\n")
 
@@ -1109,6 +1164,8 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         new_content = content.replace(old_string, new_string, -1 if replace_all else 1)
         path.write_text(new_content)
 
+        _send_output("file_written", str(path.resolve()) + "\n")
+
         if replace_all and count > 1:
             return f"All {count} occurrences replaced."
         return "Edit applied."
@@ -1119,7 +1176,12 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         ):
         """Apply a patch to add, update, or delete files."""
         from agentlib.tools.apply_patch import process_patch
-        return process_patch(patch)
+        result = process_patch(patch)
+        # Signal written files for attachment refresh
+        for line in result.split('\n'):
+            if line.startswith(('M ', 'A ')):
+                _send_output("file_written", line[2:] + "\n")
+        return result
 
     @REPLAgent.tool(inject=True)
     def bash(self,

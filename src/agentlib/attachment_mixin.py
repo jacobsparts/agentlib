@@ -100,6 +100,9 @@ class AttachmentMixin:
                 for name in self._pending_attachments
             )
             content = placeholders + "\n\n" + (content if isinstance(content, str) else json.dumps(content))
-            kwargs['_attachments'] = dict(self._pending_attachments)
+            # Merge with any existing _attachments
+            existing = kwargs.get('_attachments', {})
+            existing.update(self._pending_attachments)
+            kwargs['_attachments'] = existing
             self._pending_attachments.clear()
         super().usermsg(content, **kwargs)

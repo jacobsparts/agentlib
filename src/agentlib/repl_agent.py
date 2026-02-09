@@ -755,7 +755,7 @@ class REPLMixin:
 
         Override to filter specific chunk types (e.g., exclude "emit" output).
         Each chunk is a (msg_type, text) tuple where msg_type is one of:
-        "echo", "output", "print", "emit", "read", "progress", "error".
+        "echo", "output", "print", "emit", "read", "read_attach", "file_written", "progress", "error".
         """
         return "".join(chunk for _, chunk in output_chunks)
 
