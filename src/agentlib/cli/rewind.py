@@ -30,6 +30,14 @@ def _preview(text: str, max_chars: int = 80) -> str:
     return first
 
 
+def _is_user_input(msg: dict) -> bool:
+    """Check if a user message contains actual user input (not just REPL output)."""
+    if msg.get('_user_content'):
+        return True
+    content = msg.get('content', '')
+    return not content.lstrip().startswith('>>>')
+
+
 def build_exchanges(messages: list[dict]) -> list[Exchange]:
     """Group conversation messages into displayable exchanges."""
     exchanges = []
@@ -37,20 +45,25 @@ def build_exchanges(messages: list[dict]) -> list[Exchange]:
     while i < len(messages):
         msg = messages[i]
         if msg['role'] == 'user':
-            content = msg.get('content', '')
-            # Skip REPL output messages
-            if content.lstrip().startswith('>>>'):
+            if not _is_user_input(msg):
+                # Pure REPL output (internal turn) - skip
                 i += 1
                 continue
 
-            user_preview = _preview(content)
+            # Use embedded user content if available, otherwise full content
+            display_content = msg.get('_user_content') or msg.get('content', '')
+            user_preview = _preview(display_content)
 
-            # Find last assistant message with text content before next user
+            # Scan forward to find the next user-input boundary,
+            # looking through REPL-internal messages (assistant code + REPL output)
             assistant_preview = ''
             j = i + 1
-            while j < len(messages) and messages[j]['role'] != 'user':
-                if messages[j]['role'] == 'assistant':
-                    text = messages[j].get('content', '')
+            while j < len(messages):
+                msg_j = messages[j]
+                if msg_j['role'] == 'user' and _is_user_input(msg_j):
+                    break  # Next exchange boundary
+                if msg_j['role'] == 'assistant':
+                    text = msg_j.get('content', '')
                     if text:
                         assistant_preview = _preview(text)
                 j += 1

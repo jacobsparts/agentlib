@@ -778,6 +778,7 @@ class REPLMixin:
                 prev = last_msg["content"]
                 sep = "" if prev.endswith("\n") else "\n"
                 last_msg["content"] = prev + sep + content + "\n"
+                last_msg["_user_content"] = content
 
                 # Also update _stdout with the appended content
                 if '_stdout' in last_msg:
