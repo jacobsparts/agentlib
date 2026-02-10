@@ -282,6 +282,13 @@ Don't reconnect every turn - the connection object persists.
 
 >>> context_management()
 
+read() outputs file contents directly and returns None. Do NOT assign it or
+wrap it in print(). Just call: read("file.py")
+
+Prefer bare read(file_path) without offset/limit. Only use offset/limit
+if the file is too large to read at once (2000+ lines) or you have a specific
+reason to view a narrow range.
+
 File reads are complete unless otherwise indicated. Re-reading wastes tokens.
 Variables persist across turns. Don't re-fetch data you already have.
 
@@ -349,16 +356,28 @@ emit(f"Found {len(files)} Python files", release=True)  # WRONG - keep working!
 files = list(Path('.').glob("**/*.py"))
 print(f"Found {len(files)} files")  # You see this, keep going
 for f in files[:5]:
-    content = read(str(f))
-    # ... analyze ...
+    read(str(f))  # Contents appear directly, don't assign
+# ... analyze in next turn ...
 emit("Analysis complete. Here's what I found: ...", release=True)
 
 # BAD: Asking permission for read-only work
 emit("Should I read the config file?", release=True)  # WRONG - just read it
 
 # GOOD: Just do it
-config = read("config.json")
-print(config)  # Inspect it yourself
+read("config.json")  # Contents appear in your next turn
+
+# BAD: Wrapping read() in print or assigning it (read returns None!)
+content = read("file.py")       # WRONG - content is None
+print(read("file.py"))          # WRONG - prints None
+
+# GOOD: Just call read() - output appears directly
+read("file.py")
+
+# BAD: Reading in small chunks unnecessarily
+read("file.py", offset=1, limit=50)   # WRONG - just read the whole file
+
+# GOOD: Just call read() directly
+read("file.py")
 
 # BAD: Re-establishing connections
 conn = mysql.connector.connect(...)  # Every turn? No!
@@ -1115,7 +1134,11 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             offset: Optional[int] = "Line number to start from (1-indexed)",
             limit: Optional[int] = "Number of lines to read (default: 2000)"
         ):
-        """Read a file's contents with line numbers."""
+        """Read a file with line numbers. Outputs directly, returns None.
+
+        Prefer bare read(path) without offset/limit. Only use them for
+        files too large to read at once (2000+ lines).
+        """
         content = Path(file_path).expanduser().read_text()
         all_lines = content.split('\n')
         total_lines = len(all_lines)
