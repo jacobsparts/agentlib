@@ -130,6 +130,13 @@ register_model("openai","gpt-5-mini-flex",
     config={"reasoning_effort": "high", "service_tier": "flex"},
     timeout=1200,
 )
+gpt41 = {
+    "model": "gpt-4.1",
+    "input_cost": 1.75,
+    "cached_cost": 0.175,
+    "output_cost": 14.0,
+}
+register_model("openai", "gpt-4.1", **gpt41)
 
 # --- Anthropic ---
 register_provider("anthropic",
