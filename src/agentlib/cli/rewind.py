@@ -186,7 +186,10 @@ def rewind_ui(altmode: 'AltMode', conversation: 'Conversation') -> Optional[str]
                 sys.stdout.write(frame)
                 sys.stdout.flush()
 
-                k = os.read(sys.stdin.fileno(), 4096)
+                try:
+                    k = os.read(sys.stdin.fileno(), 4096)
+                except KeyboardInterrupt:
+                    return None
                 if not k:
                     continue
 
