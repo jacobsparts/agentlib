@@ -1157,6 +1157,10 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         Prefer bare read(path) without offset/limit. Only use them for
         files too large to read at once (2000+ lines).
         """
+        # Deny partial reads for files already in context
+        if (offset is not None or limit is not None) and self._is_attached(file_path):
+            raise ValueError("Partial read denied for file already in context. Call read() without offset or limit to reload the file, or ask the user to /detach the file to enable partial reads.")
+
         content = Path(file_path).expanduser().read_text()
         all_lines = content.split('\n')
         total_lines = len(all_lines)

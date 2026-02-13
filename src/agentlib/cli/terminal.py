@@ -355,9 +355,9 @@ def render_markdown(text: str, width: Optional[int] = None) -> str:
 
         # Regular text
         if line.strip():
-            colored = f"{TEXT}{_colorize_inline(line)}"
+            colored = _colorize_inline(line)
             for wrapped in _wrap_text(colored, width):
-                result.append(f"{wrapped}{RESET}")
+                result.append(f"{TEXT}{wrapped}{RESET}")
         else:
             result.append("")
 
