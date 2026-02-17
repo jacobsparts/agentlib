@@ -265,6 +265,20 @@ register_model("openrouter","kimi-k2.5",
     output_cost=3.0,
     tools=False,
 )
+register_model("openrouter","minimax-m2.5",
+    model="minimax/minimax-m2.5",
+    aliases="minimax",
+    config={
+        'provider': {
+            'order': ['minimax'],
+            'allow_fallbacks': False
+        }, 
+        'temperature': 0
+    },
+    input_cost=0.6,
+    output_cost=3.0,
+    tools=False,
+)
 
 
 # --- User Configuration ---

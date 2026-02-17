@@ -110,12 +110,16 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         self._read_attachments = {}
         result = []
         attach_path = None
+        partial_read_path = None
         written_files = []
         for msg_type, chunk in output_chunks:
             if msg_type == "emit":
                 continue
             if msg_type == "read_attach":
                 attach_path = chunk.strip()
+                continue
+            if msg_type == "read_partial":
+                partial_read_path = chunk.strip()
                 continue
             if msg_type == "read" and attach_path:
                 path = attach_path
@@ -124,10 +128,19 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 self._read_attachments[path] = chunk.rstrip('\n')
                 result.append(f"[Attachment: {path}]\n")
                 continue
+            if msg_type == "read" and partial_read_path:
+                path = partial_read_path
+                partial_read_path = None
+                if self._is_attached(path):
+                    result.append(f"ValueError: Partial read denied for file already in context. Call read() without offset or limit to reload the file, or ask the user to /detach the file to enable partial reads.\n")
+                    continue
+                result.append(chunk)
+                continue
             if msg_type == "file_written":
                 written_files.append(chunk.strip())
                 continue
             attach_path = None
+            partial_read_path = None
             result.append(chunk)
 
         # Auto-refresh: re-read attached files that were written but not re-read by agent
@@ -1157,10 +1170,6 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         Prefer bare read(path) without offset/limit. Only use them for
         files too large to read at once (2000+ lines).
         """
-        # Deny partial reads for files already in context
-        if (offset is not None or limit is not None) and self._is_attached(file_path):
-            raise ValueError("Partial read denied for file already in context. Call read() without offset or limit to reload the file, or ask the user to /detach the file to enable partial reads.")
-
         content = Path(file_path).expanduser().read_text()
         all_lines = content.split('\n')
         total_lines = len(all_lines)
@@ -1177,9 +1186,11 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         if remaining > 0:
             output += f"\n... ({remaining} more lines)"
 
-        # Signal complete-file reads for attachment tracking
+        # Signal for attachment tracking (host-side check in build_output_for_llm)
         if offset is None and limit is None:
             _send_output("read_attach", file_path + "\n")
+        else:
+            _send_output("read_partial", file_path + "\n")
 
         # Send tagged output for agent to see
         _send_output("read", output + "\n")
