@@ -959,7 +959,7 @@ Call help(function_name) for parameter descriptions.
                     except BadRequestError:
                         raise
 
-                    content = resp.get('content', '').strip()
+                    content = (resp.get('content') or '').strip()
                     if not content:
                         break
 

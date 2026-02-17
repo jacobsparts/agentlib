@@ -256,7 +256,7 @@ class LLMClient:
             } for tc in m['tool_calls'] ] }, indent=JSON_INDENT)
             return {
                 'role': 'assistant',
-                'content': f"{m['content']}\n{tool_calls_str}".strip(),
+                'content': f"{m['content'] or ''}\n{tool_calls_str}".strip(),
                 **{k: v for k, v in m.items() if k in EXTRA_KEYS}
             }
         elif m['role'] == 'tool':
