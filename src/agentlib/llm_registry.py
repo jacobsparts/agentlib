@@ -19,6 +19,8 @@ class ProviderConfig:
     timeout: int = 120
     tools: bool = False
     api_type: str = "completions"
+    token_transform: object = None   # callable(usage_dict) -> usage_dict
+    cost_transform: object = None    # callable(prompt, cached, completion, reasoning, in_cost, cached_cost, out_cost, rsn_cost) -> (in_cost, cached_cost, out_cost, rsn_cost)
 
 @dataclass
 class ModelConfig:
@@ -170,6 +172,14 @@ register_model("anthropic","claude-opus-4-6",
     output_cost=25.0,
 )
 
+def gemini_cost_transform(prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
+                          input_cost, cached_cost, output_cost, reasoning_cost):
+    if prompt_tokens > 200000:
+        input_cost *= 2
+        output_cost *= 1.5
+        reasoning_cost *= 1.5
+    return input_cost, cached_cost, output_cost, reasoning_cost
+
 # --- Google ---
 register_provider("google",
     host="generativelanguage.googleapis.com",
@@ -179,6 +189,7 @@ register_provider("google",
     timeout=None,
     tools=True,
     api_type="completions",
+    cost_transform=gemini_cost_transform,
 )
 register_model("google","gemini-3-pro",
     model="gemini-3-pro-preview",

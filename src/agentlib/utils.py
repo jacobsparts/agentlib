@@ -1,3 +1,4 @@
+import atexit
 import threading
 import time
 import logging
@@ -23,6 +24,7 @@ class UsageTracker:
     lock = threading.BoundedSemaphore()
     def __init__(self):
         self.history = []
+        atexit.register(self.print_stats)
 
     def log(self, model_name, usage):
         with self.lock:
@@ -30,13 +32,18 @@ class UsageTracker:
 
     def _normalize(self, model_name, usage):
         model_config = get_model_config(model_name)
-        cached_tokens = (usage.get('prompt_tokens_details') or {}).get('cached_tokens',0)
-        prompt_tokens = usage.get('prompt_tokens', 0) - cached_tokens
+        if transform := model_config.get('token_transform'):
+            usage = transform(usage)
+        # Anthropic uses input_tokens/output_tokens; OpenAI uses prompt_tokens/completion_tokens
+        cached_tokens = (usage.get('prompt_tokens_details') or {}).get('cached_tokens', 0)
+        cached_tokens += usage.get('cache_read_input_tokens', 0) + usage.get('cache_creation_input_tokens', 0)
+        prompt_tokens = usage.get('prompt_tokens', 0) or usage.get('input_tokens', 0)
+        prompt_tokens -= cached_tokens
         if prompt_tokens < 0:
             logger.warning(f"⚠️ Negative prompt token count: {usage}")
             return {'prompt_tokens': 0, 'cached_tokens': 0, 'completion_tokens': 0, 'reasoning_tokens': 0, 'cost': 0.0}
-        reasoning_tokens = (usage.get('completion_tokens_details') or {}).get('reasoning_tokens',0)
-        completion_tokens = usage.get('completion_tokens', 0)
+        reasoning_tokens = (usage.get('completion_tokens_details') or {}).get('reasoning_tokens', 0)
+        completion_tokens = usage.get('completion_tokens', 0) or usage.get('output_tokens', 0)
         if total := usage.get('total_tokens'):
             if reasoning_tokens > 0 and completion_tokens > 0 and (prompt_tokens + cached_tokens + completion_tokens) == total:
                 total += reasoning_tokens # Gemini
@@ -56,10 +63,11 @@ class UsageTracker:
         cached_cost = cached_tokens * ((model_config.get('cached_cost') or input_cost) / 1000000.0)
         output_cost = completion_tokens * (model_config.get('output_cost',0) / 1000000.0)
         reasoning_cost = reasoning_tokens * ((model_config.get('reasoning_cost', model_config.get('output_cost')) or output_cost) / 1000000.0)
-        if model_name.startswith('gemini') and prompt_tokens > 200000:
-            input_cost *= 2
-            output_cost *= 1.5
-            reasoning_cost *= 1.5
+        if cost_transform := model_config.get('cost_transform'):
+            input_cost, cached_cost, output_cost, reasoning_cost = cost_transform(
+                prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
+                input_cost, cached_cost, output_cost, reasoning_cost,
+            )
         return {
             'prompt_tokens': prompt_tokens,
             'cached_tokens': cached_tokens,
@@ -92,5 +100,3 @@ class UsageTracker:
             if parts:
                 print(f"{model_name}: {', '.join(parts)}")
 
-    def __del__(self):
-        self.print_stats()
