@@ -38,7 +38,6 @@ class BadRequestError(Exception): pass
 
 class LLMClient:
     usage_tracker = UsageTracker()
-    response_transform = None  # Optional callable(resp_msg, tools) -> resp_msg
 
     def __init__(self, model_name, native=None):
         self.model_name = model_name
@@ -318,8 +317,8 @@ class LLMClient:
             try:
                 with self.concurrency_lock:
                     resp_msg = self._call(messages, _tools)
-                if self.response_transform:
-                    resp_msg = self.response_transform(resp_msg, tools)
+                if transform := self.model_config.get('response_transform'):
+                    resp_msg = transform(resp_msg, tools)
                 if not resp_msg.get("tool_calls"):
                     content = resp_msg.get('content', '')
                     err = f"tool_calls missing from response: {content[:1000]}{'...' if len(content) > 1000 else ''}"

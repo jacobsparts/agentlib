@@ -19,8 +19,9 @@ class ProviderConfig:
     timeout: int = 120
     tools: bool = False
     api_type: str = "completions"
-    token_transform: object = None   # callable(usage_dict) -> usage_dict
-    cost_transform: object = None    # callable(prompt, cached, completion, reasoning, in_cost, cached_cost, out_cost, rsn_cost) -> (in_cost, cached_cost, out_cost, rsn_cost)
+    token_transform: object = None    # callable(usage_dict) -> usage_dict
+    cost_transform: object = None     # callable(prompt, cached, completion, reasoning, in_cost, cached_cost, out_cost, rsn_cost) -> (in_cost, cached_cost, out_cost, rsn_cost)
+    response_transform: object = None # callable(resp_msg, tools) -> resp_msg
 
 @dataclass
 class ModelConfig:
