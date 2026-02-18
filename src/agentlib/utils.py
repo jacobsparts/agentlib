@@ -32,7 +32,9 @@ class UsageTracker:
         model_config = get_model_config(model_name)
         cached_tokens = (usage.get('prompt_tokens_details') or {}).get('cached_tokens',0)
         prompt_tokens = usage.get('prompt_tokens', 0) - cached_tokens
-        assert prompt_tokens >= 0, f"negative prompt token count: {usage}"
+        if prompt_tokens < 0:
+            logger.warning(f"⚠️ Negative prompt token count: {usage}")
+            return {'prompt_tokens': 0, 'cached_tokens': 0, 'completion_tokens': 0, 'reasoning_tokens': 0, 'cost': 0.0}
         reasoning_tokens = (usage.get('completion_tokens_details') or {}).get('reasoning_tokens',0)
         completion_tokens = usage.get('completion_tokens', 0)
         if total := usage.get('total_tokens'):
