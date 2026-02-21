@@ -8,7 +8,7 @@ Quick Start:
     from agentlib.cli import CLIAgent
 
     class MyAssistant(CLIAgent):
-        model = 'anthropic/claude-sonnet-4-5'
+        model = 'sonnet'
         system = "You are a helpful assistant."
         welcome_message = "Hello! How can I help?"
 
@@ -20,7 +20,7 @@ With Python execution:
     from agentlib.cli import CLIAgent
 
     class CodeAssistant(PythonToolResponseMixin, CLIAgent):
-        model = 'anthropic/claude-sonnet-4-5'
+        model = 'sonnet'
         system = "You are a Python assistant."
 
     CodeAssistant.main()
@@ -56,7 +56,7 @@ class CLIAgent(CLIMixin, BaseAgent):
     CLI applications, subclass this and add mixins for the capabilities you need.
 
     Class Attributes:
-        model: LLM model to use (e.g., 'anthropic/claude-sonnet-4-5')
+        model: LLM model to use (e.g., 'sonnet')
         system: System prompt for the agent
         welcome_message: Message displayed when CLI starts (supports [bold], [dim], etc.)
         cli_prompt: Input prompt string (default: "> ")
@@ -67,7 +67,7 @@ class CLIAgent(CLIMixin, BaseAgent):
         from agentlib.cli import CLIAgent
 
         class MyAssistant(CLIAgent):
-            model = 'anthropic/claude-sonnet-4-5'
+            model = 'sonnet'
             system = "You are a helpful assistant."
             welcome_message = "[bold]My Assistant[/bold]"
 
@@ -79,7 +79,7 @@ class CLIAgent(CLIMixin, BaseAgent):
         from agentlib.cli import CLIAgent
 
         class CodeAssistant(PythonToolResponseMixin, CLIAgent):
-            model = 'anthropic/claude-sonnet-4-5'
+            model = 'sonnet'
             system = "You are a Python assistant."
 
     With MCP servers:
@@ -87,13 +87,13 @@ class CLIAgent(CLIMixin, BaseAgent):
         from agentlib.cli import CLIAgent
 
         class MCPAssistant(PythonMCPMixin, PythonToolResponseMixin, CLIAgent):
-            model = 'anthropic/claude-sonnet-4-5'
+            model = 'sonnet'
             system = "You are helpful."
             repl_mcp_servers = [('fs', '/path/to/mcp-server')]
     """
 
     # Default configuration - override in subclasses
-    model: str = 'anthropic/claude-sonnet-4-5'
+    model: str = 'sonnet'
     system: str = "You are a helpful assistant."
     welcome_message: str = "[bold]CLI Assistant[/bold]"
 

@@ -6,7 +6,7 @@ Example:
     from agentlib.cli import CLIMixin
 
     class MyAssistant(CLIMixin, BaseAgent):
-        model = 'anthropic/claude-sonnet-4-5'
+        model = 'sonnet'
         system = "You are a helpful assistant."
         welcome_message = "Welcome!"
 
@@ -19,7 +19,7 @@ Or use the pre-composed CLIAgent:
     from agentlib.cli import CLIAgent
 
     class MyAssistant(CLIAgent):
-        model = 'anthropic/claude-sonnet-4-5'
+        model = 'sonnet'
         system = "You are a helpful assistant."
 
     MyAssistant.main()
@@ -135,7 +135,7 @@ class CLIMixin:
 
     Example:
         class MyAssistant(CLIMixin, BaseAgent):
-            model = 'anthropic/claude-sonnet-4-5'
+            model = 'sonnet'
             system = "You are helpful."
             welcome_message = "[bold]My Assistant[/bold]\\nReady to help!"
 

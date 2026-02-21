@@ -260,12 +260,13 @@ register_provider("openrouter",
     api_type="completions",
 )
 zai_config = {'provider': {'order': ['z-ai'], 'allow_fallbacks': False}, 'temperature': 0}
-register_model("openrouter","glm-4.7",
-    model="z-ai/glm-4.7",
-    aliases="glm",
+register_model("openrouter","glm-5",
+    model="z-ai/glm-5",
+    aliases="glm-5",
     config=zai_config,
-    input_cost=0.4,
-    output_cost=1.5,
+    input_cost=1.0,
+    cached_cost=0.2,
+    output_cost=3.2,
     tools=False,
 )
 moonshotai_config = {'provider': {'order': ['moonshotai'], 'allow_fallbacks': False}, 'temperature': 0}

@@ -51,7 +51,7 @@ Reuses the socket protocol pattern from SandboxMixin.
     agent = Subagent()  # Uses parent's model
 
     # Or specify a different model
-    agent = Subagent(model="anthropic/claude-haiku-3-5")
+    agent = Subagent(model="opus")
 
 ## Attributes
 
@@ -430,7 +430,7 @@ class Subagent:
 
     Args:
         cwd: Working directory for the agent. Defaults to current directory.
-        model: LLM model to use. Defaults to anthropic/claude-sonnet-4-5.
+        model: LLM model to use. Defaults to sonnet.
         max_turns: Maximum turns per task. Default 50.
 
     Example:
