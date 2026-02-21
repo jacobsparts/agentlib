@@ -21,16 +21,38 @@ Example:
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import threading
 import time
 from multiprocessing import Process, Queue
+from pathlib import Path
 from queue import Empty
 from typing import Any, Optional
 
 
 STILL_RUNNING = "[still running]\n"
+
+_python_shim_done = False
+
+
+def ensure_python_on_path() -> None:
+    """If 'python' isn't on PATH but 'python3' is, create a shim symlink."""
+    global _python_shim_done
+    if _python_shim_done:
+        return
+    _python_shim_done = True
+    python3 = shutil.which("python3")
+    if shutil.which("python") or not python3:
+        return
+    shim_dir = Path.home() / ".agentlib" / "shims"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    shim = shim_dir / "python"
+    # Recreate symlink in case python3 path changed
+    shim.unlink(missing_ok=True)
+    shim.symlink_to(python3)
+    os.environ["PATH"] = str(shim_dir) + os.pathsep + os.environ.get("PATH", "")
 
 
 def _with_still_running(output: str) -> str:
@@ -42,6 +64,7 @@ def _with_still_running(output: str) -> str:
 
 def _worker_main(cmd_queue: Queue, output_queue: Queue) -> None:
     """Worker process that executes commands in a persistent bash shell."""
+    ensure_python_on_path()
 
     # Start bash process
     proc = subprocess.Popen(

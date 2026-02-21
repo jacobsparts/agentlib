@@ -103,7 +103,7 @@ def gather_auto_attach_files():
 class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     """Code assistant with Python REPL execution."""
 
-    model = _get_config_value("code_agent_model", "anthropic/claude-sonnet-4-5")
+    model = _get_config_value("code_agent_model", "sonnet")
 
     def build_output_for_llm(self, output_chunks):
         """Build LLM output, converting complete reads to attachments."""
@@ -1399,6 +1399,10 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                 output_info = f" output={len(self._output)}B" if self._output else ""
                 return f"[BashProcess pid={self.pid} status={status}{output_info} cmd={self.command!r}]"
 
+        # Ensure bare 'python' works in subprocesses
+        from agentlib.tools.subshell import ensure_python_on_path
+        ensure_python_on_path()
+
         # Set up preexec_fn for Linux to kill child when parent dies
         # PR_SET_PDEATHSIG makes kernel send signal to child on parent death
         def _set_pdeathsig():
@@ -1451,15 +1455,15 @@ def main():
         epilog="""
 Examples:
   code-agent                          # Start with default settings
-  code-agent --model anthropic/claude-sonnet-4-20250514  # Use Claude
+  code-agent --model sonnet           # Use Claude
   code-agent --no-synth               # Skip synthetic exchange
   code-agent --max-turns 50           # Limit conversation turns
 """
     )
     parser.add_argument(
         "--model", "-m",
-        default=_get_config_value("code_agent_model", "anthropic/claude-sonnet-4-5"),
-        help="LLM model to use (default from config or anthropic/claude-sonnet-4-5)"
+        default=_get_config_value("code_agent_model", "sonnet"),
+        help="LLM model to use (default from config or sonnet)"
     )
     parser.add_argument(
         "--no-synth",
