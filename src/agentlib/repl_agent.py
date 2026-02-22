@@ -938,7 +938,8 @@ Call help(function_name) for parameter descriptions.
                 # Interrupted output is discarded - don't pollute conversation
                 raise
             except _CompleteException:
-                # Tool called self.respond(value) - return the value
+                # Record the terminal assistant message before returning
+                self.conversation.messages.append(resp)
                 if hasattr(self, '_complete_value'):
                     value = self._complete_value
                     del self._complete_value
