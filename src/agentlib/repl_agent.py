@@ -1208,7 +1208,12 @@ Call help(function_name) for parameter descriptions.
                     result = self.toolcall(tool_name, args)
                     repl.send_reply(request_id, result=result)
                 except _CompleteException:
-                    # Tool called self.respond() - still need ACK
+                    # Tool called self.respond() — send a reply so the child
+                    # subprocess unblocks from _tool_response_queue.get().
+                    # Without this, the child stays stuck forever and any
+                    # subsequent run_loop on the same agent deadlocks.
+                    if request_id is None:
+                        repl.send_reply(request_id, result=None)
                     raise
                 except Exception as e:
                     repl.send_reply(request_id, error=str(e))
