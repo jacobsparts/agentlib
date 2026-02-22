@@ -45,7 +45,7 @@ These are injected directly as Python source into the subprocess — they are no
 - `print()`: For your own inspection/debugging — output appears in your next turn
 - `emit()`: Deliberate output intended for the caller — use `release=True` to complete
 
-`emit(value, release=True)` is the REPLAgent completion mechanism. The emitted value becomes the return value of `agent.run()`. Do not use `self.respond()` in REPLAgent tools — it will crash.
+`emit(value, release=True)` is the primary REPLAgent completion mechanism — the emitted value becomes the return value of `agent.run()`. Tools can also use `self.respond(value)` to complete, same as BaseAgent.
 
 ## Defining Tools
 
@@ -218,7 +218,7 @@ emit(f"Top product: {top} with ${revenue:,.2f} revenue", release=True)
 |--------|-----------|-----------|
 | LLM output | JSON tool calls | Python code |
 | Tool interface | Schema-validated | Python functions |
-| Completion | `self.respond()` | `emit(..., release=True)` |
+| Completion | `self.respond()` | `emit(..., release=True)` or `self.respond()` in tools |
 | State | Instance variables | REPL + instance vars |
 | Syntax errors | Returned to LLM | Auto-retried |
 
@@ -227,7 +227,7 @@ emit(f"Top product: {top} with ${revenue:,.2f} revenue", release=True)
 - LLM response must be pure Python (no markdown blocks)
 - Variables persist across turns in the REPL
 - Tools return values directly to the REPL
-- Use `emit(..., release=True)` to complete — **not** `self.respond()`
+- Use `emit(..., release=True)` to complete from REPL code, or `self.respond(value)` from tools
 - Default tools are proxied (run in host process with `self` access); use `inject=True` for tools that should run directly in the subprocess
 - Syntax errors are retried automatically (up to 3 times)
 - Use context manager for cleanup: `with MyAgent() as agent:`

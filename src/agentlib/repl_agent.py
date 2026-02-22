@@ -1004,6 +1004,13 @@ Call help(function_name) for parameter descriptions.
             except _InterruptedError:
                 # Interrupted output is discarded - don't pollute conversation
                 raise
+            except _CompleteException:
+                # Tool called self.respond(value) - return the value
+                if hasattr(self, '_complete_value'):
+                    value = self._complete_value
+                    del self._complete_value
+                    return value
+                return self._final_result
 
             # Fire output hook after successful execution
             if hasattr(self, 'on_repl_output'):
@@ -1036,6 +1043,10 @@ Call help(function_name) for parameter descriptions.
             if self.complete:
                 # Mark that last message is REPL output - next user message appends
                 self._last_was_repl_output = True
+                if hasattr(self, '_complete_value'):
+                    value = self._complete_value
+                    del self._complete_value
+                    return value
                 return self._final_result
 
         raise Exception(f"Agent did not complete within {max_turns} turns")
