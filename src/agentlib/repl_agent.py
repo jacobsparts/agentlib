@@ -442,8 +442,7 @@ class ToolREPL(SubREPL):
                     self._running = False
                     return
                 if msg_type == "output" and msg_data.strip():
-                    # Unexpected output during injection - likely an error
-                    print(f"[ToolREPL inject] {msg_data}", file=sys.stderr)
+                    logger.debug("[ToolREPL inject] %s", msg_data.rstrip())
             except Empty:
                 raise RuntimeError("Timeout injecting code into REPL")
 
