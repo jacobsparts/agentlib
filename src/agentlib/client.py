@@ -120,7 +120,11 @@ class LLMClient:
                 self.usage_tracker.log(self.model_name, usage)
             if not 'choices' in response_json:
                 raise Exception(f"choices missing from response: {response_json}")
-            return response_json['choices'][0]['message']
+            message = response_json['choices'][0]['message']
+            # Normalize: some providers return tool_calls: null instead of omitting it
+            if 'tool_calls' in message and message['tool_calls'] is None:
+                del message['tool_calls']
+            return message
         finally:
             conn.close()
 
