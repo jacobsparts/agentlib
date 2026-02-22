@@ -35,38 +35,51 @@ result = MyAgent().run("Find info about Python")
 
 ## Built-in Functions
 
+These are injected directly as Python source into the subprocess — they are not tools.
+
 | Function | Description |
 |----------|-------------|
-| `emit(value, release=False)` | Output a value to the user. `release=True` yields control. |
+| `emit(value, release=False)` | Output a value. `release=True` ends the run and returns the value. |
 | `help(func)` | Get parameter descriptions for any tool |
 
-- `print()`: For your own inspection/debugging - output appears in your next turn
-- `emit()`: Deliberate output intended for the user - use `release=True` to yield control
+- `print()`: For your own inspection/debugging — output appears in your next turn
+- `emit()`: Deliberate output intended for the caller — use `release=True` to complete
+
+`emit(value, release=True)` is the REPLAgent completion mechanism. The emitted value becomes the return value of `agent.run()`. Do not use `self.respond()` in REPLAgent tools — it will crash.
 
 ## Defining Tools
 
-Same syntax as BaseAgent. Tools become callable Python functions in the REPL:
+Same decorator syntax as BaseAgent. Tools become callable Python functions in the REPL.
+
+### Proxy tools (default)
+
+By default, tools are **proxied** — a relay stub runs in the subprocess, serializes args, and calls back to the host process where the real method executes. The tool has full access to `self`.
 
 ```python
 @REPLAgent.tool
-def read_file(self, path: str = "File path"):
-    """Read a file from disk."""
-    return Path(path).read_text()
-
-@REPLAgent.tool
-def save_file(self, path: str = "File path", content: str = "Content"):
-    """Save content to a file."""
-    Path(path).write_text(content)
-    return f"Saved {len(content)} bytes"
+def search(self, query: str = "Search query"):
+    """Search the database."""
+    results = self.db.query(query)  # Access to self
+    return results
 ```
 
-LLM uses them as normal Python:
+### Injected tools (`inject=True`)
+
+With `inject=True`, the tool's source code is extracted and injected directly into the subprocess. Faster (no IPC), but no access to `self`.
+
+```python
+@REPLAgent.tool(inject=True)
+def read_file(self, path: str = "File path"):
+    """Read a file from disk."""
+    return Path(path).read_text()  # Runs in subprocess, no self access
+```
+
+LLM uses both kinds the same way:
 
 ```python
 data = read_file("config.json")
-processed = transform(data)
-save_file("output.json", processed)
-emit("Done processing config", release=True)
+results = search("SELECT * FROM users")
+emit(f"Found {len(results)} users", release=True)
 ```
 
 ## Interactive Mode
@@ -94,7 +107,16 @@ The agent controls the conversation until it explicitly releases with `release=T
 class MyAgent(REPLAgent):
     model = 'google/gemini-2.5-flash'
     system = "You are helpful."
-    interactive = False  # Legacy flag (default: False)
+    interactive = False  # Default: single run, emit(release=True) returns to caller
+    repl_startup = "import json"  # Optional: code to run silently at REPL startup
+```
+
+`repl_startup` can also be a callable that returns a string:
+
+```python
+class MyAgent(REPLAgent):
+    def repl_startup(self):
+        return f"API_KEY = {self.api_key!r}"
 ```
 
 ## Combining with Mixins
@@ -205,6 +227,7 @@ emit(f"Top product: {top} with ${revenue:,.2f} revenue", release=True)
 - LLM response must be pure Python (no markdown blocks)
 - Variables persist across turns in the REPL
 - Tools return values directly to the REPL
-- Use `emit(..., release=True)` to release control to user
+- Use `emit(..., release=True)` to complete — **not** `self.respond()`
+- Default tools are proxied (run in host process with `self` access); use `inject=True` for tools that should run directly in the subprocess
 - Syntax errors are retried automatically (up to 3 times)
 - Use context manager for cleanup: `with MyAgent() as agent:`
