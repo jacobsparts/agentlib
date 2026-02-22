@@ -200,11 +200,20 @@ def _worker_main(cmd_queue: Queue, output_queue: Queue, cwd: str) -> None:
             had_error = False
             try:
                 try:
-                    compiled = code.compile_command(cmd, "<repl>", "exec")
-                    if compiled is not None:
-                        exec(compiled, repl_locals)
-                    else:
-                        exec(cmd, repl_locals)
+                    # Parse and execute each node, displaying expression results
+                    tree = ast.parse(cmd, "<repl>", "exec")
+                    for node in tree.body:
+                        if isinstance(node, ast.Expr):
+                            # Expression statement - eval and display result
+                            code_obj = compile(ast.Expression(node.value), "<repl>", "eval")
+                            result = eval(code_obj, repl_locals)
+                            if result is not None:
+                                print(repr(result))
+                        else:
+                            # Other statement - just exec
+                            mod = ast.Module(body=[node], type_ignores=[])
+                            code_obj = compile(mod, "<repl>", "exec")
+                            exec(code_obj, repl_locals)
                 except SyntaxError as e:
                     had_error = True
                     sys.stderr.write(f"  File \"<repl>\", line {e.lineno}\n")
