@@ -17,7 +17,6 @@ import sys
 from typing import Optional
 from pathlib import Path
 from agentlib import REPLAgent, SandboxMixin, REPLAttachmentMixin, MCPMixin
-from agentlib.repl_agent import fix_triple_quote_conflict
 from agentlib.cli import CLIMixin
 from agentlib.jina_mixin import JinaMixin
 from agentlib.llm_registry import ModelNotFoundError
@@ -1102,10 +1101,6 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
     """
 
     mcp_servers = []
-
-    def preprocess_code(self, code: str) -> str:
-        """Fix syntax issues before execution."""
-        return fix_triple_quote_conflict(code)
 
     @REPLAgent.tool(inject=True)
     def think(self, content: str = "All relevant observations and reasoning"):

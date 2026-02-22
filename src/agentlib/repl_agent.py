@@ -72,64 +72,6 @@ from agentlib.tools.source_extract import extract_method_source as _extract_tool
 
 
 # =============================================================================
-# Syntax Correction Helpers
-# =============================================================================
-
-def fix_triple_quote_conflict(code: str) -> str:
-    '''
-    Fix triple-quote conflicts where outer """ contains inner """ docstrings.
-
-    When an LLM writes code like:
-        print("""
-            def foo():
-                """docstring"""
-        """)
-
-    The inner """ prematurely closes the outer string. This function detects
-    and fixes such cases by converting outer """ to single quotes.
-
-    Returns the fixed code, or original if no fix needed/possible.
-    '''
-    # Check if code already compiles
-    try:
-        compile(code, '<repl>', 'exec')
-        return code
-    except SyntaxError:
-        pass
-
-    # Find all """ positions
-    positions = []
-    i = 0
-    while True:
-        pos = code.find('"""', i)
-        if pos == -1:
-            break
-        positions.append(pos)
-        i = pos + 3
-
-    if len(positions) < 4:
-        return code  # Need at least 4 (outer open/close + inner open/close)
-
-    # Try swapping first and last """ to '''
-    first_pos = positions[0]
-    last_pos = positions[-1]
-
-    fixed = (
-        code[:first_pos] + "'''" +
-        code[first_pos + 3:last_pos] +
-        "'''" + code[last_pos + 3:]
-    )
-
-    try:
-        compile(fixed, '<repl>', 'exec')
-        return fixed
-    except SyntaxError:
-        pass
-
-    return code
-
-
-# =============================================================================
 # Shared REPL builtins code (used by both ToolREPL and SandboxedToolREPL)
 # =============================================================================
 # These functions are injected into the subprocess. They rely on transport-specific
@@ -965,14 +907,6 @@ Call help(function_name) for parameter descriptions.
                     if not content:
                         break
 
-                    # Strip markdown fences if present
-                    if content.startswith("```"):
-                        first_newline = content.find('\n')
-                        if first_newline != -1:
-                            content = content[first_newline + 1:]
-                        if content.endswith("```"):
-                            content = content[:-3].rstrip('\n')
-
                     output, pure_syntax_error, output_chunks, corrected_code = self._execute_with_tool_handling(repl, content)
 
                     # Apply silent corrections to conversation (both sides see corrected code)
@@ -1115,6 +1049,15 @@ Call help(function_name) for parameter descriptions.
         ast.fix_missing_locations(new_tree)
         return ast.unparse(new_tree)
 
+    def preprocess_code(self, code: str) -> str:
+        """Preprocess LLM-generated code before execution.
+
+        Applies generic fixes for common model mistakes. Subclasses can
+        override to add additional preprocessing (call super() to chain).
+        """
+        from agentlib.preprocess import preprocess
+        return preprocess(code)
+
     def _execute_with_tool_handling(self, repl: ToolREPL, code: str) -> tuple[str, bool, list, str]:
         """Execute code statement-by-statement, handling tool calls as they occur.
 
@@ -1124,10 +1067,7 @@ Call help(function_name) for parameter descriptions.
             - output_chunks is list of (msg_type, chunk) tuples
             - corrected_code is the code after any preprocessing corrections
         """
-        # Allow subclasses to preprocess code before splitting
-        # (e.g., fix triple-quote conflicts that would break statement parsing)
-        if hasattr(self, 'preprocess_code'):
-            code = self.preprocess_code(code)
+        code = self.preprocess_code(code)
 
         # Split into statements, then transform each individually
         # (Can't transform whole code first because AST strips comments,

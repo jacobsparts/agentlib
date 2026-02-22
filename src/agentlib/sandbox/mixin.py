@@ -918,9 +918,7 @@ class SandboxMixin:
         from agentlib.tools.subrepl import _split_into_statements, _format_echo
         from agentlib.agent import _CompleteException
 
-        # Allow subclasses to preprocess code before splitting
-        if hasattr(self, 'preprocess_code'):
-            code = self.preprocess_code(code)
+        code = self.preprocess_code(code)
 
         # Split into statements, then transform each individually
         # (Can't transform whole code first because AST strips comments,
