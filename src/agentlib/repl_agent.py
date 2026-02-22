@@ -750,6 +750,8 @@ class REPLMixin:
     releases control to the user.
     """
 
+    advertise_emit: bool = True
+
     def build_output_for_llm(self, output_chunks):
         """Build the output string sent to the LLM from typed output chunks.
 
@@ -895,13 +897,14 @@ class REPLMixin:
 
         tools_str = "\n".join(tool_list) if tool_list else "(no tools defined)"
 
+        emit_line = "\nemit(value, release=False) - Emit output. release=True yields control." if self.advertise_emit else ""
+
         return f"""You are in a Python REPL. Respond with unescaped Python.
 
 {base_prompt}
 
 You have full access to Python. These additional functions are available:
-{tools_str}
-emit(value, release=False) - Emit output. release=True yields control.
+{tools_str}{emit_line}
 
 Call help(function_name) for parameter descriptions.
 """
