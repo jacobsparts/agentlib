@@ -1260,8 +1260,12 @@ Call help(function_name) for parameter descriptions.
                 except Exception as e:
                     repl.send_reply(request_id, error=str(e))
         finally:
-            # Always send ACK to unblock the sender
-            repl.send_ack(request_id)
+            # Send ACK only for builtin protocol calls (emit, etc.) that use
+            # _wait_for_ack().  Relay stubs don't send request_id and only do
+            # a single _tool_response_queue.get() for the reply — a stale ACK
+            # left in the queue would poison the next relay call and deadlock.
+            if request_id is not None:
+                repl.send_ack(request_id)
 
 # ---------------------------------------------------------------------------
 # REPLAgent: First-class agent type
