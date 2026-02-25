@@ -120,10 +120,14 @@ class LLMClient:
                 self.usage_tracker.log(self.model_name, usage)
             if not 'choices' in response_json:
                 raise Exception(f"choices missing from response: {response_json}")
-            message = response_json['choices'][0]['message']
+            choice = response_json['choices'][0]
+            message = choice['message']
             # Normalize: some providers return tool_calls: null instead of omitting it
             if 'tool_calls' in message and message['tool_calls'] is None:
                 del message['tool_calls']
+            # Gemini: surface malformed function calls as content so validation catches them
+            if 'MALFORMED_FUNCTION_CALL' in (choice.get('finish_reason') or ''):
+                message['content'] = 'MALFORMED_FUNCTION_CALL'
             return message
         finally:
             conn.close()
