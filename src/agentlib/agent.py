@@ -239,7 +239,7 @@ class BaseAgent(metaclass=AgentMeta):
                 if self.complete:
                     return tool_response
         else:
-            raise self.TurnLimitError(f"Turn limit of {max_turns} exceeded")
+            raise self.TurnLimitError(f"{type(self).__name__} turn limit of {max_turns} exceeded")
 
     def run(self, msg, max_turns=10):
         self.usermsg(msg)

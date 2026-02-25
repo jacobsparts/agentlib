@@ -983,7 +983,7 @@ Call help(function_name) for parameter descriptions.
                     return value
                 return self._final_result
 
-        raise Exception(f"Agent did not complete within {max_turns} turns")
+        raise Exception(f"{type(self).__name__} did not complete within {max_turns} turns")
 
     def _format_syntax_error(self, e: SyntaxError) -> str:
         """Format a SyntaxError like Python's REPL does."""
