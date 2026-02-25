@@ -247,6 +247,7 @@ register_provider("xai",
 )
 register_model("xai","grok-4-1",
     model="grok-4-1-fast-reasoning",
+    aliases="grok",
     input_cost=0.2,
     cached_cost=0.05,
     output_cost=0.5,
