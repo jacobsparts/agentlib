@@ -125,9 +125,6 @@ class LLMClient:
             # Normalize: some providers return tool_calls: null instead of omitting it
             if 'tool_calls' in message and message['tool_calls'] is None:
                 del message['tool_calls']
-            # Gemini: surface malformed function calls as content so validation catches them
-            if 'MALFORMED_FUNCTION_CALL' in (choice.get('finish_reason') or ''):
-                message['content'] = 'MALFORMED_FUNCTION_CALL'
             return message
         finally:
             conn.close()
@@ -255,6 +252,155 @@ class LLMClient:
         finally:
             conn.close()
 
+    def _call_gemini(self, messages, tools):
+        """
+        Call Gemini native generateContent API.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'.
+                      Messages may include 'images' key with list of raw bytes (PNG/JPEG).
+            tools: Optional tool specifications.
+        """
+        contents = []
+        system_parts = []
+        for m in messages:
+            role = m['role']
+            if role == 'system':
+                system_parts.append({"text": m['content']})
+                continue
+            if role == 'tool':
+                contents.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {
+                        "name": m['name'],
+                        "response": {"result": m['content']}
+                    }}]
+                })
+                continue
+            if role == 'assistant':
+                parts = []
+                if m.get('content'):
+                    parts.append({"text": m['content']})
+                if 'tool_calls' in m:
+                    for tc in m['tool_calls']:
+                        part = {"functionCall": {
+                            "name": tc['function']['name'],
+                            "args": json.loads(tc['function']['arguments'])
+                        }}
+                        if sig := tc.get('thoughtSignature'):
+                            part['thoughtSignature'] = sig
+                        parts.append(part)
+                contents.append({"role": "model", "parts": parts})
+                continue
+            # role == 'user'
+            parts = []
+            if m.get('content'):
+                parts.append({"text": m['content']})
+            if images := m.pop('images', None):
+                for img in images:
+                    parts.append({"inlineData": {
+                        "mimeType": MEDIA_TYPES[img[:3]],
+                        "data": base64.b64encode(img).decode()
+                    }})
+            contents.append({"role": "user", "parts": parts})
+        # Merge consecutive same-role messages (required by Gemini API)
+        merged = []
+        for entry in contents:
+            if merged and merged[-1]['role'] == entry['role']:
+                merged[-1]['parts'].extend(entry['parts'])
+            else:
+                merged.append(entry)
+        # Build request
+        model_name = self.model_config['model']
+        path = f"{self.model_config['path']}/models/{model_name}:generateContent"
+        req = {"contents": merged}
+        if system_parts:
+            req["systemInstruction"] = {"parts": system_parts}
+        # Map config keys to generationConfig
+        generation_config = {}
+        thinking_config = {}
+        for k, v in self.model_config.get('config', {}).items():
+            if k == 'max_tokens':
+                generation_config['maxOutputTokens'] = v
+            elif k in ('thinkingBudget', 'thinkingLevel'):
+                thinking_config[k] = v
+            else:
+                generation_config[k] = v
+        if thinking_config:
+            generation_config['thinkingConfig'] = thinking_config
+        if generation_config:
+            req["generationConfig"] = generation_config
+        if tools:
+            req["tools"] = [{"functionDeclarations": [{
+                "name": t['function']['name'],
+                "description": t['function']['description'],
+                "parameters": t['function']['parameters'],
+            } for t in tools]}]
+            req["toolConfig"] = {"functionCallingConfig": {"mode": "ANY"}}
+        conn = http.client.HTTPSConnection(self.model_config['host'], timeout=self.timeout)
+        conn.connect()
+        sock = conn.sock
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if TCP_KEEPIDLE is not None:
+            sock.setsockopt(socket.IPPROTO_TCP, TCP_KEEPIDLE, 60)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.model_config['api_key'],
+        }
+        body = json.dumps(req)
+        try:
+            throttle(self.model_config['host'], self.model_config.get('tpm', 5))
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("----------- TO LLM -----------")
+                logger.debug(f"POST {path} {headers}")
+                logger.debug(body)
+            conn.request("POST", path, body, headers)
+            response = conn.getresponse()
+            response_data = response.read().decode()
+            if logger.isEnabledFor(logging.INFO):
+                logger.info("---------- FROM LLM ----------")
+                logger.info(response_data)
+            if response.status == 429:
+                logger.warning("Throttled. Waiting 20s")
+                time.sleep(20)
+                raise Exception("Throttled")
+            if response.status == 400:
+                logger.debug(req)
+                raise BadRequestError(response_data.strip())
+            elif response.status != 200:
+                raise Exception(f"API Error {response.status}: {response_data}")
+            response_json = json.loads(response_data)
+            if usage := response_json.get('usageMetadata'):
+                self.usage_tracker.log(self.model_name, usage)
+            if not response_json.get('candidates'):
+                raise Exception(f"candidates missing from response: {response_json}")
+            candidate = response_json['candidates'][0]
+            content = ""
+            tool_calls = []
+            for part in candidate.get('content', {}).get('parts', []):
+                if 'text' in part:
+                    content += part['text']
+                elif 'functionCall' in part:
+                    fc = part['functionCall']
+                    tc = {
+                        'id': f"gemini_{fc['name']}",
+                        'function': {
+                            'name': fc['name'],
+                            'arguments': json.dumps(fc['args'])
+                        }
+                    }
+                    if sig := part.get('thoughtSignature'):
+                        tc['thoughtSignature'] = sig
+                    tool_calls.append(tc)
+            message = {'role': 'assistant', 'content': content}
+            if tool_calls:
+                message['tool_calls'] = tool_calls
+            return message
+        finally:
+            conn.close()
+
     def prepare_message(self, m):
         # Tool call emulation
         if 'tool_calls' in m:
@@ -285,6 +431,8 @@ class LLMClient:
             return self._call_completions(messages, tools)
         elif self.model_config['api_type'] == "messages":
             return self._call_messages(messages, tools)
+        elif self.model_config['api_type'] == "gemini":
+            return self._call_gemini(messages, tools)
         else:
             raise NotImplementedError(self.model_config['api_type'])
 

@@ -173,6 +173,18 @@ register_model("anthropic","claude-opus-4-6",
     output_cost=25.0,
 )
 
+def gemini_token_transform(usage):
+    return {
+        'prompt_tokens': usage.get('promptTokenCount', 0),
+        'completion_tokens': usage.get('candidatesTokenCount', 0),
+        'completion_tokens_details': {
+            'reasoning_tokens': usage.get('thoughtsTokenCount', 0),
+        },
+        'prompt_tokens_details': {
+            'cached_tokens': usage.get('cachedContentTokenCount', 0),
+        },
+    }
+
 def gemini_cost_transform(prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
                           input_cost, cached_cost, output_cost, reasoning_cost):
     if prompt_tokens > 200000:
@@ -184,17 +196,18 @@ def gemini_cost_transform(prompt_tokens, cached_tokens, completion_tokens, reaso
 # --- Google ---
 register_provider("google",
     host="generativelanguage.googleapis.com",
-    path="/v1beta/openai/chat/completions",
+    path="/v1beta",
     tpm=5,
     concurrency=3,
     timeout=None,
     tools=True,
-    api_type="completions",
+    api_type="gemini",
+    token_transform=gemini_token_transform,
     cost_transform=gemini_cost_transform,
 )
 register_model("google","gemini-2.5-flash",
     model="gemini-2.5-flash",
-    config={"reasoning_effort": "high"},
+    config={"thinkingBudget": 32768},
     input_cost=0.3,
     cached_cost=0.03,
     output_cost=2.5,
@@ -202,7 +215,7 @@ register_model("google","gemini-2.5-flash",
 )
 register_model("google","gemini-2.5-pro",
     model="gemini-2.5-pro",
-    config={"reasoning_effort": "high"},
+    config={"thinkingBudget": 32768},
     input_cost=1.25,
     cached_cost=0.125,
     output_cost=10.00,
@@ -211,7 +224,7 @@ register_model("google","gemini-2.5-pro",
 register_model("google","gemini-3-flash-preview",
     model="gemini-3-flash-preview",
     aliases="flash",
-    config={"reasoning_effort": "high"},
+    config={"thinkingLevel": "high"},
     input_cost=0.5,
     cached_cost=0.05,
     output_cost=3.0,
@@ -219,7 +232,7 @@ register_model("google","gemini-3-flash-preview",
 )
 register_model("google","gemini-3-pro",
     model="gemini-3-pro-preview",
-    config={"reasoning_effort": "high"},
+    config={"thinkingLevel": "high"},
     input_cost=2.00,
     cached_cost=0.2,
     output_cost=12.00,
@@ -228,7 +241,7 @@ register_model("google","gemini-3-pro",
 register_model("google","gemini-3.1-pro",
     model="gemini-3.1-pro-preview",
     aliases="pro",
-    config={"reasoning_effort": "high"},
+    config={"thinkingLevel": "high"},
     input_cost=2.00,
     cached_cost=0.2,
     output_cost=12.00,

@@ -45,9 +45,7 @@ class UsageTracker:
         reasoning_tokens = (usage.get('completion_tokens_details') or {}).get('reasoning_tokens', 0)
         completion_tokens = usage.get('completion_tokens', 0) or usage.get('output_tokens', 0)
         if total := usage.get('total_tokens'):
-            if reasoning_tokens > 0 and completion_tokens > 0 and (prompt_tokens + cached_tokens + completion_tokens) == total:
-                total += reasoning_tokens # Gemini
-            elif reasoning_tokens > 0:
+            if reasoning_tokens > 0:
                 completion_tokens = total - (prompt_tokens + cached_tokens + reasoning_tokens)
             else:
                 reasoning_tokens = total - (prompt_tokens + cached_tokens + completion_tokens)
