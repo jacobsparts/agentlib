@@ -323,6 +323,9 @@ reason to view a narrow range.
 File reads are complete unless otherwise indicated. Re-reading wastes tokens.
 Variables persist across turns. Don't re-fetch data you already have.
 
+preview(value) displays a potentially long string. Short strings print in
+full; long strings show a head/tail summary with line and character counts.
+
 >>> tone_and_style()
 
 - Prioritize technical accuracy over validation. Disagree when necessary.
@@ -1123,7 +1126,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         few lines with a count of omitted lines in between.
         """
         if not isinstance(value, str):
-            return value
+            raise ValueError(f"preview() expects a string, got {type(value).__name__}: {repr(value)[:100]}")
 
         lines = value.split('\n')
         nlines = len(lines)
@@ -1155,53 +1158,91 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         except SyntaxError:
             return code
 
-        # Find bare Expr statements calling target tools (top-level only)
-        # Matches: grep(...), bash(...), print(grep(...)), print(bash(...))
-        # Assign var names in forward order, then apply rewrites in reverse
-        rewrites = []  # (stmt_index, inner_source_or_None, var_name)
-        for i, node in enumerate(tree.body):
+        lines = code.split('\n')
+        body = tree.body
+
+        # Collect all rewrites as (start_line_0idx, end_line_0idx, new_lines)
+        all_rewrites = []
+
+        # Pattern 1: bare target call or print(target(...))
+        for i, node in enumerate(body):
             if not isinstance(node, ast.Expr):
                 continue
             call = node.value
             if not isinstance(call, ast.Call):
                 continue
             func = call.func
+
+            start = node.lineno - 1
+            end = node.end_lineno - 1
+            orig = lines[start:end + 1]
+            indent = orig[0][:len(orig[0]) - len(orig[0].lstrip())]
+
             if isinstance(func, ast.Name) and func.id in self._preview_targets:
-                # Bare target call: grep(...), bash(...)
+                # Bare: grep(...), bash(...)
                 self.__class__._preview_counter += 1
-                rewrites.append((i, None, f"_v{self._preview_counter}"))
+                var = f"_v{self._preview_counter}"
+                call_source = '\n'.join(orig).strip()
+                all_rewrites.append((start, end, [
+                    f"{indent}{var} = {call_source}",
+                    f"{indent}preview({var}, {var!r})",
+                ]))
             elif (isinstance(func, ast.Name) and func.id == 'print'
                   and len(call.args) == 1 and not call.keywords):
-                # print(target(...)): extract inner call
                 inner = call.args[0]
                 if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
                         and inner.func.id in self._preview_targets):
                     inner_source = ast.get_source_segment(code, inner)
                     if inner_source:
                         self.__class__._preview_counter += 1
-                        rewrites.append((i, inner_source, f"_v{self._preview_counter}"))
+                        var = f"_v{self._preview_counter}"
+                        all_rewrites.append((start, end, [
+                            f"{indent}{var} = {inner_source}",
+                            f"{indent}preview({var}, {var!r})",
+                        ]))
 
-        if not rewrites:
+        # Pattern 2: var = target(...) immediately followed by print(var)
+        for i in range(len(body) - 1):
+            assign = body[i]
+            nxt = body[i + 1]
+
+            if not isinstance(assign, ast.Assign):
+                continue
+            if len(assign.targets) != 1 or not isinstance(assign.targets[0], ast.Name):
+                continue
+            if not isinstance(assign.value, ast.Call):
+                continue
+            afunc = assign.value.func
+            if not (isinstance(afunc, ast.Name) and afunc.id in self._preview_targets):
+                continue
+
+            var_name = assign.targets[0].id
+
+            if not isinstance(nxt, ast.Expr) or not isinstance(nxt.value, ast.Call):
+                continue
+            pcall = nxt.value
+            if not (isinstance(pcall.func, ast.Name) and pcall.func.id == 'print'):
+                continue
+            if len(pcall.args) != 1 or pcall.keywords:
+                continue
+            if not (isinstance(pcall.args[0], ast.Name) and pcall.args[0].id == var_name):
+                continue
+
+            # Rewrite only the print → preview (assignment stays)
+            pstart = nxt.lineno - 1
+            pend = nxt.end_lineno - 1
+            pindent = lines[pstart][:len(lines[pstart]) - len(lines[pstart].lstrip())]
+            all_rewrites.append((pstart, pend, [
+                f"{pindent}preview({var_name}, {var_name!r})",
+            ]))
+
+        if not all_rewrites:
             return code
 
-        # Rebuild source with rewrites applied (reverse so line offsets stay valid)
-        lines = code.split('\n')
-        for stmt_idx, inner_source, var in reversed(rewrites):
-            node = tree.body[stmt_idx]
-            # ast line numbers are 1-indexed
-            start_line = node.lineno - 1
-            end_line = node.end_lineno - 1
-
-            # Replace the statement lines with assignment + preview
-            original_lines = lines[start_line:end_line + 1]
-            first_line = original_lines[0]
-            indent = first_line[:len(first_line) - len(first_line.lstrip())]
-            call_source = inner_source or '\n'.join(original_lines).strip()
-            new_lines = [
-                f"{indent}{var} = {call_source}",
-                f"{indent}preview({var}, {var!r})",
-            ]
-            lines[start_line:end_line + 1] = new_lines
+        # Apply in reverse line order so earlier rewrites don't shift later ones
+        all_rewrites.sort(key=lambda x: x[0], reverse=True)
+        for start, end, new_lines in all_rewrites:
+            lines[start:end + 1] = new_lines
 
         return '\n'.join(lines)
 
