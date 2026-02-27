@@ -1178,7 +1178,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         output = '\n'.join(formatted)
 
         remaining = total_lines - end
-        if remaining > 0:
+        if remaining > 0 and limit is None:
             output += f"\n... ({remaining} more lines)"
 
         # Signal for attachment tracking (host-side check in build_output_for_llm)
