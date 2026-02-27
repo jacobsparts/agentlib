@@ -10,6 +10,7 @@ Dependencies:
     - JINA_API_KEY env var for higher rate limits (optional, get free key at https://jina.ai/?sui=apikey)
 """
 
+import ast
 import json
 import os
 import shutil
@@ -1102,6 +1103,8 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
     mcp_servers = []
 
+    _preview_counter = 0  # Shared counter for _vN variable names
+
     @REPLAgent.tool(inject=True)
     def think(self, content: str = "All relevant observations and reasoning"):
         """Think through the problem and yield to a new turn.
@@ -1111,6 +1114,96 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         open questions, and options you're considering.
         """
         return "[Continuing...]"
+
+    @REPLAgent.tool(inject=True)
+    def preview(self, value: str = "Value to preview", name: str = ""):
+        """Display a value with head/tail summary for long strings.
+
+        Short values are returned in full. Long strings show first and last
+        few lines with a count of omitted lines in between.
+        """
+        if not isinstance(value, str):
+            return value
+
+        lines = value.split('\n')
+        nlines = len(lines)
+        nchars = len(value)
+
+        # Short enough to show in full
+        if nlines <= 20 and nchars <= 2000:
+            return value
+
+        HEAD = 8
+        TAIL = 4
+        header = f"({name}: {nlines} lines, {nchars} chars)" if name else f"({nlines} lines, {nchars} chars)"
+        omitted = nlines - HEAD - TAIL
+        parts = [header]
+        parts.extend(lines[:HEAD])
+        parts.append(f"  ... ({omitted} lines omitted)")
+        parts.extend(lines[-TAIL:])
+        return '\n'.join(parts)
+
+    # Target tool names whose bare expressions get rewritten to assignment + preview
+    _preview_targets = frozenset({'grep', 'bash'})
+
+    def preprocess_code(self, code: str) -> str:
+        """Apply base preprocessing then rewrite bare tool calls to assignment + preview."""
+        code = super().preprocess_code(code)
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return code
+
+        # Find bare Expr statements calling target tools (top-level only)
+        # Matches: grep(...), bash(...), print(grep(...)), print(bash(...))
+        # Assign var names in forward order, then apply rewrites in reverse
+        rewrites = []  # (stmt_index, inner_source_or_None, var_name)
+        for i, node in enumerate(tree.body):
+            if not isinstance(node, ast.Expr):
+                continue
+            call = node.value
+            if not isinstance(call, ast.Call):
+                continue
+            func = call.func
+            if isinstance(func, ast.Name) and func.id in self._preview_targets:
+                # Bare target call: grep(...), bash(...)
+                self.__class__._preview_counter += 1
+                rewrites.append((i, None, f"_v{self._preview_counter}"))
+            elif (isinstance(func, ast.Name) and func.id == 'print'
+                  and len(call.args) == 1 and not call.keywords):
+                # print(target(...)): extract inner call
+                inner = call.args[0]
+                if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                        and inner.func.id in self._preview_targets):
+                    inner_source = ast.get_source_segment(code, inner)
+                    if inner_source:
+                        self.__class__._preview_counter += 1
+                        rewrites.append((i, inner_source, f"_v{self._preview_counter}"))
+
+        if not rewrites:
+            return code
+
+        # Rebuild source with rewrites applied (reverse so line offsets stay valid)
+        lines = code.split('\n')
+        for stmt_idx, inner_source, var in reversed(rewrites):
+            node = tree.body[stmt_idx]
+            # ast line numbers are 1-indexed
+            start_line = node.lineno - 1
+            end_line = node.end_lineno - 1
+
+            # Replace the statement lines with assignment + preview
+            original_lines = lines[start_line:end_line + 1]
+            first_line = original_lines[0]
+            indent = first_line[:len(first_line) - len(first_line.lstrip())]
+            call_source = inner_source or '\n'.join(original_lines).strip()
+            new_lines = [
+                f"{indent}{var} = {call_source}",
+                f"{indent}preview({var}, {var!r})",
+            ]
+            lines[start_line:end_line + 1] = new_lines
+
+        return '\n'.join(lines)
 
     @REPLAgent.tool(inject=True)
     def grep(self,
