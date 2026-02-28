@@ -1119,7 +1119,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         return "[Continuing...]"
 
     @REPLAgent.tool(inject=True)
-    def preview(self, value: str = "Value to preview", name: str = ""):
+    def preview(self, value: str = "Value to preview"):
         """Display a value with head/tail summary for long strings.
 
         Short values are returned in full. Long strings show first and last
@@ -1138,9 +1138,8 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
         HEAD = 8
         TAIL = 4
-        header = f"({name}: {nlines} lines, {nchars} chars)" if name else f"({nlines} lines, {nchars} chars)"
         omitted = nlines - HEAD - TAIL
-        parts = [header]
+        parts = [f"({nlines} lines, {nchars} chars)"]
         parts.extend(lines[:HEAD])
         parts.append(f"  ... ({omitted} lines omitted)")
         parts.extend(lines[-TAIL:])
@@ -1185,7 +1184,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                 call_source = '\n'.join(orig).strip()
                 all_rewrites.append((start, end, [
                     f"{indent}{var} = {call_source}",
-                    f"{indent}preview({var}, {var!r})",
+                    f"{indent}preview({var})",
                 ]))
             elif (isinstance(func, ast.Name) and func.id == 'print'
                   and len(call.args) == 1 and not call.keywords):
@@ -1198,7 +1197,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                         var = f"_v{self._preview_counter}"
                         all_rewrites.append((start, end, [
                             f"{indent}{var} = {inner_source}",
-                            f"{indent}preview({var}, {var!r})",
+                            f"{indent}preview({var})",
                         ]))
 
         # Pattern 2: var = target(...) immediately followed by print(var)
@@ -1233,7 +1232,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             pend = nxt.end_lineno - 1
             pindent = lines[pstart][:len(lines[pstart]) - len(lines[pstart].lstrip())]
             all_rewrites.append((pstart, pend, [
-                f"{pindent}preview({var_name}, {var_name!r})",
+                f"{pindent}preview({var_name})",
             ]))
 
         if not all_rewrites:
