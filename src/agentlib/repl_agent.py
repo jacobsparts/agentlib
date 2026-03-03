@@ -467,6 +467,18 @@ def _extract_stub_signature(name: str, impl: Optional[Callable], spec: Any) -> t
     required_sig_parts: list[str] = []
     optional_sig_parts: list[str] = []
 
+    # If impl uses **kwargs and a spec is provided, prefer the spec for
+    # signature generation — the spec has the real parameter names/types
+    # while **kwargs would produce a broken single-arg stub.
+    if impl is not None and spec is not None:
+        sig = inspect.signature(impl)
+        has_var_keyword = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in sig.parameters.values()
+        )
+        if has_var_keyword:
+            impl = None  # fall through to spec-based extraction below
+
     if impl is not None:
         # Extract signature from implementation
         sig = inspect.signature(impl)
@@ -536,7 +548,7 @@ def _extract_stub_signature(name: str, impl: Optional[Callable], spec: Any) -> t
                 param_names.append((orig, sanitized))
                 signature_parts.append(f"{sanitized}={default}")
 
-        docstring = f"Call the {name} tool."
+        docstring = (getattr(spec, '__doc__', None) or f"Call the {name} tool.").strip()
 
     signature_str = ", ".join(signature_parts)
 
@@ -793,7 +805,13 @@ class REPLMixin:
         for name, spec in self.toolspecs.items():
             impl = self._toolimpl.get(name)
             param_strs = []
-            if impl:
+            # If impl uses **kwargs and a spec exists, prefer spec for params
+            use_impl = impl is not None
+            if use_impl and spec is not None:
+                sig_check = inspect.signature(impl)
+                if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig_check.parameters.values()):
+                    use_impl = False
+            if use_impl:
                 # Static tool - get params from signature
                 sig = inspect.signature(impl)
                 for pname, param in sig.parameters.items():
@@ -807,7 +825,7 @@ class REPLMixin:
                 doc = (impl.__doc__ or '').strip()
                 first_line = doc.split('\n')[0] if doc else ''
             else:
-                # Dynamic tool - get params from spec
+                # Dynamic tool or **kwargs with spec - get params from spec
                 if hasattr(spec, 'model_fields'):
                     for field_name, field_info in spec.model_fields.items():
                         # Sanitize for valid Python identifier
@@ -875,6 +893,7 @@ Call help(function_name) for parameter descriptions.
 
             # Retry loop for pure syntax errors (nothing executed)
             output = ""
+            output_chunks = []
             try:
                 for syntax_retry in range(max_syntax_retries):
                     try:
