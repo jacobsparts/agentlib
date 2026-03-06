@@ -929,7 +929,7 @@ If you don't know how to proceed:
                     filename = user_input.strip()[8:].strip()
                     if filename:
                         try:
-                            content = Path(filename).read_text()
+                            content = Path(filename).expanduser().read_text()
                             self.attach(filename, content)
                             size_kb = len(content) / 1000
                             print(f"{DIM}Attached {filename} ({size_kb:.1f}KB){RESET}")
