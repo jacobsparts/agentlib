@@ -1359,8 +1359,11 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             patch: str = "Patch text in apply_patch format"
         ):
         """Apply a patch to add, update, or delete files."""
-        from agentlib.tools.apply_patch import process_patch
-        result = process_patch(patch)
+        from agentlib.tools.apply_patch import process_patch, DiffError
+        try:
+            result = process_patch(patch)
+        except DiffError as e:
+            raise type(e)(*e.args) from None
         # Signal written files for attachment refresh
         for line in result.split('\n'):
             if line.startswith(('M ', 'A ')):

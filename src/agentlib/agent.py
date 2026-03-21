@@ -233,9 +233,7 @@ class BaseAgent(metaclass=AgentMeta):
                     del self._complete_value
                 if logger.isEnabledFor(logging.INFO):
                     logger.info(f"{function_name}: {tool_response}")
-                if not tool_response and not self.complete:
-                    raise ValueError(f"invalid return value from {function_name} and not complete")
-                self.toolmsg(tool_response or "Success", name=function_name, tool_call_id=tool_call.get('id',''))
+                self.toolmsg(tool_response if tool_response is not None else "OK", name=function_name, tool_call_id=tool_call.get('id',''))
                 if self.complete:
                     return tool_response
         else:
