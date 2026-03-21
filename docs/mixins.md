@@ -485,6 +485,46 @@ class MyAgent(JinaMixin, BaseAgent):
 - `site` - Limit search to domain (web_search only)
 - `num` - Max results (web_search only)
 
+## TavilyMixin (Web Tools)
+
+Drop-in replacement for `JinaMixin` powered by [Tavily](https://tavily.com). Same tool names (`web_fetch`, `web_search`).
+
+```python
+from agentlib import BaseAgent, TavilyMixin
+
+class MyAgent(TavilyMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a research assistant."
+
+    @BaseAgent.tool
+    def done(self, response: str = "Response"):
+        self.respond(response)
+```
+
+**Tools provided:**
+- `web_fetch(url, ...)` - Extract page content via Tavily Extract API
+- `web_search(query, ...)` - Search web via Tavily Search API
+
+**Configuration:**
+- `TAVILY_API_KEY` env var (required)
+- `tavily_timeout = 60.0` - Default request timeout
+
+**web_fetch options:**
+- `query` - Rerank extracted chunks by relevance
+- `chunks_per_source` - Max chunks per source (1-5, requires query)
+- `extract_depth` - 'basic' or 'advanced'
+- `format` - 'markdown' or 'text'
+
+**web_search options:**
+- `search_depth` - 'basic', 'advanced', 'fast', or 'ultra-fast'
+- `max_results` - Number of results (0-20)
+- `topic` - 'general' or 'news'
+- `time_range` - 'day', 'week', 'month', 'year'
+- `include_answer` - Get AI-generated answer summary
+- `include_raw_content` - Include full page content per result
+- `include_domains` / `exclude_domains` - Domain filtering
+- `country` - Boost results from country (two-letter code)
+
 ## SandboxMixin (Filesystem Isolation)
 
 Runs agent code in an isolated overlay filesystem. All writes go to a temporary layer; real filesystem unchanged until explicitly applied.

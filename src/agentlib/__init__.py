@@ -7,6 +7,7 @@ from .shell_mixin import SubShellMixin
 from .python_tool_mixin import PythonToolMixin, PythonToolResponseMixin, PythonMCPMixin
 from .patch_mixin import FilePatchMixin
 from .jina_mixin import JinaMixin
+from .tavily_mixin import TavilyMixin
 from .attachment_mixin import AttachmentMixin
 from .repl_attachment_mixin import REPLAttachmentMixin
 from .sandbox import SandboxMixin, SandboxedToolREPL
@@ -27,6 +28,7 @@ __all__ = [
     "PythonToolResponseMixin",
     "FilePatchMixin",
     "JinaMixin",
+    "TavilyMixin",
     "AttachmentMixin",
     "REPLAttachmentMixin",
     "SandboxMixin",
