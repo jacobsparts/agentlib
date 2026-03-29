@@ -202,6 +202,9 @@ def highlight_python(code: str) -> str:
 
 def _colorize_inline(line: str) -> str:
     """Apply inline markdown formatting (bold, italic, code, links, etc.)."""
+    # Links first — must run before other formatting inserts ANSI codes
+    # whose '[' characters would be falsely matched by the link regex.
+    line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', LINK_COLOR + r'\1' + RESET + TEXT, line)
     # Inline code
     line = re.sub(r'`([^`]+)`', CODEBLOCK + r'`\1`' + RESET + TEXT, line)
     # Bold+Italic
@@ -212,8 +215,6 @@ def _colorize_inline(line: str) -> str:
     line = re.sub(r'(?<!\*)\*([^\*\n]+)\*(?!\*)', ITALIC + r'\1' + RESET + TEXT, line)
     # Strikethrough
     line = re.sub(r'~~(.+?)~~', STRIKE + r'\1' + RESET + TEXT, line)
-    # Links
-    line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', LINK_COLOR + UNDERLINE + r'\1' + RESET + TEXT, line)
     return line
 
 
