@@ -178,7 +178,8 @@ class LLMClient:
                         "name": tc['name'],
                         "input": json.loads(tc['arguments'])
                     })
-                _messages.append({'role': 'assistant', 'content': content})
+                if content:
+                    _messages.append({'role': 'assistant', 'content': content})
             else:
                 _messages.append(msg)
         req = {
@@ -422,11 +423,33 @@ class LLMClient:
         else:
             return m
 
+    @staticmethod
+    def _strip_orphaned_tool_use(messages):
+        """Remove tool_use blocks that have no matching tool_result, and drop
+        any assistant messages that become empty as a result.  This prevents
+        API errors when a prior tool-call loop was interrupted mid-execution."""
+        tool_result_ids = {m['tool_call_id'] for m in messages
+                          if m.get('role') == 'tool' and 'tool_call_id' in m}
+        out = []
+        for msg in messages:
+            if msg.get('role') == 'assistant' and 'tool_calls' in msg:
+                kept = [tc for tc in msg['tool_calls']
+                        if tc.get('id', '') in tool_result_ids]
+                if kept or msg.get('content'):
+                    msg = {**msg, 'tool_calls': kept} if kept else \
+                          {k: v for k, v in msg.items() if k != 'tool_calls'}
+                    out.append(msg)
+            else:
+                out.append(msg)
+        return out
+
     def _call(self, messages, tools=None):
         if not self.native:
             messages = [ self.prepare_message(msg) for msg in messages ]
         # Strip internal metadata keys (underscore-prefixed) before sending to API
         messages = [{k: v for k, v in m.items() if not k.startswith('_')} for m in messages]
+        # Drop orphaned tool_use blocks (from interrupted tool-call loops)
+        messages = self._strip_orphaned_tool_use(messages)
         if self.model_config['api_type'] == "completions":
             return self._call_completions(messages, tools)
         elif self.model_config['api_type'] == "messages":
@@ -514,6 +537,8 @@ class LLMClient:
                     continue
                 raise
                 
+            except BadRequestError:
+                raise
             except Exception as e:
                 err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
                 logger.error(f"tool_call_native {type(e).__name__}: {err}")
