@@ -282,12 +282,15 @@ class CLIMixin:
                 # Show thinking indicator (cursor left at start so output overwrites)
                 print(f"{DIM}{thinking}{RESET}\r", end="", flush=True)
 
-                # Run agent loop (may be interrupted by Ctrl+C)
+                # Run agent loop (may be interrupted by Ctrl+C or turn limit)
                 try:
                     response = self.run_loop(max_turns=max_turns)
                 except KeyboardInterrupt:
                     # User interrupted - return to prompt
                     print()  # Newline after ^C
+                    continue
+                except self.TurnLimitError:
+                    self.console.print(f"[yellow]Turn limit ({max_turns}) reached. Returning to prompt.[/yellow]")
                     continue
 
                 # Display response
