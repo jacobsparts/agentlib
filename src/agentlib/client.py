@@ -34,6 +34,7 @@ logger = logging.getLogger('agentlib')
 
 class ValidationError(Exception): pass
 class BadRequestError(Exception): pass
+class MaxTokensError(Exception): pass
 
 
 class LLMClient:
@@ -122,6 +123,7 @@ class LLMClient:
                 raise Exception(f"choices missing from response: {response_json}")
             choice = response_json['choices'][0]
             message = choice['message']
+            message['_stop_reason'] = choice.get('finish_reason')
             # Normalize: some providers return tool_calls: null instead of omitting it
             if 'tool_calls' in message and message['tool_calls'] is None:
                 del message['tool_calls']
@@ -247,6 +249,7 @@ class LLMClient:
                 'role': 'assistant',
                 'content': content
             }
+            message['_stop_reason'] = response_json.get('stop_reason')
             if tool_calls:
                 message['tool_calls'] = tool_calls
             return message
@@ -396,6 +399,7 @@ class LLMClient:
                         tc['thoughtSignature'] = sig
                     tool_calls.append(tc)
             message = {'role': 'assistant', 'content': content}
+            message['_stop_reason'] = candidate.get('finishReason')
             if tool_calls:
                 message['tool_calls'] = tool_calls
             return message
@@ -498,9 +502,13 @@ class LLMClient:
                     resp_msg = self._call(messages, _tools)
                 if transform := self.model_config.get('response_transform'):
                     resp_msg = transform(resp_msg, tools)
+                stop = resp_msg.get('_stop_reason')
+                if stop in ('max_tokens', 'length', 'MAX_TOKENS'):
+                    content = resp_msg.get('content', '')
+                    raise MaxTokensError(f"stop_reason={stop}, content={content[:500]}")
                 if not resp_msg.get("tool_calls"):
                     content = resp_msg.get('content', '')
-                    err = f"tool_calls missing from response: {content[:1000]}{'...' if len(content) > 1000 else ''}"
+                    err = f"tool_calls missing (stop_reason={stop}): {content[:1000]}{'...' if len(content) > 1000 else ''}"
                     raise ValidationError(err)
                 
                 # Validate tool calls against schemas
@@ -537,7 +545,7 @@ class LLMClient:
                     continue
                 raise
                 
-            except BadRequestError:
+            except (BadRequestError, MaxTokensError):
                 raise
             except Exception as e:
                 err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
