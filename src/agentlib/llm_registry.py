@@ -260,17 +260,23 @@ register_provider("xai",
 )
 register_model("xai","grok-4-1",
     model="grok-4-1-fast-reasoning",
+    input_cost=0.2,
+    cached_cost=0.05,
+    output_cost=0.5,
+)
+register_model("xai","grok-4-1",
+    model="grok-4-1-fast-reasoning",
     aliases="grok",
     input_cost=0.2,
     cached_cost=0.05,
     output_cost=0.5,
 )
-register_model("xai","grok-code-fast-1",
-    model="grok-code-fast-1",
-    aliases="grok-code",
-    input_cost=0.2,
-    cached_cost=0.02,
-    output_cost=1.5,
+register_model("xai","grok-4.20",
+    model="grok-4.20",
+    aliases="grok",
+    input_cost=2.0,
+    cached_cost=0.2,
+    output_cost=6.0,
 )
 
 # --- OpenRouter ---
