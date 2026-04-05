@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+_user_mixins = Path.home() / ".agentlib" / "mixins"
+if _user_mixins.is_dir() and str(_user_mixins) not in sys.path:
+    sys.path.append(str(_user_mixins))
+
 from .core import BaseAgent
 from .client import ValidationError, BadRequestError
 from .llm_registry import register_provider, register_model, ModelNotFoundError
