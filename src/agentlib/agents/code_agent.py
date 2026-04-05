@@ -317,7 +317,7 @@ read() outputs file contents directly and returns None. Do NOT assign it or
 wrap it in print(). Just call: read("file.py")
 
 Prefer bare read(file_path) without offset/limit. Only use offset/limit
-if the file is too large to read at once (2000+ lines) or you have a specific
+if the file is too large to read at once (5000+ lines) or you have a specific
 reason to view a narrow range.
 
 File reads are complete unless otherwise indicated. Re-reading wastes tokens.
@@ -1291,19 +1291,19 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
     def read(self,
             file_path: str = "Path to the file",
             offset: Optional[int] = "Line number to start from (1-indexed)",
-            limit: Optional[int] = "Number of lines to read (default: 2000)"
+            limit: Optional[int] = "Number of lines to read (default: 5000)"
         ):
         """Read a file with line numbers. Outputs directly, returns None.
 
         Prefer bare read(path) without offset/limit. Only use them for
-        files too large to read at once (2000+ lines).
+        files too large to read at once (5000+ lines).
         """
         content = Path(file_path).expanduser().read_text()
         all_lines = content.split('\n')
         total_lines = len(all_lines)
 
         start = (offset or 1) - 1  # Convert to 0-indexed
-        end = start + (limit or 2000)
+        end = start + (limit or 5000)
         lines = all_lines[start:end]
         start_line = start + 1  # Back to 1-indexed for display
 
