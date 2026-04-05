@@ -75,6 +75,17 @@ class MyAgent(BaseAgent):
 
 ### Attachments
 
+Requires `AttachmentMixin` (or `REPLAttachmentMixin` for `REPLAgent`):
+
+```python
+from agentlib import BaseAgent, AttachmentMixin
+
+class MyAgent(AttachmentMixin, BaseAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are a helpful assistant."
+    # attach/detach methods are now available
+```
+
 Inject named text content into conversations with automatic formatting and smart invalidation:
 
 ```python
@@ -111,6 +122,26 @@ def clear_file(self, path: str = "File path"):
 - Auto-formatted as `-------- BEGIN name --------` / `-------- END name ----------`
 - Dict/list values auto-serialized to JSON
 - Re-attach with the same name to update content
+
+### Images and Audio
+
+Pass raw bytes to `usermsg()` for multimodal input:
+
+```python
+# Images (all providers)
+with open("photo.jpg", "rb") as f:
+    agent.usermsg("What's in this image?", images=[f.read()])
+
+# Audio (Gemini only)
+with open("recording.mp3", "rb") as f:
+    agent.usermsg("Transcribe this audio", audio=[f.read()])
+```
+
+- **Images:** JPEG, PNG. Supported by all providers. 
+- **Audio:** WAV, MP3, FLAC, OGG, AIFF, AAC. Gemini only — raises `BadRequestError` on other providers. 
+- Format is auto-detected from magic bytes 
+- Multiple files: `images=[img1, img2]`, `audio=[clip1, clip2]` 
+- Can combine with text and attachments in the same message 
 
 ### Completion Control
 

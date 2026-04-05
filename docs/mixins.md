@@ -553,3 +553,24 @@ agent.apply_changes()
 - `get_deleted_files()` - List of deleted paths
 - `apply_changes(target_dir=None)` - Apply to real filesystem
 - `discard_changes()` - No-op (changes already isolated)
+
+## User Mixins (~/.agentlib/mixins/)
+
+Place personal mixins in `~/.agentlib/mixins/` to make them importable from any project. This directory is added to `sys.path` when agentlib is imported.
+
+```
+~/.agentlib/mixins/
+    my_tools.py
+    work_utils/
+        __init__.py
+```
+
+```python
+from my_tools import MyToolsMixin
+
+class MyAgent(MyToolsMixin, CLIAgent):
+    model = 'google/gemini-2.5-flash'
+    system = "You are helpful."
+```
+
+User mixins follow the same patterns as built-in mixins — implement any combination of `_ensure_setup()`, `_build_system_prompt()`, `_get_dynamic_toolspecs()`, `_handle_toolcall()`, and `_cleanup()`, chaining via `super()`. 
