@@ -741,9 +741,11 @@ class REPLMixin:
                     sep_stdout = "" if prev_stdout.endswith("\n") else "\n"
                     last_msg['_stdout'] = prev_stdout + sep_stdout + content + "\n"
 
-                # If new content has images, append them too
+                # If new content has images or audio, append them too
                 if 'images' in kwargs:
                     last_msg['images'] = last_msg.get('images', []) + kwargs['images']
+                if 'audio' in kwargs:
+                    last_msg['audio'] = last_msg.get('audio', []) + kwargs['audio']
 
                 self._last_was_repl_output = False
                 return

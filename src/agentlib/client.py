@@ -23,12 +23,24 @@ except AttributeError:
 
 # Message keys passed through to _call_completions and _call_messages
 # in addition to the standard four: 'role', 'content', 'name', 'tool_call_id'
-EXTRA_KEYS = {'images'}
+EXTRA_KEYS = {'images', 'audio'}
 
 MEDIA_TYPES = {
     b'\xff\xd8\xff': "image/jpeg",
     b'\x89PN': "image/png",
 }
+
+def _detect_audio_type(data):
+    """Detect audio MIME type from file magic bytes."""
+    if data[:4] == b'RIFF': return "audio/wav"
+    if data[:4] == b'fLaC': return "audio/flac"
+    if data[:4] == b'OggS': return "audio/ogg"
+    if data[:4] == b'FORM': return "audio/aiff"
+    if data[:3] == b'ID3' or data[:2] in (b'\xff\xfb', b'\xff\xf3', b'\xff\xf2'):
+        return "audio/mp3"
+    if data[:2] in (b'\xff\xf1', b'\xff\xf9'):
+        return "audio/aac"
+    raise ValueError(f"Unsupported audio format (magic: {data[:4].hex()})")
 
 logger = logging.getLogger('agentlib')
 
@@ -58,6 +70,8 @@ class LLMClient:
         """
         # OpenAI Completions API-compatible format
         for m in messages:
+            if m.pop('audio', None):
+                raise BadRequestError("Audio input is not supported by OpenAI completions API")
             if images := m.pop('images', None):
                 m['content'] = [
                     *([{"type": "text", "text": m['content']}] if m['content'] else []),
@@ -142,6 +156,8 @@ class LLMClient:
         """
         # Anthropic Messages API-compatible format
         for m in messages:
+            if m.pop('audio', None):
+                raise BadRequestError("Audio input is not supported by Anthropic Messages API")
             if images := m.pop('images', None):
                 m['content'] = [
                     *([{"type": "text", "text": m['content']}] if m['content'] else []),
@@ -263,6 +279,8 @@ class LLMClient:
         Args:
             messages: List of message dicts with 'role' and 'content'.
                       Messages may include 'images' key with list of raw bytes (PNG/JPEG).
+                      Messages may include 'audio' key with list of raw bytes
+                      (WAV/MP3/FLAC/OGG/AIFF/AAC).
             tools: Optional tool specifications.
         """
         contents = []
@@ -305,6 +323,12 @@ class LLMClient:
                     parts.append({"inlineData": {
                         "mimeType": MEDIA_TYPES[img[:3]],
                         "data": base64.b64encode(img).decode()
+                    }})
+            if audio := m.pop('audio', None):
+                for aud in audio:
+                    parts.append({"inlineData": {
+                        "mimeType": _detect_audio_type(aud),
+                        "data": base64.b64encode(aud).decode()
                     }})
             contents.append({"role": "user", "parts": parts})
         # Merge consecutive same-role messages (required by Gemini API)
