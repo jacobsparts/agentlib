@@ -579,7 +579,7 @@ class LLMClient:
                     continue
                 raise
 
-    def tool_call_shim(self, messages, tools, retry=3, attempt=0):
+    def tool_call_shim(self, messages, tools, retry=3, attempt=0, _feedback=None):
         _tools = []
         for name, tool in tools.items():
             schema = tool.model_json_schema()
@@ -623,6 +623,8 @@ class LLMClient:
             _messages[-1]['content']+= f"\n\n{instructions}"
         else:
             _messages.append({"role": "user", "content": instructions})
+        if _feedback:
+            _messages.extend(_feedback)
         try:
             with self.concurrency_lock:
                 resp_msg = self._call(_messages)
@@ -634,7 +636,7 @@ class LLMClient:
                 return self.tool_call_shim(messages, tools, retry-1, attempt+1)
             raise
         try:
-            content = resp_msg['content']
+            content = resp_msg.get('content') or resp_msg.get('reasoning_content') or ''
             json_start_index = content.find('{')
             if json_start_index == -1:
                 raise ValidationError("No JSON object found (missing '{').")
@@ -657,13 +659,7 @@ class LLMClient:
                 try:
                     tool.model_validate(arguments)
                 except Exception as ve:
-                    error_msg = f"Invalid arguments for tool '{name}': {ve}"
-                    # Add validation error message to the messages list
-                    messages.append({
-                        "role": "system", 
-                        "content": f"VALIDATION ERROR: {error_msg}"
-                    })
-                    raise ValidationError(error_msg)
+                    raise ValidationError(f"Invalid arguments for tool '{name}': {ve}")
             resp_msg = {
                 'role': 'assistant',
                 'tool_calls': [
@@ -677,7 +673,15 @@ class LLMClient:
             if retry:
                 if logger.isEnabledFor(logging.INFO):
                     logger.info(f"ValidationError: {e}, retry")
-                return self.tool_call_shim(messages, tools, retry-1)
+                feedback = list(_feedback or [])
+                failed_content = resp_msg.get('content') or resp_msg.get('reasoning_content') or ''
+                if failed_content:
+                    feedback.append({"role": "assistant", "content": failed_content})
+                feedback.append({
+                    "role": "user",
+                    "content": f"ERROR: {e}. You MUST respond ONLY with a JSON object containing \"function_calls\"."
+                })
+                return self.tool_call_shim(messages, tools, retry-1, _feedback=feedback)
             raise
 
 
