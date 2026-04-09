@@ -292,6 +292,9 @@ class CLIMixin:
                 except self.TurnLimitError:
                     self.console.print(f"[yellow]Turn limit ({max_turns}) reached. Returning to prompt.[/yellow]")
                     continue
+                except Exception as e:
+                    self.console.print(f"[red]Error: {e}[/red]")
+                    continue
 
                 # Display response
                 response_str = str(response) if response is not None else ""
