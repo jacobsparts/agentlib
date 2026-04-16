@@ -19,8 +19,10 @@ if TYPE_CHECKING:
 class Exchange:
     user_preview: str
     assistant_preview: str
-    truncate_at: int  # messages[:truncate_at] removes this exchange onward
-    target_seq: int | None = None
+    input_text: str          # Raw user input to preload on selection
+    event_seq: int           # Seq of the message_added event for this input
+    target_seq: int          # event_seq - 1 (snapshot to restore on rewind)
+    orphaned: bool = False   # True if not present in the current branch
 
 
 def _preview(text: str, max_chars: int = 80) -> str:
@@ -31,54 +33,70 @@ def _preview(text: str, max_chars: int = 80) -> str:
     return first
 
 
-def _is_user_input(msg: dict) -> bool:
-    """Check if a user message contains actual user input (not just REPL output)."""
-    if msg.get('_user_content'):
-        return True
-    content = msg.get('content', '')
-    return not content.lstrip().startswith('>>>')
+def build_exchanges_from_events(events: list[dict]) -> list[Exchange]:
+    """Walk the event log; every input segment becomes a rewind candidate.
+
+    Inputs orphaned by a later rewind get marked but kept (still chronological).
+    """
+    exchanges: list[tuple[int, Exchange]] = []
+    live_msg_seqs: set[int] = set()
+    for event in events:
+        seq = event['seq']
+        etype = event['event_type']
+        payload = event['payload']
+        if etype == 'message_added':
+            msg = payload.get('message', {})
+            live_msg_seqs.add(seq)
+            if msg.get('role') == 'user':
+                for seg in msg.get('_render_segments') or []:
+                    if seg.get('type') != 'input':
+                        continue
+                    input_text = seg.get('content', '')
+                    asst_text = _find_assistant_after(events, seq)
+                    exchanges.append((seq, Exchange(
+                        user_preview=_preview(input_text),
+                        assistant_preview=_preview(asst_text) if asst_text else '',
+                        input_text=input_text,
+                        event_seq=seq,
+                        target_seq=seq - 1,
+                    )))
+        elif etype == 'rewind':
+            target_seq = payload.get('target_seq', 0)
+            live_msg_seqs = {s for s in live_msg_seqs if s <= target_seq}
+    for seq, ex in exchanges:
+        ex.orphaned = seq not in live_msg_seqs
+    return [ex for _, ex in exchanges]
 
 
-def build_exchanges(messages: list[dict]) -> list[Exchange]:
-    """Group conversation messages into displayable exchanges."""
-    exchanges = []
-    i = 0
-    while i < len(messages):
-        msg = messages[i]
-        if msg['role'] == 'user':
-            if not _is_user_input(msg):
-                # Pure REPL output (internal turn) - skip
-                i += 1
-                continue
+def _strip_repl_echo(text: str) -> str:
+    """Remove ``>>> ``/``... `` prefixed echo lines so the REPL output reads
+    as the user-visible response."""
+    lines = [ln for ln in text.splitlines() if not (ln.startswith('>>> ') or ln.startswith('... '))]
+    return '\n'.join(lines)
 
-            # Use embedded user content if available, otherwise full content
-            display_content = msg.get('_user_content') or msg.get('content', '')
-            user_preview = _preview(display_content)
 
-            # Scan forward to find the next user-input boundary,
-            # looking through REPL-internal messages (assistant code + REPL output)
-            assistant_preview = ''
-            j = i + 1
-            while j < len(messages):
-                msg_j = messages[j]
-                if msg_j['role'] == 'user' and _is_user_input(msg_j):
-                    break  # Next exchange boundary
-                if msg_j['role'] == 'assistant':
-                    text = msg_j.get('content', '')
-                    if text:
-                        assistant_preview = _preview(text)
-                j += 1
-
-            exchanges.append(Exchange(
-                user_preview=user_preview,
-                assistant_preview=assistant_preview,
-                truncate_at=i,
-                target_seq=msg.get('_event_seq'),
-            ))
-            i = j
-        else:
-            i += 1
-    return exchanges
+def _find_assistant_after(events: list[dict], after_seq: int) -> str:
+    """Return the stripped REPL output that follows the given input — i.e.
+    what the user actually saw as the assistant's response."""
+    for ev in events:
+        if ev['seq'] <= after_seq:
+            continue
+        etype = ev['event_type']
+        if etype == 'rewind':
+            return ''
+        if etype != 'message_added':
+            continue
+        msg = ev['payload'].get('message', {})
+        if msg.get('role') != 'user':
+            continue
+        has_input = any(seg.get('type') == 'input' for seg in (msg.get('_render_segments') or []))
+        if has_input:
+            return ''
+        stdout = msg.get('_stdout') or msg.get('content', '')
+        stripped = _strip_repl_echo(stdout).strip()
+        if stripped:
+            return stripped
+    return ''
 
 
 def _find_last_assistant_text(messages: list[dict]) -> str:
@@ -104,11 +122,11 @@ def _render(exchanges, selected, scroll_offset, term_width, term_height):
     out = ['\x1b[?25l', '\x1b[2J', '\x1b[H']  # Hide cursor, clear, home
 
     # Title
-    title = ' /rewind - Select a point to rewind to '
+    title = ' /rewind - Select a user input to rewind to and edit '
     out.append(f'\x1b[7m{title:<{term_width}}\x1b[0m\n')
 
     # Instructions
-    out.append('\x1b[2m  Up/Down = navigate | Enter = rewind here | Esc = cancel\x1b[0m\n\n')
+    out.append('\x1b[2m  Up/Down = navigate | Enter = load this input for editing | Esc = cancel\x1b[0m\n\n')
 
     # Available lines for exchanges (2 lines each + 1 blank separator)
     header_lines = 3
@@ -123,45 +141,54 @@ def _render(exchanges, selected, scroll_offset, term_width, term_height):
         idx = scroll_offset + i
         is_sel = idx == selected
         marker = '>' if is_sel else ' '
-        rev = '\x1b[7m' if is_sel else ''
-        end = '\x1b[0m' if is_sel else ''
+        # Selected wins, otherwise orphaned style
+        if is_sel:
+            style = '\x1b[7m'  # reverse video
+        elif ex.orphaned:
+            style = '\x1b[2;33m'  # dim yellow for orphaned branch
+        else:
+            style = ''
+        end = '\x1b[0m' if style else ''
 
+        tag = '~' if ex.orphaned else ' '
         num = idx + 1
-        user_line = f'  {marker} [{num}] You: {ex.user_preview}'
+        user_line = f' {tag}{marker} [{num}] You: {ex.user_preview}'
         user_line = user_line[:term_width]
-        out.append(f'{rev}{user_line:<{term_width}}{end}\n')
+        out.append(f'{style}{user_line:<{term_width}}{end}\n')
 
         if ex.assistant_preview:
-            asst_line = f'          Asst: {ex.assistant_preview}'
+            asst_line = f'        Asst: {ex.assistant_preview}'
         else:
-            asst_line = f'          \x1b[2m(no response)\x1b[0m'
+            asst_line = f'        (no response)'
         asst_line = asst_line[:term_width]
-        out.append(f'{rev}{asst_line:<{term_width}}{end}\n')
+        out.append(f'{style}{asst_line:<{term_width}}{end}\n')
 
         out.append('\n')
 
     # Footer
     sel_ex = exchanges[selected]
     num = selected + 1
-    out.append(f'\x1b[2m  {len(exchanges)} exchanges | '
-               f'Rewind removes exchange {num} onward\x1b[0m')
+    orphan_count = sum(1 for ex in exchanges if ex.orphaned)
+    legend = f' | \x1b[2;33m~ = orphaned ({orphan_count})\x1b[0m\x1b[2m' if orphan_count else ''
+    out.append(f'\x1b[2m  {len(exchanges)} inputs{legend} | '
+               f'Rewind to input {num} (preloads text for editing)\x1b[0m')
 
     return ''.join(out)
 
 
-def rewind_ui(altmode: 'AltMode', conversation: 'Conversation') -> Optional[dict]:
-    """Interactive rewind UI. Truncates conversation on selection.
+def rewind_ui(altmode: 'AltMode', events: list[dict]) -> Optional[dict]:
+    """Interactive rewind UI. Returns the selected target metadata.
 
     Args:
         altmode: Active AltMode instance.
-        conversation: Conversation object to rewind.
+        events: Persisted session event log.
 
     Returns:
-        Dict with rewind metadata, or None if cancelled.
+        Dict with target_seq + preload_input, or None if cancelled.
     """
     from .prompt import RawMode
 
-    exchanges = build_exchanges(conversation.messages)
+    exchanges = build_exchanges_from_events(events)
     if not exchanges:
         return None
 
@@ -211,17 +238,10 @@ def rewind_ui(altmode: 'AltMode', conversation: 'Conversation') -> Optional[dict
 
                 # Enter
                 if c in (10, 13):
-                    truncate_at = exchanges[selected].truncate_at
-                    last_response = _find_last_assistant_text(
-                        conversation.messages[:truncate_at]
-                    )
-                    conversation.messages = conversation.messages[:truncate_at]
-                    conversation.usermsg(
-                        '[Conversation rewound. REPL state may not match conversation context.]'
-                    )
+                    chosen = exchanges[selected]
                     return {
-                        "last_response": last_response,
-                        "target_seq": exchanges[selected].target_seq,
+                        "target_seq": chosen.target_seq,
+                        "preload_input": chosen.input_text,
                     }
 
                 # Arrow keys

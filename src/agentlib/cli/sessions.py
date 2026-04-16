@@ -94,15 +94,14 @@ def _get_term_size():
 
 def _render(items, selected, scroll_offset, term_width, term_height, mode, current_cwd):
     out = ['\x1b[?25l', '\x1b[2J', '\x1b[H']
-    scope = "current directory" if mode == "local" else "all directories"
     title = f' /resume [{mode}] '
     out.append(f'\x1b[7m{title:<{term_width}}\x1b[0m\n')
-    subtitle = f'  {scope}  •  ↑/↓ navigate | Enter resume | Tab local/global | Esc cancel'
+    subtitle = '  ↑/↓ navigate | Enter resume | Tab local/global | Esc cancel'
     out.append(f'\x1b[2m{_fit(subtitle, term_width):<{term_width}}\x1b[0m\n\n')
     header_lines = 3
     footer_lines = 2
     available = term_height - header_lines - footer_lines
-    lines_per = 4
+    lines_per = 3
     items_visible = max(1, available // lines_per)
     visible = items[scroll_offset:scroll_offset + items_visible]
     for i, item in enumerate(visible):
@@ -116,16 +115,30 @@ def _render(items, selected, scroll_offset, term_width, term_height, mode, curre
         when = _format_time(item.updated_at)
         cwd_text = _display_cwd(item.cwd, current_cwd)
         number = f'[{idx+1:>2}]'
-        meta = f'{sid}  {model}  {when}'
-        line1 = f'  {marker} {number} {meta}'
-        line2 = f'      {cwd_text}'
-        line3 = f'      {_preview(item.last_user_text, max(20, term_width - 8))}'
+        line1 = f'  {marker} {number} {sid}  {cwd_text}  {model}  {when}'
+        line2 = f'      {_preview(item.last_user_text, max(20, term_width - 8))}'
         out.append(f'{rev}{line1[:term_width]:<{term_width}}{end}\n')
-        out.append(f'{rev}{line2[:term_width]:<{term_width}}{end}\n')
-        out.append(f'{rev}{line3[:term_width]:<{term_width}}{end}\n\n')
+        out.append(f'{rev}{line2[:term_width]:<{term_width}}{end}\n\n')
     selected_item = items[selected]
     footer = f'  {len(items)} sessions  •  selected: {selected_item.session_id}  •  updated {_format_time(selected_item.updated_at)}'
     out.append(f'\x1b[2m{footer[:term_width]:<{term_width}}\x1b[0m')
+    return ''.join(out)
+
+
+def _render_empty(term_width, term_height, mode, current_cwd):
+    out = ['\x1b[?25l', '\x1b[2J', '\x1b[H']
+    title = f' /resume [{mode}] '
+    out.append(f'\x1b[7m{title:<{term_width}}\x1b[0m\n')
+    subtitle = '  Tab local/global | Esc cancel'
+    out.append(f'\x1b[2m{_fit(subtitle, term_width):<{term_width}}\x1b[0m\n\n')
+    if mode == "local":
+        msg = f'No sessions in {_display_cwd(current_cwd, current_cwd)}'
+        hint = 'Press Tab to view sessions from all directories.'
+    else:
+        msg = 'No sessions found.'
+        hint = 'Press Tab to view sessions in this directory, or Esc to cancel.'
+    out.append(f'  {msg}\n')
+    out.append(f'\x1b[2m  {hint}\x1b[0m\n')
     return ''.join(out)
 
 
@@ -145,8 +158,6 @@ def select_session_ui(altmode, store, cwd: str) -> str | None:
         }) for row in rows]
 
     items = load_items()
-    if not items:
-        return None
     selected = 0
     scroll_offset = 0
     session = altmode.session()
@@ -155,12 +166,15 @@ def select_session_ui(altmode, store, cwd: str) -> str | None:
         with RawMode():
             while True:
                 term_width, term_height = _get_term_size()
-                items_visible = max(1, (term_height - 5) // 4)
-                if selected < scroll_offset:
-                    scroll_offset = selected
-                if selected >= scroll_offset + items_visible:
-                    scroll_offset = selected - items_visible + 1
-                sys.stdout.write(_render(items, selected, scroll_offset, term_width, term_height, mode, cwd))
+                items_visible = max(1, (term_height - 5) // 3)
+                if items:
+                    if selected < scroll_offset:
+                        scroll_offset = selected
+                    if selected >= scroll_offset + items_visible:
+                        scroll_offset = selected - items_visible + 1
+                    sys.stdout.write(_render(items, selected, scroll_offset, term_width, term_height, mode, cwd))
+                else:
+                    sys.stdout.write(_render_empty(term_width, term_height, mode, cwd))
                 sys.stdout.flush()
                 k = os.read(sys.stdin.fileno(), 4096)
                 if not k:
@@ -171,10 +185,10 @@ def select_session_ui(altmode, store, cwd: str) -> str | None:
                 if c == 9:
                     mode = "global" if mode == "local" else "local"
                     items = load_items()
-                    if not items:
-                        return None
                     selected = 0
                     scroll_offset = 0
+                    continue
+                if not items:
                     continue
                 if c in (10, 13):
                     return items[selected].session_id

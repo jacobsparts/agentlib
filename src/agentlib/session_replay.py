@@ -18,6 +18,44 @@ def _load_attachment_map(refs: dict[str, str], missing: list[tuple[str, str]]) -
     return loaded
 
 
+def _coalesce_user_messages(messages: list[dict]) -> list[dict]:
+    out = []
+    for msg in messages:
+        if msg.get("role") == "user" and out and out[-1].get("role") == "user":
+            prev = out[-1]
+            prev.setdefault("_render_segments", []).extend(msg.get("_render_segments") or [])
+            prev_content = prev.get("content", "")
+            new_content = msg.get("content", "")
+            sep = "" if not prev_content or prev_content.endswith("\n") else "\n"
+            merged = prev_content + sep + new_content
+            if not merged.endswith("\n"):
+                merged += "\n"
+            prev["content"] = merged
+            if msg.get("_stdout"):
+                prev_stdout = prev.get("_stdout", "")
+                sep_s = "" if not prev_stdout or prev_stdout.endswith("\n") else "\n"
+                stdout_merged = prev_stdout + sep_s + msg["_stdout"]
+                if not stdout_merged.endswith("\n"):
+                    stdout_merged += "\n"
+                prev["_stdout"] = stdout_merged
+            if msg.get("_user_content") is not None:
+                prev["_user_content"] = msg["_user_content"]
+            for k in ("images", "audio"):
+                if msg.get(k):
+                    prev[k] = (prev.get(k) or []) + msg[k]
+            if msg.get("_attachment_refs"):
+                refs = prev.get("_attachment_refs") or {}
+                refs.update(msg["_attachment_refs"])
+                prev["_attachment_refs"] = refs
+            if msg.get("_attachments"):
+                attachments = prev.get("_attachments") or {}
+                attachments.update(msg["_attachments"])
+                prev["_attachments"] = attachments
+        else:
+            out.append(msg)
+    return out
+
+
 def replay_session_into_agent(agent, session_id: str, store):
     events = store.get_events(session_id)
     snapshots = {}
@@ -44,22 +82,11 @@ def replay_session_into_agent(agent, session_id: str, store):
                 for item in local_missing:
                     missing_seen.add(item)
             msg["_event_seq"] = seq
+            for seg in reversed(msg.get("_render_segments") or []):
+                if "_event_seq" not in seg:
+                    seg["_event_seq"] = seq
+                    break
             messages.append(msg)
-        elif event_type == "message_appended":
-            target_seq = payload["target_seq"]
-            target = next((m for m in messages if m.get("_event_seq") == target_seq), None)
-            if target is not None:
-                append_content = payload.get("append_content", "")
-                if append_content:
-                    prev = target.get("content", "")
-                    sep = "" if not prev or prev.endswith("\n") else "\n"
-                    target["content"] = prev + sep + append_content + "\n"
-                if payload.get("user_content") is not None:
-                    target["_user_content"] = payload["user_content"]
-                if payload.get("stdout_append") is not None:
-                    prev_stdout = target.get("_stdout", "")
-                    sep_stdout = "" if not prev_stdout or prev_stdout.endswith("\n") else "\n"
-                    target["_stdout"] = prev_stdout + sep_stdout + payload["stdout_append"] + "\n"
         elif event_type == "attachment_invalidated":
             name = payload["name"]
             for msg in messages:
@@ -84,6 +111,7 @@ def replay_session_into_agent(agent, session_id: str, store):
         if "_attachments" in msg and not msg["_attachments"]:
             del msg["_attachments"]
 
+    messages = _coalesce_user_messages(messages)
     agent.conversation.messages = messages
     deduped = []
     seen = set()

@@ -84,8 +84,8 @@ class SessionStore:
             last_user_text = None
             if event_type == "message_added":
                 msg = payload.get("message", {})
-                if msg.get("role") == "user":
-                    last_user_text = msg.get("_user_content") or msg.get("content", "")
+                if msg.get("role") == "user" and msg.get("_user_content"):
+                    last_user_text = msg["_user_content"]
             conn.execute(
                 """
                 UPDATE sessions

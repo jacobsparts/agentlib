@@ -747,6 +747,10 @@ class REPLMixin:
                 if 'audio' in kwargs:
                     last_msg['audio'] = last_msg.get('audio', []) + kwargs['audio']
 
+                last_msg.setdefault("_render_segments", []).append(
+                    {"type": "input", "content": content}
+                )
+
                 if hasattr(self, '_on_append_last_user_message'):
                     self._on_append_last_user_message(last_msg, content, kwargs)
 
@@ -755,7 +759,17 @@ class REPLMixin:
 
         # Fall back to normal message append
         self._last_was_repl_output = False
-        return super().usermsg(content, **kwargs)
+        result = super().usermsg(content, **kwargs)
+        new_msg = self.conversation.messages[-1]
+        if new_msg.get("role") == "user":
+            if kwargs.get('_user_content') is not None:
+                seg = {"type": "input", "content": kwargs['_user_content']}
+            else:
+                # Prefer _stdout (unfiltered REPL output) over content (which may
+                # have emit chunks filtered out for the LLM).
+                seg = {"type": "stdout", "content": kwargs.get('_stdout') or content}
+            new_msg["_render_segments"] = [seg]
+        return result
 
     def _ensure_setup(self) -> None:
         """Initialize the ToolREPL."""
