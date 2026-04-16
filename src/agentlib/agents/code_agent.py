@@ -996,7 +996,7 @@ If you don't know how to proceed:
         # Mark that last message is REPL output - next user message should append
         self._last_was_repl_output = True
 
-    def cli_run(self, max_turns: int | None = None, synth: bool = True):
+    def cli_run(self, max_turns: int | None = None, synth: bool = True, resume: str | bool = False):
         """Run CLI loop with Python block delimiters."""
         from agentlib.cli.mixin import SQLiteHistory, InputSession
         from agentlib.cli.altmode import AltMode
@@ -1032,12 +1032,21 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /sessions, /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
+        self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
 
         if files := gather_auto_attach_files():
             print(f"Loading {', '.join(files)}")
             for filename in files:
                 self.attach_file_ref(filename, filename)
+
+        if resume:
+            if resume is True:
+                from agentlib.cli.sessions import select_session_ui
+                session_id = select_session_ui(altmode, self._session_store, str(Path.cwd()))
+            else:
+                session_id = resume
+            if session_id and self.resume_session(session_id):
+                synth = False
 
         try:
             while True:
@@ -1073,14 +1082,6 @@ If you don't know how to proceed:
                         last_response = rewind_result.get("last_response")
                         if last_response:
                             print(self.format_response(last_response))
-                    continue
-
-                if user_input.strip() == "/sessions":
-                    from agentlib.cli.sessions import select_session_ui
-                    session_id = select_session_ui(altmode, self._session_store, str(Path.cwd()))
-                    if session_id:
-                        self.resume_session(session_id)
-                        synth = False
                     continue
 
                 if user_input.strip().startswith("/resume"):
@@ -1760,6 +1761,8 @@ Examples:
   code-agent --model sonnet           # Use Claude
   code-agent --no-synth               # Skip synthetic exchange
   code-agent --max-turns 50           # Limit conversation turns
+  code-agent --resume                 # Open session picker on startup
+  code-agent --resume <session_id>    # Resume specific session directly
 """
     )
     parser.add_argument(
@@ -1788,6 +1791,14 @@ Examples:
         action="store_true",
         help="Disable sandbox mode (overrides config default)"
     )
+    parser.add_argument(
+        "--resume", "-r",
+        nargs="?",
+        const=True,
+        default=False,
+        metavar="SESSION_ID",
+        help="Resume a session. With no argument, opens the session picker."
+    )
     args = parser.parse_args()
 
     try:
@@ -1815,7 +1826,7 @@ Examples:
 
     try:
         with ConfiguredAgent() as agent:
-            agent.cli_run(synth=not args.no_synth)
+            agent.cli_run(synth=not args.no_synth, resume=args.resume)
     except ModelNotFoundError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
