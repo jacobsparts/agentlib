@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import sys
+import copy
 from typing import Optional
 from pathlib import Path
 from agentlib import REPLAgent, SandboxMixin, REPLAttachmentMixin, MCPMixin
@@ -22,6 +23,8 @@ from agentlib.cli import CLIMixin
 from agentlib.jina_mixin import JinaMixin
 from agentlib.llm_registry import ModelNotFoundError
 from agentlib.cli.terminal import DIM, RESET, Panel
+from agentlib.session_store import SessionStore
+from agentlib.session_replay import replay_session_into_agent
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -104,6 +107,139 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     """Code assistant with Python REPL execution."""
 
     model = _get_config_value("code_agent_model", "sonnet")
+
+    def _ensure_setup(self):
+        super()._ensure_setup()
+        if not hasattr(self, '_session_store'):
+            self._session_store = SessionStore()
+            self._session_id = None
+            self._next_event_seq = 1
+            self._suspend_persistence = False
+            self._explicit_attachment_refs = {}
+            self._pending_explicit_attachment_refs = {}
+            self._pending_session_events = []
+
+    def _ensure_live_session(self):
+        if self._session_id is None:
+            self._session_id = self._session_store.create_session(str(Path.cwd()), getattr(self, 'model', None))
+            self._next_event_seq = 1
+
+    def _flush_pending_session_events(self):
+        if not self._session_id:
+            return
+        pending = self._pending_session_events
+        self._pending_session_events = []
+        for event_type, payload in pending:
+            seq = self._next_event_seq
+            self._session_store.append_event(self._session_id, seq, event_type, payload)
+            self._next_event_seq += 1
+
+    def _bootstrap_persisted_conversation(self):
+        if getattr(self, '_suspend_persistence', False):
+            return
+        if self._session_id is None:
+            self._ensure_live_session()
+            self._flush_pending_session_events()
+        for msg in self.conversation.messages[1:]:
+            if msg.get('_synthetic'):
+                continue
+            if msg.get('_event_seq') is None:
+                self._persist_message(msg)
+
+    def _append_session_event(self, event_type: str, payload: dict, create_session: bool = True) -> int | None:
+        if getattr(self, '_suspend_persistence', False):
+            return None
+        if self._session_id is None and not create_session:
+            self._pending_session_events.append((event_type, copy.deepcopy(payload)))
+            return None
+        self._ensure_live_session()
+        self._flush_pending_session_events()
+        seq = self._next_event_seq
+        self._session_store.append_event(self._session_id, seq, event_type, payload)
+        self._next_event_seq += 1
+        return seq
+
+    def _sanitize_message_for_persistence(self, message: dict) -> dict:
+        msg = {}
+        for key, value in message.items():
+            if key == '_attachments':
+                continue
+            if key in {'role', 'content', '_stdout', '_user_content', 'name', 'tool_call_id', 'images', 'audio', '_synthetic'}:
+                msg[key] = copy.deepcopy(value)
+        refs = message.get('_attachment_refs')
+        if refs:
+            msg['_attachment_refs'] = copy.deepcopy(refs)
+        return msg
+
+    def _persist_message(self, message: dict):
+        if message.get('_synthetic'):
+            return
+        if self._session_id is None:
+            self._bootstrap_persisted_conversation()
+            if message.get("_event_seq") is not None:
+                return
+        seq = self._append_session_event("message_added", {"message": self._sanitize_message_for_persistence(message)})
+        if seq is not None:
+            message["_event_seq"] = seq
+
+    def _persist_append_to_last_user_message(self, target_message: dict, content: str, kwargs: dict):
+        target_seq = target_message.get("_event_seq")
+        if target_seq is None:
+            return
+        payload = {
+            "target_seq": target_seq,
+            "append_content": content,
+        }
+        if kwargs.get('_stdout') is not None:
+            payload["stdout_append"] = kwargs['_stdout']
+        if target_message.get('_user_content') is not None:
+            payload["user_content"] = target_message.get('_user_content')
+        self._append_session_event("message_appended", payload)
+
+    def _on_append_last_user_message(self, target_message: dict, content, kwargs):
+        self._persist_append_to_last_user_message(target_message, content, kwargs)
+
+    def toolmsg(self, content, **kwargs):
+        result = super().toolmsg(content, **kwargs)
+        self._persist_message(self.conversation.messages[-1])
+        return result
+
+    def attach_file_ref(self, filepath: str, name: str | None = None):
+        path = str(Path(filepath).expanduser())
+        attach_name = name or filepath
+        content = Path(path).read_text()
+        self.attach(attach_name, content)
+        self._explicit_attachment_refs[attach_name] = path
+        self._pending_explicit_attachment_refs[attach_name] = path
+        self._append_session_event("attachment_added", {"name": attach_name, "path": path}, create_session=False)
+
+    def detach_file_ref(self, name: str):
+        self.detach(name)
+        self._explicit_attachment_refs.pop(name, None)
+        self._pending_explicit_attachment_refs.pop(name, None)
+        self._append_session_event("attachment_removed", {"name": name}, create_session=False)
+
+    def _invalidate_attachment(self, name: str):
+        had_attachment = any(name in msg.get('_attachments', {}) for msg in self.conversation.messages)
+        had_ref = any(name in (msg.get('_attachment_refs') or {}) for msg in self.conversation.messages)
+        had_pending_ref = name in self._explicit_attachment_refs or name in self._pending_explicit_attachment_refs
+        super()._invalidate_attachment(name)
+        for msg in self.conversation.messages:
+            refs = msg.get('_attachment_refs')
+            if refs and name in refs:
+                del refs[name]
+                if not refs:
+                    del msg['_attachment_refs']
+        self._explicit_attachment_refs.pop(name, None)
+        self._pending_explicit_attachment_refs.pop(name, None)
+        if getattr(self, '_suspend_persistence', False):
+            return
+        if not (had_attachment or had_ref or had_pending_ref):
+            return
+        self._append_session_event("attachment_invalidated", {"name": name})
+
+    def _on_assistant_message_committed(self, message: dict):
+        self._persist_message(message)
 
     def build_output_for_llm(self, output_chunks):
         """Build LLM output, converting complete reads to attachments."""
@@ -205,6 +341,11 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
     def usermsg(self, content, **kwargs):
         """Override to attach pending images and read-attachments."""
+        if getattr(self, '_pending_explicit_attachment_refs', None):
+            refs = kwargs.get('_attachment_refs', {})
+            refs.update(self._pending_explicit_attachment_refs)
+            kwargs['_attachment_refs'] = refs
+            self._pending_explicit_attachment_refs = {}
         if pending := getattr(self, '_read_attachments', None):
             existing = kwargs.get('_attachments', {})
             existing.update(pending)
@@ -213,7 +354,11 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         if pending := getattr(self, '_pending_images', None):
             kwargs['images'] = kwargs.get('images', []) + pending
             self._pending_images = []
-        return super().usermsg(content, **kwargs)
+        before_len = len(self.conversation.messages)
+        result = super().usermsg(content, **kwargs)
+        if len(self.conversation.messages) > before_len:
+            self._persist_message(self.conversation.messages[-1])
+        return result
 
     welcome_message = "[bold]Code Agent[/bold]\nPython REPL-based coding assistant"
     thinking_message = "Working..."
@@ -789,28 +934,43 @@ If you don't know how to proceed:
         return bool(transcript)
 
     def save_session(self, filename: str):
-        """Save conversation to file, filtering out reset markers."""
-        messages = [m for m in self.conversation.messages
-                    if ">>> system_reset()" not in m.get("content", "")]
-        with open(filename, "w") as f:
-            json.dump(messages, f, indent=2)
-        print(f"{DIM}Session saved to {filename}{RESET}")
+        raise NotImplementedError("Session export has been removed; use /resume for persisted sessions.")
 
     def load_session(self, filename: str):
-        """Load conversation from file and notify agent of reset."""
-        if not os.path.exists(filename):
-            print(f"{DIM}File not found: {filename}{RESET}")
-            return
+        raise NotImplementedError("Session import has been removed; use /resume for persisted sessions.")
+
+    def resume_session(self, session_id: str):
+        session = self._session_store.get_session(session_id)
+        if not session:
+            print(f"{DIM}Session not found: {session_id}{RESET}")
+            return False
+        if hasattr(self, '_conversation'):
+            del self._conversation
+        if hasattr(self, '_tool_repl'):
+            self._tool_repl.close()
+            del self._tool_repl
+        if hasattr(self, '_repl_startup_injected'):
+            del self._repl_startup_injected
+        _ = self.conversation
+        self._suspend_persistence = True
         try:
-            with open(filename) as f:
-                messages = json.load(f)
-                messages = [ {k: v for k, v in row.items() if k in {'role', 'content', '_stdout', '_attachments', '_user_content'}} for row in messages ]
-                self.conversation.messages = messages
-        except json.JSONDecodeError:
-            print(f"{DIM}Error: {filename} is not a valid JSON session file{RESET}")
-            return
-        self.usermsg(">>> system_reset()\nREPL session has been reset\n")
-        print(f"{DIM}Session loaded from {filename}{RESET}")
+            missing = replay_session_into_agent(self, session_id, self._session_store)
+            self._session_id = session_id
+            self._next_event_seq = self._session_store.get_next_seq(session_id)
+            self._explicit_attachment_refs = {}
+            self._pending_explicit_attachment_refs = {}
+            for msg in self.conversation.messages:
+                for name, path in (msg.get('_attachment_refs') or {}).items():
+                    self._explicit_attachment_refs[name] = path
+            self.usermsg(">>> system_reset()\nREPL session has been reset\n")
+            if missing:
+                lines = ["[Resume warning: attachment file missing and detached]"]
+                lines.extend(f"- {name}: {path}" for name, path in missing)
+                self.usermsg("\n".join(lines))
+        finally:
+            self._suspend_persistence = False
+        print(f"{DIM}Session resumed: {session_id}{RESET}")
+        return True
 
     def _synthetic_exchange(self):
         self._ensure_setup()
@@ -832,7 +992,7 @@ If you don't know how to proceed:
             ('assistant', 'emit("The documentation style is good - concise and code-first with clear section headers.", release=True)'),
             ('user', '>>> emit("The documentation style is good - concise and code-first with clear section headers.", release=True)\nThe documentation style is good - concise and code-first with clear section headers.\n'),
         ):
-            self.conversation.messages.append({"role": role, "content": content})
+            self.conversation.messages.append({"role": role, "content": content, "_synthetic": True})
         # Mark that last message is REPL output - next user message should append
         self._last_was_repl_output = True
 
@@ -872,13 +1032,12 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /rewind, /subagents [model], /save <file>, /load <file>, /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
+        self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /sessions, /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
 
         if files := gather_auto_attach_files():
             print(f"Loading {', '.join(files)}")
             for filename in files:
-                content = Path(filename).read_text()
-                self.attach(filename, content)
+                self.attach_file_ref(filename, filename)
 
         try:
             while True:
@@ -905,24 +1064,36 @@ If you don't know how to proceed:
 
                 if user_input.strip() == "/rewind":
                     from agentlib.cli.rewind import rewind_ui
-                    last_response = rewind_ui(altmode, self.conversation)
-                    if last_response is not None:
+                    rewind_result = rewind_ui(altmode, self.conversation)
+                    if rewind_result is not None:
+                        target_seq = rewind_result.get("target_seq")
+                        if target_seq is not None:
+                            self._append_session_event("rewind", {"target_seq": target_seq})
                         print(f"{DIM}Conversation rewound.{RESET}")
+                        last_response = rewind_result.get("last_response")
                         if last_response:
                             print(self.format_response(last_response))
                     continue
 
-                if user_input.strip().startswith("/save "):
-                    filename = user_input.strip()[6:].strip()
-                    if filename:
-                        self.save_session(filename)
+                if user_input.strip() == "/sessions":
+                    from agentlib.cli.sessions import select_session_ui
+                    session_id = select_session_ui(altmode, self._session_store, str(Path.cwd()))
+                    if session_id:
+                        self.resume_session(session_id)
+                        synth = False
                     continue
 
-                if user_input.strip().startswith("/load "):
-                    filename = user_input.strip()[6:].strip()
-                    if filename:
-                        self.load_session(filename)
-                        synth = False
+                if user_input.strip().startswith("/resume"):
+                    parts = user_input.strip().split(None, 1)
+                    if len(parts) == 1:
+                        from agentlib.cli.sessions import select_session_ui
+                        session_id = select_session_ui(altmode, self._session_store, str(Path.cwd()))
+                        if session_id:
+                            self.resume_session(session_id)
+                            synth = False
+                    else:
+                        if self.resume_session(parts[1].strip()):
+                            synth = False
                     continue
 
                 if user_input.strip().startswith("/attach "):
@@ -930,7 +1101,7 @@ If you don't know how to proceed:
                     if filename:
                         try:
                             content = Path(filename).expanduser().read_text()
-                            self.attach(filename, content)
+                            self.attach_file_ref(filename, filename)
                             size_kb = len(content) / 1000
                             print(f"{DIM}Attached {filename} ({size_kb:.1f}KB){RESET}")
                         except Exception as e:
@@ -940,7 +1111,7 @@ If you don't know how to proceed:
                 if user_input.strip().startswith("/detach "):
                     filename = user_input.strip()[8:].strip()
                     if filename:
-                        self.detach(filename)
+                        self.detach_file_ref(filename)
                         print(f"{DIM}Detached {filename}{RESET}")
                     continue
 

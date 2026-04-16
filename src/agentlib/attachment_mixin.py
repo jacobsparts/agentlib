@@ -9,7 +9,7 @@ Example:
     from agentlib import BaseAgent, AttachmentMixin
 
     class MyAgent(AttachmentMixin, BaseAgent):
-        model = 'anthropic/claude-sonnet-4-20250514'
+        model = 'sonnet'
         system = "You are a helpful assistant."
 
         @BaseAgent.tool

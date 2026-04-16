@@ -430,7 +430,7 @@ class Subagent:
 
     Args:
         cwd: Working directory for the agent. Defaults to current directory.
-        model: LLM model to use. Defaults to sonnet.
+        model: LLM model to use.
         max_turns: Maximum turns per task. Default 50.
 
     Example:

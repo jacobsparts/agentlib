@@ -747,6 +747,9 @@ class REPLMixin:
                 if 'audio' in kwargs:
                     last_msg['audio'] = last_msg.get('audio', []) + kwargs['audio']
 
+                if hasattr(self, '_on_append_last_user_message'):
+                    self._on_append_last_user_message(last_msg, content, kwargs)
+
                 self._last_was_repl_output = False
                 return
 
@@ -961,6 +964,8 @@ Call help(function_name) for parameter descriptions.
             except _CompleteException:
                 # Record the terminal assistant message before returning
                 self.conversation.messages.append(resp)
+                if hasattr(self, '_on_assistant_message_committed'):
+                    self._on_assistant_message_committed(resp)
                 if hasattr(self, '_complete_value'):
                     value = self._complete_value
                     del self._complete_value
@@ -973,6 +978,8 @@ Call help(function_name) for parameter descriptions.
 
             # Commit successful response to conversation
             self.conversation.messages.append(resp)
+            if hasattr(self, '_on_assistant_message_committed'):
+                self._on_assistant_message_committed(resp)
 
             if not content:
                 continue

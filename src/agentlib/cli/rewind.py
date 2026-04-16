@@ -20,6 +20,7 @@ class Exchange:
     user_preview: str
     assistant_preview: str
     truncate_at: int  # messages[:truncate_at] removes this exchange onward
+    target_seq: int | None = None
 
 
 def _preview(text: str, max_chars: int = 80) -> str:
@@ -72,6 +73,7 @@ def build_exchanges(messages: list[dict]) -> list[Exchange]:
                 user_preview=user_preview,
                 assistant_preview=assistant_preview,
                 truncate_at=i,
+                target_seq=msg.get('_event_seq'),
             ))
             i = j
         else:
@@ -147,7 +149,7 @@ def _render(exchanges, selected, scroll_offset, term_width, term_height):
     return ''.join(out)
 
 
-def rewind_ui(altmode: 'AltMode', conversation: 'Conversation') -> Optional[str]:
+def rewind_ui(altmode: 'AltMode', conversation: 'Conversation') -> Optional[dict]:
     """Interactive rewind UI. Truncates conversation on selection.
 
     Args:
@@ -155,7 +157,7 @@ def rewind_ui(altmode: 'AltMode', conversation: 'Conversation') -> Optional[str]
         conversation: Conversation object to rewind.
 
     Returns:
-        Last assistant response text for caller to reprint, or None if cancelled.
+        Dict with rewind metadata, or None if cancelled.
     """
     from .prompt import RawMode
 
@@ -217,7 +219,10 @@ def rewind_ui(altmode: 'AltMode', conversation: 'Conversation') -> Optional[str]
                     conversation.usermsg(
                         '[Conversation rewound. REPL state may not match conversation context.]'
                     )
-                    return last_response
+                    return {
+                        "last_response": last_response,
+                        "target_seq": exchanges[selected].target_seq,
+                    }
 
                 # Arrow keys
                 if c == 27 and len(k) >= 3 and k[1] == 91:
