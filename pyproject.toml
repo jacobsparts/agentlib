@@ -40,5 +40,6 @@ include = ["agentlib*"]
 [tool.setuptools.package-data]
 agentlib = [
   "docs/**/*.md",
+  "skills/**/*.md",
   "examples/**/*",
 ]

@@ -120,3 +120,28 @@ def replay_session_into_agent(agent, session_id: str, store):
             deduped.append(item)
             seen.add(item)
     return deduped
+
+
+def replay_display_text(session_id: str, store) -> str:
+    events = store.get_events(session_id)
+    snapshots = {}
+    chunks: list[str] = []
+
+    def snapshot(seq):
+        snapshots[seq] = copy.deepcopy(chunks)
+
+    snapshot(0)
+    for event in events:
+        seq = event["seq"]
+        payload = event["payload"]
+        event_type = event["event_type"]
+        if event_type == "display":
+            text = payload.get("text", "")
+            if text:
+                chunks.append(text)
+        elif event_type == "rewind":
+            target_seq = payload["target_seq"]
+            chunks = copy.deepcopy(snapshots.get(target_seq, snapshots[0]))
+        snapshot(seq)
+
+    return "".join(chunks)

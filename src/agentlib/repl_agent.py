@@ -66,6 +66,7 @@ class _InterruptedError(KeyboardInterrupt):
 from agentlib.tools.subrepl import (
     SubREPL,
     _format_echo,
+    _format_echo_stdout,
     _split_into_statements,
 )
 from agentlib.tools.source_extract import extract_method_source as _extract_tool_source
@@ -1126,11 +1127,11 @@ Call help(function_name) for parameter descriptions.
         # Per-statement tracking for on_statement_output hook
         statement_chunks = []
 
-        def stream(chunk, msg_type="echo"):
+        def stream(chunk, msg_type="echo", display_chunk=None):
             output_chunks.append((msg_type, chunk))
             statement_chunks.append((msg_type, chunk))
             if hasattr(self, 'on_repl_chunk'):
-                self.on_repl_chunk(chunk, msg_type)
+                self.on_repl_chunk(display_chunk if display_chunk is not None else chunk, msg_type)
 
         for original_stmt in original_statements:
             # Transform this statement (print -> _print for output tagging)
@@ -1141,7 +1142,7 @@ Call help(function_name) for parameter descriptions.
                 compile(exec_stmt, '<repl>', 'exec')
             except SyntaxError as e:
                 # Echo the original statement, show error, stop processing
-                stream(_format_echo(original_stmt), "echo")
+                stream(_format_echo(original_stmt), "echo", _format_echo_stdout(original_stmt))
                 stream(self._format_syntax_error(e), "error")
                 if hasattr(self, 'on_statement_output'):
                     self.on_statement_output(statement_chunks)
@@ -1149,7 +1150,7 @@ Call help(function_name) for parameter descriptions.
 
             # Valid syntax - echo original, execute transformed
             any_executed = True
-            stream(_format_echo(original_stmt), "echo")
+            stream(_format_echo(original_stmt), "echo", _format_echo_stdout(original_stmt))
             repl._running = True
             repl._cmd_seq += 1
             current_seq = repl._cmd_seq

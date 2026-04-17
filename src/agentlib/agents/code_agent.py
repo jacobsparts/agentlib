@@ -22,9 +22,9 @@ from agentlib import REPLAgent, SandboxMixin, REPLAttachmentMixin, MCPMixin
 from agentlib.cli import CLIMixin
 from agentlib.jina_mixin import JinaMixin
 from agentlib.llm_registry import ModelNotFoundError
-from agentlib.cli.terminal import DIM, RESET, Panel
+from agentlib.cli.terminal import DIM, RESET, Panel, strip_ansi
 from agentlib.session_store import SessionStore
-from agentlib.session_replay import replay_session_into_agent
+from agentlib.session_replay import replay_session_into_agent, replay_display_text
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -103,6 +103,20 @@ def gather_auto_attach_files():
     return found_files
 
 
+def _skill_description(path: Path) -> str:
+    try:
+        for line in path.read_text().splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            if text.startswith('#'):
+                text = text.lstrip('#').strip()
+            return text
+    except Exception:
+        pass
+    return ""
+
+
 class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     """Code assistant with Python REPL execution."""
 
@@ -118,6 +132,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             self._explicit_attachment_refs = {}
             self._pending_explicit_attachment_refs = {}
             self._pending_session_events = []
+            self._display_capture = []
 
     def _ensure_live_session(self):
         if self._session_id is None:
@@ -158,6 +173,33 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         self._session_store.append_event(self._session_id, seq, event_type, payload)
         self._next_event_seq += 1
         return seq
+
+    def _record_display_event(self, kind: str, text: str, create_session: bool = False):
+        if not text:
+            return
+        self._append_session_event("display", {"kind": kind, "text": text}, create_session=create_session)
+
+    def _display_text(self, text: str, kind: str = "status", end: str = "\n", create_session: bool = False):
+        print(text, end=end, flush=True)
+        self._record_display_event(kind, strip_ansi(text) + end, create_session=create_session)
+
+    def _display_input_block(self, text: str):
+        lines = text.rstrip("\n").split("\n") if text else [""]
+        rendered = [f"{self.cli_prompt}{lines[0]}"]
+        rendered.extend(lines[1:])
+        self._record_display_event("input", "\n".join(rendered) + "\n\n")
+
+    def _reset_display_capture(self):
+        self._display_capture = []
+
+    def _capture_display_line(self, text: str = ""):
+        self._display_capture.append(strip_ansi(text) + "\n")
+
+    def _flush_display_capture(self):
+        if not self._display_capture:
+            return
+        self._record_display_event("python", "".join(self._display_capture))
+        self._display_capture = []
 
     def _sanitize_message_for_persistence(self, message: dict) -> dict:
         msg = {}
@@ -227,6 +269,64 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         self._explicit_attachment_refs.pop(name, None)
         self._pending_explicit_attachment_refs.pop(name, None)
         self._append_session_event("attachment_removed", {"name": name}, create_session=False)
+
+    def _builtin_skills_dir(self) -> Path:
+        return Path(__file__).resolve().parents[1] / "skills"
+
+    def _user_skills_dir(self) -> Path:
+        return Path.home() / ".agentlib" / "skills"
+
+    def list_skills(self) -> list[dict]:
+        skills = {}
+        for source, directory in (("built-in", self._builtin_skills_dir()), ("user", self._user_skills_dir())):
+            if not directory.is_dir():
+                continue
+            for path in sorted(directory.glob("*.md")):
+                name = path.stem
+                skills[name] = {
+                    "name": name,
+                    "file_name": path.name,
+                    "path": path,
+                    "source": source,
+                    "description": _skill_description(path),
+                }
+        active = set(self.list_attachments())
+        items = []
+        for name in sorted(skills):
+            item = dict(skills[name])
+            item["attached"] = item["file_name"] in active
+            items.append(item)
+        return items
+
+    def resolve_skill(self, name: str) -> dict | None:
+        skill_name = name.strip()
+        if skill_name.endswith(".md"):
+            skill_name = skill_name[:-3]
+        for item in self.list_skills():
+            if item["name"] == skill_name:
+                return item
+        return None
+
+    def attach_skill(self, name: str) -> tuple[bool, str]:
+        skill = self.resolve_skill(name)
+        if not skill:
+            return False, f"Skill not found: {name}"
+        self.attach_file_ref(str(skill["path"]), skill["file_name"])
+        return True, f"Attached skill: {skill['name']} [{skill['source']}]"
+
+    def apply_skill_selection(self, selected_skills: list[dict]) -> list[str]:
+        current = {item["file_name"]: item for item in self.list_skills() if item["attached"]}
+        desired = {item["file_name"]: item for item in selected_skills if item["attached"]}
+        messages = []
+        for file_name, item in current.items():
+            if file_name not in desired:
+                self.detach_file_ref(file_name)
+                messages.append(f"Detached skill: {item['name']}")
+        for file_name, item in desired.items():
+            if file_name not in current:
+                self.attach_file_ref(str(item["path"]), file_name)
+                messages.append(f"Attached skill: {item['name']} [{item['source']}]")
+        return messages
 
     def _invalidate_attachment(self, name: str):
         had_attachment = any(name in msg.get('_attachments', {}) for msg in self.conversation.messages)
@@ -640,9 +740,11 @@ If you don't know how to proceed:
                             if getattr(self, '_header_pending', False):
                                 header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
                                 print(f"\x1b[1G\x1b[K{header}")
+                                self._capture_display_line("───────────── Python ─────────────")
                                 self._header_pending = False
                                 self._repl_printed_header = True
                             print(echo_line, flush=True)
+                            self._capture_display_line(echo_line)
                         self._print_echo_buffer = []
                         self._in_print_echo = False
                     # New statement - check if it's emit() or print()
@@ -676,24 +778,29 @@ If you don't know how to proceed:
                     if getattr(self, '_header_pending', False):
                         header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
                         print(f"\x1b[1G\x1b[K{header}")
+                        self._capture_display_line("───────────── Python ─────────────")
                         self._header_pending = False
                         self._repl_printed_header = True
                     print(line, flush=True)
+                    self._capture_display_line(line)
         elif msg_type == "progress":
             # Show progress updates immediately (emit with release=False)
             # This should open the Python block since more output is expected
             if getattr(self, '_header_pending', False):
                 header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
                 print(f"\x1b[1G\x1b[K{header}")
+                self._capture_display_line("───────────── Python ─────────────")
                 self._header_pending = False
                 self._repl_printed_header = True
             for line in chunk.rstrip('\n').split('\n'):
                 print(f"\x1b[92m{line}\x1b[0m", flush=True)  # Bright green
+                self._capture_display_line(line)
         elif msg_type in ("output", "print"):
             # Print header if pending (in case output comes before visible echo)
             if getattr(self, '_header_pending', False):
                 header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
                 print(f"\x1b[1G\x1b[K{header}")
+                self._capture_display_line("───────────── Python ─────────────")
                 self._header_pending = False
                 self._repl_printed_header = True
             # Show output with truncation: up to 240 chars or 3 lines
@@ -729,6 +836,7 @@ If you don't know how to proceed:
                     # Show the buffered echo
                     for echo_line in print_echo_buffer:
                         print(echo_line, flush=True)
+                        self._capture_display_line(echo_line)
                 # Clear the buffer
                 self._print_echo_buffer = []
                 self._in_print_echo = False
@@ -737,19 +845,25 @@ If you don't know how to proceed:
                 # Cut mid-line: ellipsis on same line
                 print(f"{DIM}{display}...{RESET}", flush=True)
                 print(f"{DIM}({total_lines} lines total){RESET}", flush=True)
+                self._capture_display_line(f"{display}...")
+                self._capture_display_line(f"({total_lines} lines total)")
             elif is_truncated:
                 # Cut at line boundary: ellipsis on own line
                 for line in display.split('\n'):
                     print(f"{DIM}{line}{RESET}", flush=True)
+                    self._capture_display_line(line)
                 print(f"{DIM}... ({total_lines} lines total){RESET}", flush=True)
+                self._capture_display_line(f"... ({total_lines} lines total)")
             elif is_print_output:
                 # No truncation for print(): show in yellow, echo already handled
                 for line in display.split('\n'):
                     print(f"\x1b[33m{line}\x1b[0m", flush=True)
+                    self._capture_display_line(line)
             else:
                 # No truncation for expression output: show in dim
                 for line in display.split('\n'):
                     print(f"{DIM}{line}{RESET}", flush=True)
+                    self._capture_display_line(line)
         # "emit" (release=True) shown via format_response at turn end
         # "print" and "read" shown as summary in on_statement_output
 
@@ -824,11 +938,13 @@ If you don't know how to proceed:
         # Show suppressed output summary for this statement
         if suppressed_lines > 0:
             print(f"{DIM}... ({suppressed_lines} lines){RESET}", flush=True)
+            self._capture_display_line(f"... ({suppressed_lines} lines)")
 
         # Display error output
         if error_display.strip():
             for line in error_display.rstrip('\n').split('\n'):
                 print(f"\x1b[91m{line}\x1b[0m", flush=True)  # Red for errors
+                self._capture_display_line(line)
             self._repl_has_output = True
 
     def on_repl_output(self, output_chunks: list) -> None:
@@ -971,7 +1087,10 @@ If you don't know how to proceed:
             for msg in self.conversation.messages:
                 for name, path in (msg.get('_attachment_refs') or {}).items():
                     self._explicit_attachment_refs[name] = path
-            self._replay_resumed_conversation()
+            display_text = replay_display_text(session_id, self._session_store)
+            sys.stdout.write(display_text)
+            if display_text and not display_text.endswith("\n"):
+                print()
             self.usermsg(">>> system_reset()\nREPL session has been reset\n")
             if missing:
                 lines = ["[Resume warning: attachment file missing and detached]"]
@@ -1000,52 +1119,6 @@ If you don't know how to proceed:
                     self._explicit_attachment_refs[name] = path
         finally:
             self._suspend_persistence = False
-
-    def _replay_resumed_conversation(self):
-        printed_anything = False
-        for msg in self.conversation.messages[1:]:
-            if msg.get("role") != "user":
-                continue
-            for seg in msg.get("_render_segments", []):
-                if seg["type"] == "input":
-                    text = seg["content"]
-                    if text and text.strip():
-                        if not printed_anything:
-                            print()
-                        print(f"{self.cli_prompt}{text}")
-                        print()
-                        printed_anything = True
-                elif seg["type"] == "stdout":
-                    if self._render_replay_stdout(seg["content"]):
-                        print()
-                        printed_anything = True
-
-    def _render_replay_stdout(self, stdout: str) -> bool:
-        if not stdout or not stdout.strip():
-            return False
-        display = self._strip_repl_echo_from_replay(stdout)
-        if hasattr(self, "process_repl_output"):
-            display = self.process_repl_output(display)
-        if hasattr(self, "_truncate_for_display"):
-            display = self._truncate_for_display(display)
-        if not display.strip():
-            return False
-        print(display.rstrip("\n"))
-        return True
-
-    def _strip_repl_echo_from_replay(self, output: str) -> str:
-        lines = output.splitlines()
-        if not lines:
-            return output
-
-        filtered = [line for line in lines if not (line.startswith(">>> ") or line.startswith("... "))]
-        if not filtered:
-            return ""
-
-        result = "\n".join(filtered)
-        if output.endswith("\n"):
-            result += "\n"
-        return result
 
     def _synthetic_exchange(self):
         self._ensure_setup()
@@ -1107,10 +1180,10 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
+        self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
 
         if files := gather_auto_attach_files():
-            print(f"Loading {', '.join(files)}")
+            self._display_text(f"Loading {', '.join(files)}", kind="status", create_session=False)
             for filename in files:
                 self.attach_file_ref(filename, filename)
 
@@ -1142,6 +1215,10 @@ If you don't know how to proceed:
                 if not user_input.strip():
                     continue
 
+                self._ensure_live_session()
+                self._flush_pending_session_events()
+                self._display_input_block(user_input)
+
                 if user_input.strip() == "/repl":
                     try:
                         self.user_repl_session(history)
@@ -1160,10 +1237,12 @@ If you don't know how to proceed:
                         if target_seq is not None:
                             self._append_session_event("rewind", {"target_seq": target_seq})
                         self._quiet_replay_session()
-                        print(f"{DIM}Conversation rewound.{RESET}")
+                        self._display_text(f"{DIM}Conversation rewound.{RESET}", kind="status")
                         last_response = _find_last_assistant_text(self.conversation.messages)
                         if last_response:
-                            print(self.format_response(last_response))
+                            formatted = self.format_response(last_response)
+                            print(formatted)
+                            self._record_display_event("assistant", strip_ansi(formatted) + "\n")
                         last = self.conversation.messages[-1] if self.conversation.messages else None
                         self._last_was_repl_output = bool(last and last.get('role') == 'user')
                         preload_input = rewind_result.get("preload_input", "") or ""
@@ -1182,6 +1261,24 @@ If you don't know how to proceed:
                             synth = False
                     continue
 
+                if user_input.strip().startswith("/skills"):
+                    parts = user_input.strip().split(None, 1)
+                    if len(parts) == 1:
+                        from agentlib.cli.skills import select_skills_ui
+                        skill_items = self.list_skills()
+                        result = select_skills_ui(altmode, skill_items)
+                        if result is not None:
+                            changes = self.apply_skill_selection(result)
+                            if changes:
+                                for line in changes:
+                                    self._display_text(f"{DIM}{line}{RESET}", kind="status")
+                            else:
+                                self._display_text(f"{DIM}No skill changes{RESET}", kind="status")
+                    else:
+                        ok, msg = self.attach_skill(parts[1].strip())
+                        self._display_text(f"{DIM}{msg}{RESET}", kind="status")
+                    continue
+
                 if user_input.strip().startswith("/attach "):
                     filename = user_input.strip()[8:].strip()
                     if filename:
@@ -1189,27 +1286,27 @@ If you don't know how to proceed:
                             content = Path(filename).expanduser().read_text()
                             self.attach_file_ref(filename, filename)
                             size_kb = len(content) / 1000
-                            print(f"{DIM}Attached {filename} ({size_kb:.1f}KB){RESET}")
+                            self._display_text(f"{DIM}Attached {filename} ({size_kb:.1f}KB){RESET}", kind="status")
                         except Exception as e:
-                            print(f"{DIM}Error attaching {filename}: {e}{RESET}")
+                            self._display_text(f"{DIM}Error attaching {filename}: {e}{RESET}", kind="status")
                     continue
 
                 if user_input.strip().startswith("/detach "):
                     filename = user_input.strip()[8:].strip()
                     if filename:
                         self.detach_file_ref(filename)
-                        print(f"{DIM}Detached {filename}{RESET}")
+                        self._display_text(f"{DIM}Detached {filename}{RESET}", kind="status")
                     continue
 
                 if user_input.strip() == "/attachments":
                     attachments = self.list_attachments()
                     if not attachments:
-                        print(f"{DIM}No attachments{RESET}")
+                        self._display_text(f"{DIM}No attachments{RESET}", kind="status")
                     else:
-                        print(f"{DIM}Current attachments:{RESET}")
+                        self._display_text(f"{DIM}Current attachments:{RESET}", kind="status")
                         for name, content in attachments.items():
                             size_kb = len(content) / 1000
-                            print(f"{DIM}  {name} ({size_kb:.1f}KB){RESET}")
+                            self._display_text(f"{DIM}  {name} ({size_kb:.1f}KB){RESET}", kind="status")
                     continue
 
                 if user_input.strip().startswith("/model"):
@@ -1219,9 +1316,9 @@ If you don't know how to proceed:
                         from agentlib.llm_registry import resolve_model_name
                         full_name = resolve_model_name(self.model)
                         if full_name != self.model:
-                            print(f"{DIM}Current model: {self.model} → {full_name}{RESET}")
+                            self._display_text(f"{DIM}Current model: {self.model} → {full_name}{RESET}", kind="status")
                         else:
-                            print(f"{DIM}Current model: {self.model}{RESET}")
+                            self._display_text(f"{DIM}Current model: {self.model}{RESET}", kind="status")
                     else:
                         # Set new model
                         new_model = parts[1].strip()
@@ -1237,15 +1334,15 @@ If you don't know how to proceed:
                             # Update conversation's client reference (preserves message history)
                             if hasattr(self, '_conversation'):
                                 self._conversation.llm_client = self.llm_client
-                            print(f"{DIM}Model changed: {old_model} → {new_model}{RESET}")
+                            self._display_text(f"{DIM}Model changed: {old_model} → {new_model}{RESET}", kind="status")
                         except ModelNotFoundError as e:
-                            print(f"{DIM}{str(e)}{RESET}")
+                            self._display_text(f"{DIM}{str(e)}{RESET}", kind="status")
                     continue
 
                 if user_input.strip() == "/tokens":
                     tracker = self.llm_client.usage_tracker
                     if not tracker.history:
-                        print(f"{DIM}No API calls yet{RESET}")
+                        self._display_text(f"{DIM}No API calls yet{RESET}", kind="status")
                     else:
                         n = tracker._normalize(*tracker.history[-1])
                         total = n['prompt_tokens'] + n['cached_tokens'] + n['completion_tokens'] + n['reasoning_tokens']
@@ -1255,7 +1352,7 @@ If you don't know how to proceed:
                             f"{n['reasoning_tokens']:,} reasoning" if n['reasoning_tokens'] else None,
                             f"{n['completion_tokens']:,} out" if n['completion_tokens'] else None,
                         ] if p]
-                        print(f"{DIM}[Last request: {total:,} tokens ({', '.join(parts)})]{RESET}")
+                        self._display_text(f"{DIM}[Last request: {total:,} tokens ({', '.join(parts)})]{RESET}", kind="status")
                     continue
 
                 if user_input.strip().startswith("/subagents"):
@@ -1279,7 +1376,7 @@ If you don't know how to proceed:
                         # Only show docstring on first load; subsequent calls just update model
                         already_loaded = getattr(self, '_subagents_loaded', False)
                         if already_loaded:
-                            print(f"{DIM}Subagent default model changed to: {subagent_model}{RESET}")
+                            self._display_text(f"{DIM}Subagent default model changed to: {subagent_model}{RESET}", kind="status")
                         else:
                             self._subagents_loaded = True
                             # Build docstring, optionally hiding model config section
@@ -1290,7 +1387,7 @@ If you don't know how to proceed:
                                 import re
                                 docstring = re.sub(r'## Model Configuration\n.*?(?=\n## |\n"""|\Z)', '', docstring, flags=re.DOTALL)
                             self.usermsg(f">>> # Subagent module loaded (model: {subagent_model})\n{docstring}")
-                            print(f"{DIM}Subagent module loaded into REPL (model: {subagent_model}){RESET}")
+                            self._display_text(f"{DIM}Subagent module loaded into REPL (model: {subagent_model}){RESET}", kind="status")
                     except Exception as e:
                         print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
                     continue
@@ -1310,6 +1407,7 @@ If you don't know how to proceed:
                 self._turn_output_started = False
                 self._header_pending = False
                 self._in_emit_echo = False
+                self._reset_display_capture()
                 print()  # Blank line after user input
                 print(f"{DIM}{thinking} (turn 1){RESET}\r", end="", flush=True)
 
@@ -1329,12 +1427,15 @@ If you don't know how to proceed:
                 # Close Python block if we had output
                 if getattr(self, '_repl_printed_header', False):
                     print("\x1b[34m"+("─"*34)+"\x1b[0m")
+                    self._capture_display_line("──────────────────────────────────")
+                self._flush_display_capture()
 
                 # Display response
                 response_str = str(response) if response is not None else ""
                 formatted = self.format_response(response_str)
                 if formatted:
                     print(formatted)
+                    self._record_display_event("assistant", strip_ansi(formatted) + "\n")
         finally:
             altmode.uninstall()
             # Save conversation on crash
@@ -1440,8 +1541,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                 var = f"_v{self._preview_counter}"
                 call_source = '\n'.join(orig).strip()
                 all_rewrites.append((start, end, [
-                    f"{indent}{var} = {call_source}",
-                    f"{indent}preview({var})",
+                    f"{indent}preview({var} := {call_source})",
                 ]))
             elif (isinstance(func, ast.Name) and func.id == 'print'
                   and len(call.args) == 1 and not call.keywords):
@@ -1453,8 +1553,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                         self.__class__._preview_counter += 1
                         var = f"_v{self._preview_counter}"
                         all_rewrites.append((start, end, [
-                            f"{indent}{var} = {inner_source}",
-                            f"{indent}preview({var})",
+                            f"{indent}preview({var} := {inner_source})",
                         ]))
 
         # Pattern 2: var = target(...) immediately followed by print(var)

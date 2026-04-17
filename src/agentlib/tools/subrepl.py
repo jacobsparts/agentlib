@@ -79,6 +79,44 @@ def _redact_long_strings(source: str, max_len: int = 200, max_newlines: int = 3)
     return result
 
 
+def _truncate_long_strings_for_echo(source: str, max_len: int = 120, max_newlines: int = 3) -> str:
+    """Replace long string literals with a truncated preview for stdout echo.
+
+    Only rewrites plain string literals, not f-strings or variables.
+    Multiline strings are collapsed to a single line for display.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+
+    rewrites = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and
+            isinstance(node.value, str) and
+            hasattr(node, 'end_lineno')):
+            value = node.value
+            if len(value) > max_len or value.count('\n') > max_newlines:
+                rewrites.append(node)
+
+    if not rewrites:
+        return source
+
+    result = source
+    for node in rewrites:
+        segment = ast.get_source_segment(source, node)
+        if not segment:
+            continue
+        preview = node.value.replace('\n', ' ').replace('\r', ' ')
+        preview = ' '.join(preview.split())
+        if len(preview) > max_len:
+            preview = preview[:max_len - 3] + "..."
+        replacement = repr(preview)
+        result = result.replace(segment, replacement, 1)
+
+    return result
+
+
 def _with_still_running(output: str) -> str:
     """Append STILL_RUNNING marker, ensuring proper newline."""
     if output and not output.endswith('\n'):
@@ -142,6 +180,18 @@ def _format_echo(stmt: str, redact_long_strings: bool = True) -> str:
     if redact_long_strings:
         stmt = _redact_long_strings(stmt)
 
+    lines = stmt.split('\n')
+    while len(lines) > 1 and not lines[-1].strip():
+        lines.pop()
+    result = [f">>> {lines[0]}"]
+    for line in lines[1:]:
+        result.append(f"... {line}")
+    return '\n'.join(result) + '\n'
+
+
+def _format_echo_stdout(stmt: str) -> str:
+    """Format a statement for user-facing stdout with truncated string previews."""
+    stmt = _truncate_long_strings_for_echo(stmt)
     lines = stmt.split('\n')
     while len(lines) > 1 and not lines[-1].strip():
         lines.pop()
