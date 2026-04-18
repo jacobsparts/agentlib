@@ -189,6 +189,14 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         rendered.extend(lines[1:])
         self._record_display_event("input", "\n".join(rendered) + "\n\n")
 
+    def _replay_display_output(self):
+        if not self._session_id:
+            return
+        display_text = replay_display_text(self._session_id, self._session_store)
+        sys.stdout.write(display_text)
+        if display_text and not display_text.endswith("\n"):
+            print()
+
     def _reset_display_capture(self):
         self._display_capture = []
 
@@ -814,16 +822,21 @@ If you don't know how to proceed:
                         text = value.rstrip('\n')
                 except (ValueError, SyntaxError):
                     pass
-            # Truncate to 3 lines or 240 chars
+            # Truncate to 3 lines or 240 chars, unless this already looks like
+            # preview() output with its own summary header.
             lines = text.split('\n')
             total_lines = len(lines)
             truncated_at_lines = False
             truncated_at_chars = False
-            if len(lines) > 3:
+            disable_truncation = (
+                total_lines > 0
+                and bool(__import__('re').match(r'^\(\d+ lines, \d+ chars\)$', lines[0]))
+            )
+            if not disable_truncation and len(lines) > 3:
                 lines = lines[:3]
                 truncated_at_lines = True
             display = '\n'.join(lines)
-            if len(display) > 240:
+            if not disable_truncation and len(display) > 240:
                 display = display[:240]
                 truncated_at_chars = True
             is_truncated = truncated_at_lines or truncated_at_chars
@@ -1087,10 +1100,7 @@ If you don't know how to proceed:
             for msg in self.conversation.messages:
                 for name, path in (msg.get('_attachment_refs') or {}).items():
                     self._explicit_attachment_refs[name] = path
-            display_text = replay_display_text(session_id, self._session_store)
-            sys.stdout.write(display_text)
-            if display_text and not display_text.endswith("\n"):
-                print()
+            self._replay_display_output()
             self.usermsg(">>> system_reset()\nREPL session has been reset\n")
             if missing:
                 lines = ["[Resume warning: attachment file missing and detached]"]
@@ -1227,7 +1237,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip() == "/rewind":
-                    from agentlib.cli.rewind import rewind_ui, _find_last_assistant_text
+                    from agentlib.cli.rewind import rewind_ui
                     self._ensure_live_session()
                     self._flush_pending_session_events()
                     events = self._session_store.get_events(self._session_id) if self._session_id else []
@@ -1237,12 +1247,8 @@ If you don't know how to proceed:
                         if target_seq is not None:
                             self._append_session_event("rewind", {"target_seq": target_seq})
                         self._quiet_replay_session()
+                        self._replay_display_output()
                         self._display_text(f"{DIM}Conversation rewound.{RESET}", kind="status")
-                        last_response = _find_last_assistant_text(self.conversation.messages)
-                        if last_response:
-                            formatted = self.format_response(last_response)
-                            print(formatted)
-                            self._record_display_event("assistant", strip_ansi(formatted) + "\n")
                         last = self.conversation.messages[-1] if self.conversation.messages else None
                         self._last_was_repl_output = bool(last and last.get('role') == 'user')
                         preload_input = rewind_result.get("preload_input", "") or ""

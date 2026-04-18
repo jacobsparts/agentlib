@@ -1,6 +1,7 @@
 """Tests for agentlib.preprocess — LLM code preprocessing fixes."""
 
 from agentlib.preprocess import (
+    _extract_native_function_call_code,
     _strip_markdown_fences,
     _fix_js_comments,
     _fix_triple_quote_conflict,
@@ -19,6 +20,72 @@ def compiles(code):
 
 # === _strip_markdown_fences ===
 
+class TestExtractNativeFunctionCallCode:
+    def test_valid_code_untouched(self):
+        code = "decide(x=1)"
+        assert _extract_native_function_call_code(code) == code
+
+    def test_literal_function_call_xml(self):
+        code = (
+            '<function_calls>\n'
+            '<invoke name="repl">\n'
+            '<parameter name="code">decide(x=1)</parameter>\n'
+            '</invoke>\n'
+            '</function_calls>'
+        )
+        assert _extract_native_function_call_code(code) == 'decide(x=1)'
+
+    def test_narration_before_xml(self):
+        code = (
+            'I need to call decide() now.\n\n'
+            '<function_calls>\n'
+            '<invoke name="repl">\n'
+            '<parameter name="code">decide(x=1)</parameter>\n'
+            '</invoke>\n'
+            '</function_calls>'
+        )
+        assert _extract_native_function_call_code(code) == (
+            'I need to call decide() now.\n\n'
+            'decide(x=1)'
+        )
+
+    def test_multiline_code_body_preserved(self):
+        code = (
+            '<function_calls>\n'
+            '<invoke name="python">\n'
+            '<parameter name="code">decide(\n'
+            '    x=1,\n'
+            '    y=2,\n'
+            ')</parameter>\n'
+            '</invoke>\n'
+            '</function_calls>'
+        )
+        r = _extract_native_function_call_code(code)
+        assert 'decide(' in r
+        assert 'x=1' in r
+        assert compiles(r)
+
+    def test_single_quotes_supported(self):
+        code = (
+            "<function_calls><invoke name='repl'><parameter name='code'>decide(x=1)</parameter></invoke></function_calls>"
+        )
+        assert _extract_native_function_call_code(code) == 'decide(x=1)'
+
+    def test_multiple_xml_blocks_are_replaced_inline(self):
+        code = (
+            'before\n'
+            '<function_calls><invoke name="repl"><parameter name="code">x = 1</parameter></invoke></function_calls>\n'
+            'middle\n'
+            '<function_calls><invoke name="repl"><parameter name="code">print(x)</parameter></invoke></function_calls>\n'
+            'after'
+        )
+        assert _extract_native_function_call_code(code) == (
+            'before\n'
+            'x = 1\n'
+            'middle\n'
+            'print(x)\n'
+            'after'
+        )
 class TestStripMarkdownFences:
     def test_valid_code_untouched(self):
         code = "x = 1\nprint(x)"
@@ -269,6 +336,34 @@ class TestPreprocess:
     def test_markdown_fixed(self):
         code = '```python\nx = 1\n```'
         assert preprocess(code) == 'x = 1'
+
+    def test_native_function_call_xml_fixed(self):
+        code = (
+            '<function_calls>\n'
+            '<invoke name="repl">\n'
+            '<parameter name="code">decide(\n'
+            '    baselines={1: {"standard": 9.99}},\n'
+            '    reasoning="ok",\n'
+            '    tier_strategy="HOLD",\n'
+            ')</parameter>\n'
+            '</invoke>\n'
+            '</function_calls>'
+        )
+        r = preprocess(code)
+        assert '<function_calls' not in r
+        assert 'decide(' in r
+        assert compiles(r)
+
+    def test_native_function_call_with_narration_falls_back_to_original_if_still_invalid(self):
+        code = (
+            'I need to call decide() using the tool.\n\n'
+            '<function_calls>\n'
+            '<invoke name="repl">\n'
+            '<parameter name="code">decide(x=1)</parameter>\n'
+            '</invoke>\n'
+            '</function_calls>'
+        )
+        assert preprocess(code) == code
 
     def test_triple_quote_fixed(self):
         code = 'print("""\n    """inner"""\n""")'

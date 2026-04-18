@@ -24,6 +24,38 @@ def _compiles(code: str) -> bool:
 # check lives in preprocess().
 # ---------------------------------------------------------------------------
 
+def _extract_native_function_call_code(code: str) -> str:
+    """Convert native function-call XML wrappers into inline Python code.
+
+    Targets malformed outputs like::
+
+        I need to call the tool now.
+        <function_calls>
+        <invoke name="repl">
+        <parameter name="code">decide(x=1)</parameter>
+        </invoke>
+        </function_calls>
+
+    Replaces each matching XML block with the contents of its
+    ``<parameter name="code">...</parameter>`` body, preserving surrounding
+    text so later preprocessors can operate on it.  Returns the original
+    string unchanged when no matching block is found.
+    """
+    if '<function_calls' not in code or '<parameter' not in code:
+        return code
+
+    pattern = re.compile(
+        r"""<function_calls\b[^>]*>.*?<invoke\b[^>]*>.*?
+        <parameter\b[^>]*\bname=(["'])code\1[^>]*>(.*?)</parameter>.*?
+        </invoke>.*?</function_calls>""",
+        flags=re.DOTALL | re.IGNORECASE | re.VERBOSE,
+    )
+
+    if not pattern.search(code):
+        return code
+
+    return pattern.sub(lambda m: m.group(2).strip(), code)
+
 def _strip_markdown_fences(code: str) -> str:
     """Extract Python from markdown code blocks, converting prose to comments.
 
@@ -183,6 +215,7 @@ def preprocess(code: str) -> str:
         return code
 
     fixed = code
+    fixed = _extract_native_function_call_code(fixed)
     fixed = _strip_markdown_fences(fixed)
     fixed = _fix_js_comments(fixed)
     fixed = _fix_triple_quote_conflict(fixed)
