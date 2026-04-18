@@ -36,7 +36,6 @@ class RawMode:
     
     def __exit__(self, type, value, traceback):
         sys.stdout.write('\x1b[?2004l')  # Disable bracketed paste
-        sys.stdout.write('\x1b[?25h')  # Ensure cursor is visible on exit
         sys.stdout.flush()
         if self.original_attrs is not None:
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self.original_attrs)

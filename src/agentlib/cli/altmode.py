@@ -68,9 +68,6 @@ class AltMode:
         if self._current_line:
             self._buffer.append(''.join(self._current_line))
             self._current_line = []
-        if self._original_stdout:
-            self._original_stdout.write('\x1b[?25h')
-            self._original_stdout.flush()
         sys.stdout = self._original_stdout
         self._original_stdout = None
         self._installed = False

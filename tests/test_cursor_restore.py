@@ -13,15 +13,6 @@ class DummyStdout(io.StringIO):
         return "utf-8"
 
 
-def test_altmode_uninstall_restores_cursor_visible(monkeypatch):
-    original = DummyStdout()
-    monkeypatch.setattr(sys, "stdout", original)
-    alt = AltMode()
-    alt.install()
-    alt.uninstall()
-    assert "\x1b[?25h" in original.getvalue()
-
-
 def test_session_exit_restores_cursor_visible(monkeypatch):
     original = DummyStdout()
     monkeypatch.setattr(sys, "stdout", original)
