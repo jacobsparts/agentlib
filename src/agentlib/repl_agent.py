@@ -878,7 +878,18 @@ class REPLMixin:
 
         emit_line = "\nemit(value, release=False) - Emit output. release=True yields control." if self.advertise_emit else ""
 
-        return f"""You are in a Python REPL. Respond with unescaped Python.
+        return f"""You are in a Python REPL. Your response body is executed directly as Python source code.
+
+Respond with raw Python only.
+- Do not wrap your code in markdown fences
+- Do not wrap it in <function_calls>, XML, JSON, or any tool-call protocol
+- Do not add prose before or after the code
+- Do not describe what you are about to do
+
+Important:
+- There is no separate tool-calling layer for your response
+- The text of your response itself is what gets executed
+- If you need to communicate text, do it from Python using print(...) or an appropriate provided Python function
 
 {base_prompt}
 
@@ -959,9 +970,17 @@ Call help(function_name) for parameter descriptions.
                     # Pure syntax error - retry with temporary error context
                     logger.debug(f"SyntaxError, retry #{syntax_retry + 1}")
                     hint = (
-                        "Your response was not valid Python and was rejected. "
-                        "Try again using only Python code. "
-                        "Use an appropriate function to communicate text."
+                        "Your previous response was rejected because the response body itself must be valid Python source code.\n\n"
+                        "Write raw Python only.\n"
+                        "- Do not wrap it in <function_calls>, XML, JSON, markdown fences, or any tool-call protocol\n"
+                        "- Do not describe what you are going to do\n"
+                        "- Do not return prose before or after the code\n\n"
+                        "Important:\n"
+                        "- Your response is executed directly as Python\n"
+                        "- It is not submitted through a separate tool-calling layer\n"
+                        "- So respond with the Python statements themselves, exactly as they should be executed\n\n"
+                        "If you need to communicate text, do it from Python, for example with print(...) or the appropriate provided Python function.\n\n"
+                        "Return only valid Python code."
                     )
                     messages = self.conversation._messages() + [
                         {"role": "assistant", "content": content},

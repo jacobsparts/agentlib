@@ -40,11 +40,14 @@ def build_exchanges_from_events(events: list[dict]) -> list[Exchange]:
     """
     exchanges: list[tuple[int, Exchange]] = []
     live_msg_seqs: set[int] = set()
+    last_input_display_seq: int | None = None
     for event in events:
         seq = event['seq']
         etype = event['event_type']
         payload = event['payload']
-        if etype == 'message_added':
+        if etype == 'display' and payload.get('kind') == 'input':
+            last_input_display_seq = seq
+        elif etype == 'message_added':
             msg = payload.get('message', {})
             live_msg_seqs.add(seq)
             if msg.get('role') == 'user':
@@ -53,13 +56,18 @@ def build_exchanges_from_events(events: list[dict]) -> list[Exchange]:
                         continue
                     input_text = seg.get('content', '')
                     asst_text = _find_assistant_after(events, seq)
+                    if last_input_display_seq is not None:
+                        target = last_input_display_seq - 1
+                    else:
+                        target = seq - 1
                     exchanges.append((seq, Exchange(
                         user_preview=_preview(input_text),
                         assistant_preview=_preview(asst_text) if asst_text else '',
                         input_text=input_text,
                         event_seq=seq,
-                        target_seq=seq - 1,
+                        target_seq=target,
                     )))
+                    last_input_display_seq = None
         elif etype == 'rewind':
             target_seq = payload.get('target_seq', 0)
             live_msg_seqs = {s for s in live_msg_seqs if s <= target_seq}

@@ -56,6 +56,64 @@ def _extract_native_function_call_code(code: str) -> str:
 
     return pattern.sub(lambda m: m.group(2).strip(), code)
 
+
+def _comment_leading_non_code_prefix(code: str) -> str:
+    """Comment a leading non-code prefix before the first obvious Python line.
+
+    This is a single structural pass that handles both:
+    - ordinary prose prefixes, e.g. ``Two fixes: ...``
+    - markdown-ish prefixes, e.g. headings, bullets, numbered items, table rows
+
+    It comments the contiguous non-blank prefix before the first obvious code line.
+    If no obvious code line exists, the input is returned unchanged.
+    """
+    lines = code.split('\n')
+
+    code_line_re = re.compile(
+        r'^\s*('
+        r'(?:from|import|def|class|if|elif|else|for|while|try|except|finally|with|return|raise|assert|pass|break|continue|yield|del|global|nonlocal)\b'
+        r'|(?:@\w[\w\.]*\s*(?:\([^\n]*\))?)'
+        r'|[A-Za-z_][A-Za-z0-9_]*\s*\('
+        r'|[A-Za-z_][A-Za-z0-9_]*\s*='
+        r'|[\]\)\}]\s*(?:,)?\s*$'
+        r')'
+    )
+    markdownish_re = re.compile(
+        r'^\s*('
+        r'#{1,6}\s+'
+        r'|[-*+]\s+'
+        r'|\d+[.)]\s+'
+        r'|\|.*\|\s*$'
+        r'|\*\*[^*\n]+\*\*:?\s*$'
+        r'|__[^_\n]+__:?\s*$'
+        r')'
+    )
+
+    first_code_idx = None
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if code_line_re.match(line):
+            first_code_idx = i
+            break
+
+    if first_code_idx is None or first_code_idx == 0:
+        return code
+
+    prefix = lines[:first_code_idx]
+    if not any(line.strip() for line in prefix):
+        return code
+
+    # If the prefix contains markdown-ish structure, definitely comment it.
+    # Otherwise still comment it as plain leading prose before code.
+    if any(markdownish_re.match(line) for line in prefix if line.strip()) or any(
+        not code_line_re.match(line) for line in prefix if line.strip()
+    ):
+        fixed_prefix = [f'# {line}' if line.strip() else '' for line in prefix]
+        return '\n'.join(fixed_prefix + lines[first_code_idx:])
+
+    return code
+
 def _strip_markdown_fences(code: str) -> str:
     """Extract Python from markdown code blocks, converting prose to comments.
 
@@ -131,6 +189,7 @@ def _comment_out_non_python(code: str) -> str:
        Three unary-minus operators with no operand is never a valid Python
        statement.  (Inside a parenthesised expression ``---`` *can* be valid,
        but the parser would not report a SyntaxError on that line in that case.)
+
     """
     lines = code.split('\n')
 
@@ -219,6 +278,7 @@ def preprocess(code: str) -> str:
     fixed = _strip_markdown_fences(fixed)
     fixed = _fix_js_comments(fixed)
     fixed = _fix_triple_quote_conflict(fixed)
+    fixed = _comment_leading_non_code_prefix(fixed)
     fixed = _comment_out_non_python(fixed)
 
     if fixed != code and _compiles(fixed):

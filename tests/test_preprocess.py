@@ -1,6 +1,7 @@
 """Tests for agentlib.preprocess — LLM code preprocessing fixes."""
 
 from agentlib.preprocess import (
+    _comment_leading_non_code_prefix,
     _extract_native_function_call_code,
     _strip_markdown_fences,
     _fix_js_comments,
@@ -17,8 +18,6 @@ def compiles(code):
     except SyntaxError:
         return False
 
-
-# === _strip_markdown_fences ===
 
 class TestExtractNativeFunctionCallCode:
     def test_valid_code_untouched(self):
@@ -86,6 +85,67 @@ class TestExtractNativeFunctionCallCode:
             'print(x)\n'
             'after'
         )
+
+
+class TestCommentLeadingNonCodePrefix:
+    def test_valid_code_untouched(self):
+        code = "decide(x=1)"
+        assert _comment_leading_non_code_prefix(code) == code
+
+    def test_comments_single_leading_prose_line(self):
+        code = "Two fixes: use positional args only.\n\ndecide(x=1)"
+        assert _comment_leading_non_code_prefix(code) == (
+            "# Two fixes: use positional args only.\n\ndecide(x=1)"
+        )
+
+    def test_comments_multiple_leading_prose_lines(self):
+        code = (
+            "I need to call the tool.\n"
+            "Let me do that now.\n\n"
+            "analyze(x=1)\n"
+            "decide(x=1)"
+        )
+        assert _comment_leading_non_code_prefix(code) == (
+            "# I need to call the tool.\n"
+            "# Let me do that now.\n\n"
+            "analyze(x=1)\n"
+            "decide(x=1)"
+        )
+
+    def test_does_not_accept_pure_prose(self):
+        code = "I need to call this through the actual REPL tool, not output it as text."
+        assert _comment_leading_non_code_prefix(code) == code
+
+    def test_does_not_parse_to_decide_where_code_starts(self):
+        code = (
+            "Two fixes: use positional args only.\n\n"
+            "decide(x=1)"
+        )
+        assert _comment_leading_non_code_prefix(code) == (
+            "# Two fixes: use positional args only.\n\n"
+            "decide(x=1)"
+        )
+
+    def test_comments_leading_markdown_heading_before_code(self):
+        code = "## Analysis\n\ndecide(x=1)"
+        assert _comment_leading_non_code_prefix(code) == (
+            "# ## Analysis\n\ndecide(x=1)"
+        )
+
+    def test_comments_leading_table_before_code(self):
+        code = "| Col | Value |\n|---|---|\n\nanalyze(x=1)"
+        r = _comment_leading_non_code_prefix(code)
+        assert "# | Col | Value |" in r
+        assert "# |---|---|" in r
+        assert compiles(r)
+
+    def test_comments_leading_bold_heading_before_code(self):
+        code = "**Plan:**\n\ndecide(x=1)"
+        r = _comment_leading_non_code_prefix(code)
+        assert r.startswith("# **Plan:**")
+        assert compiles(r)
+
+
 class TestStripMarkdownFences:
     def test_valid_code_untouched(self):
         code = "x = 1\nprint(x)"
@@ -363,6 +423,40 @@ class TestPreprocess:
             '</invoke>\n'
             '</function_calls>'
         )
+        r = preprocess(code)
+        assert '# I need to call decide() using the tool.' in r
+        assert 'decide(x=1)' in r
+        assert compiles(r)
+
+    def test_markdown_prefix_then_valid_code_fixed(self):
+        code = (
+            "## Summary\n"
+            "- first note\n"
+            "| col | value |\n"
+            "|---|---|\n\n"
+            "decide(x=1)\n"
+        )
+        r = preprocess(code)
+        assert "# ## Summary" in r
+        assert "# - first note" in r
+        assert "# | col | value |" in r
+        assert "decide(x=1)" in r
+        assert compiles(r)
+
+    def test_prose_preamble_then_valid_code_fixed(self):
+        code = (
+            'Two fixes: eBay role must be PRIMARY_MOVER, and decide() takes positional args only — trying dict as positional argument.\n\n'
+            'analyze(x=1)\n'
+            'decide(x=1)'
+        )
+        r = preprocess(code)
+        assert r.startswith('# Two fixes:')
+        assert 'analyze(x=1)' in r
+        assert 'decide(x=1)' in r
+        assert compiles(r)
+
+    def test_pure_prose_not_accepted_as_comment_only_program(self):
+        code = 'I need to call this through the actual REPL tool, not output it as text. Let me do that now.'
         assert preprocess(code) == code
 
     def test_triple_quote_fixed(self):
