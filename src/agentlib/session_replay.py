@@ -55,7 +55,6 @@ def _coalesce_user_messages(messages: list[dict]) -> list[dict]:
             out.append(msg)
     return out
 
-
 def replay_session_into_agent(agent, session_id: str, store):
     events = store.get_events(session_id)
     snapshots = {}
@@ -126,22 +125,47 @@ def replay_display_text(session_id: str, store) -> str:
     events = store.get_events(session_id)
     snapshots = {}
     chunks: list[str] = []
+    released_to_user = False
+    pending_released_reply = False
 
     def snapshot(seq):
-        snapshots[seq] = copy.deepcopy(chunks)
+        snapshots[seq] = (copy.deepcopy(chunks), released_to_user, pending_released_reply)
 
     snapshot(0)
     for event in events:
         seq = event["seq"]
         payload = event["payload"]
         event_type = event["event_type"]
-        if event_type == "display":
+        if event_type == "message_added":
+            msg = payload.get("message", {})
+            if (
+                msg.get("role") == "assistant"
+                and "emit(" in (msg.get("content") or "")
+                and "release=True" in (msg.get("content") or "")
+            ):
+                released_to_user = True
+                pending_released_reply = True
+        elif event_type == "display":
+            kind = payload.get("kind")
+            if released_to_user and kind == "assistant" and pending_released_reply:
+                text = payload.get("text", "")
+                if text:
+                    chunks.append(text)
+                pending_released_reply = False
+                snapshot(seq)
+                continue
+            if released_to_user and kind != "input":
+                snapshot(seq)
+                continue
             text = payload.get("text", "")
             if text:
                 chunks.append(text)
+            if kind == "input":
+                released_to_user = False
+                pending_released_reply = False
         elif event_type == "rewind":
             target_seq = payload["target_seq"]
-            chunks = copy.deepcopy(snapshots.get(target_seq, snapshots[0]))
+            chunks, released_to_user, pending_released_reply = copy.deepcopy(snapshots.get(target_seq, snapshots[0]))
         snapshot(seq)
 
     return "".join(chunks)

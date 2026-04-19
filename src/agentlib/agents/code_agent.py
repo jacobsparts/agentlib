@@ -1441,7 +1441,6 @@ If you don't know how to proceed:
                 formatted = self.format_response(response_str)
                 if formatted:
                     print(formatted)
-                    self._record_display_event("assistant", strip_ansi(formatted) + "\n")
         finally:
             altmode.uninstall()
             # Save conversation on crash
