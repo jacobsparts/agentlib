@@ -128,6 +128,30 @@ def _recv_msg(sock: socket.socket, timeout: Optional[float] = None) -> Any:
     return pickle.loads(b''.join(chunks))
 
 
+def _wrap_subagent_task(prompt: str) -> str:
+    """Wrap a task with explicit REPL-completion instructions.
+
+    Subagents run a full REPL-style CodeAgent loop, not a one-shot chat
+    completion. Plain-English tasks are therefore easy for models to answer as
+    chat text instead of executable Python. This wrapper reiterates the
+    execution contract at task time and gives the model an explicit completion
+    target: `emit(..., release=True)`.
+    """
+    return f"""Complete the following task in the Python REPL environment.
+
+Task:
+{prompt}
+
+Requirements:
+- Your response must be raw Python code only.
+- Do not answer in plain English outside Python code.
+- When you have completed the task, call emit(result, release=True).
+- If the task only asks for a text answer, use emit(the_text, release=True).
+- Do not ask conversational follow-up questions unless you truly need clarification.
+- If clarification is required, use emit(your_question, release=True).
+"""
+
+
 # ---------------------------------------------------------------------------
 # Worker code (runs in subprocess)
 # ---------------------------------------------------------------------------
@@ -598,7 +622,7 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}), {repr(self.model)}, {s
         self._current_response = response
 
         _send_msg(self._conn, ("task", {
-            "prompt": prompt,
+            "prompt": _wrap_subagent_task(prompt),
             "max_turns": max_turns or self.max_turns
         }))
 
