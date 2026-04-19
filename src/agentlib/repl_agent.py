@@ -377,14 +377,20 @@ class ToolREPL(SubREPL):
         self._running = True
         self._cmd_queue.put(code)  # Plain string, worker uses seq_id=None
 
+        error_output = []
         while True:
             try:
                 msg_type, msg_data = self._output_queue.get(timeout=5.0)
                 if msg_type == "done":
                     # msg_data is (seq_id, had_error) - injection uses seq_id=None
+                    seq_id, had_error = msg_data
                     self._running = False
+                    if had_error:
+                        detail = "\n".join(error_output) if error_output else "(no output captured)"
+                        raise RuntimeError(f"Startup code failed in REPL subprocess:\n{detail}")
                     return
                 if msg_type == "output" and msg_data.strip():
+                    error_output.append(msg_data.rstrip())
                     logger.debug("[ToolREPL inject] %s", msg_data.rstrip())
             except Empty:
                 raise RuntimeError("Timeout injecting code into REPL")
