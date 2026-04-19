@@ -1,5 +1,7 @@
 """Tests for agentlib.preprocess — LLM code preprocessing fixes."""
 
+import ast
+
 from agentlib.preprocess import (
     _comment_leading_non_code_prefix,
     _extract_native_function_call_code,
@@ -7,6 +9,7 @@ from agentlib.preprocess import (
     _fix_js_comments,
     _fix_triple_quote_conflict,
     _comment_out_non_python,
+    _strip_read_wrappers,
     preprocess,
 )
 
@@ -17,6 +20,10 @@ def compiles(code):
         return True
     except SyntaxError:
         return False
+
+
+def same_ast(a, b):
+    return ast.dump(ast.parse(a), include_attributes=False) == ast.dump(ast.parse(b), include_attributes=False)
 
 
 class TestExtractNativeFunctionCallCode:
@@ -386,6 +393,38 @@ class TestFixTripleQuoteConflict:
         assert r == code or compiles(r)
 
 
+# === _strip_read_wrappers ===
+
+class TestStripReadWrappers:
+    def test_preview_read_becomes_plain_read(self):
+        code = 'preview(read("file.py"))'
+        r = _strip_read_wrappers(code)
+        assert same_ast(r, 'read("file.py")')
+
+    def test_namedexpr_preview_read_becomes_plain_read(self):
+        code = 'preview(somevar := read("file.py"))'
+        r = _strip_read_wrappers(code)
+        assert same_ast(r, 'read("file.py")')
+
+    def test_assign_read_becomes_plain_read(self):
+        code = 'content = read("file.py", offset=1, limit=80)'
+        r = _strip_read_wrappers(code)
+        assert same_ast(r, 'read("file.py", offset=1, limit=80)')
+
+    def test_annotated_assign_read_becomes_plain_read(self):
+        code = 'content: str = read("file.py")'
+        r = _strip_read_wrappers(code)
+        assert same_ast(r, 'read("file.py")')
+
+    def test_non_read_assignment_untouched(self):
+        code = 'content = bash("pwd")'
+        assert _strip_read_wrappers(code) == code
+
+    def test_preview_non_read_untouched(self):
+        code = 'preview(body)'
+        assert _strip_read_wrappers(code) == code
+
+
 # === preprocess (composed pipeline) ===
 
 class TestPreprocess:
@@ -569,4 +608,22 @@ class TestPreprocess:
         """
         code = '\u2713 All checks passed\n\n---\n\nanalyze(x=1)'
         r = preprocess(code)
+        assert compiles(r)
+
+    def test_preprocess_rewrites_preview_read_pattern(self):
+        code = 'preview(read("CLAUDE.md"))'
+        r = preprocess(code)
+        assert same_ast(r, 'read("CLAUDE.md")')
+        assert compiles(r)
+
+    def test_preprocess_rewrites_namedexpr_preview_read_pattern(self):
+        code = 'preview(somevar := read("CLAUDE.md", offset=1, limit=80))'
+        r = preprocess(code)
+        assert same_ast(r, 'read("CLAUDE.md", offset=1, limit=80)')
+        assert compiles(r)
+
+    def test_preprocess_rewrites_assigned_read_pattern(self):
+        code = 'content = read("CLAUDE.md")'
+        r = preprocess(code)
+        assert same_ast(r, 'read("CLAUDE.md")')
         assert compiles(r)

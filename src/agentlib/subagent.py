@@ -271,7 +271,6 @@ def worker_main(port, authkey, model, max_turns):
 
     # Create agent
     agent = SubagentWorker(sock, model, max_turns)
-
     # Main loop - receive tasks
     while True:
         try:

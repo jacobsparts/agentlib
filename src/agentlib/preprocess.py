@@ -6,6 +6,7 @@ They are composed in preprocess() with a single compile gate at the end: if the
 transformed code compiles, accept it; otherwise return the original.
 """
 
+import ast
 import re
 
 
@@ -260,6 +261,83 @@ def _fix_triple_quote_conflict(code: str) -> str:
     )
 
 
+def _strip_read_wrappers(code: str) -> str:
+    """Rewrite invalid read()-wrapper patterns to plain read(...).
+
+    read() is side-effectful and returns None, so patterns like::
+
+        preview(read("file.py"))
+        x = read("file.py")
+        preview(x := read("file.py"))
+
+    are never useful in this REPL. Transform them to simply::
+
+        read("file.py")
+
+    This only rewrites cases where read(...) is the direct value being wrapped
+    or assigned, which keeps the transform conservative.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    def _is_read_call(node):
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "read"
+        )
+
+    def _unwrap_to_read_call(node):
+        if _is_read_call(node):
+            return node
+        if isinstance(node, ast.NamedExpr) and _is_read_call(node.value):
+            return node.value
+        return None
+
+    changed = False
+
+    class ReadWrapperTransformer(ast.NodeTransformer):
+        def visit_Expr(self, node):
+            nonlocal changed
+            self.generic_visit(node)
+            if isinstance(node.value, ast.Call):
+                call = node.value
+                if isinstance(call.func, ast.Name) and call.func.id == "preview" and len(call.args) == 1:
+                    read_call = _unwrap_to_read_call(call.args[0])
+                    if read_call is not None:
+                        changed = True
+                        return ast.copy_location(ast.Expr(value=read_call), node)
+            return node
+
+        def visit_Assign(self, node):
+            nonlocal changed
+            self.generic_visit(node)
+            read_call = _unwrap_to_read_call(node.value)
+            if read_call is not None:
+                changed = True
+                return ast.copy_location(ast.Expr(value=read_call), node)
+            return node
+
+        def visit_AnnAssign(self, node):
+            nonlocal changed
+            self.generic_visit(node)
+            if node.value is None:
+                return node
+            read_call = _unwrap_to_read_call(node.value)
+            if read_call is not None:
+                changed = True
+                return ast.copy_location(ast.Expr(value=read_call), node)
+            return node
+
+    new_tree = ReadWrapperTransformer().visit(tree)
+    if not changed:
+        return code
+    ast.fix_missing_locations(new_tree)
+    return ast.unparse(new_tree)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -270,6 +348,12 @@ def preprocess(code: str) -> str:
     Transforms are composed so that, e.g., fence stripping and JS-comment fixing
     work together even though neither alone produces compilable code.
     """
+    # Some fixes are semantic cleanup for REPL conventions, not syntax repair.
+    # Apply those even when the input already compiles.
+    normalized = _strip_read_wrappers(code)
+    if normalized != code and _compiles(normalized):
+        return normalized
+
     if _compiles(code):
         return code
 
@@ -278,6 +362,7 @@ def preprocess(code: str) -> str:
     fixed = _strip_markdown_fences(fixed)
     fixed = _fix_js_comments(fixed)
     fixed = _fix_triple_quote_conflict(fixed)
+    fixed = _strip_read_wrappers(fixed)
     fixed = _comment_leading_non_code_prefix(fixed)
     fixed = _comment_out_non_python(fixed)
 
