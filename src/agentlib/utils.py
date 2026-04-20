@@ -85,10 +85,14 @@ class UsageTracker:
                     "completion_tokens": completion_tokens,
                 }
                 logger.warning(f"⚠️ Tokens don't add up: {usage} -> {tokens}")
-        input_cost = prompt_tokens * (model_config.get('input_cost',0) / 1000000.0)
-        cached_cost = cached_tokens * ((model_config.get('cached_cost') or input_cost) / 1000000.0)
-        output_cost = completion_tokens * (model_config.get('output_cost',0) / 1000000.0)
-        reasoning_cost = reasoning_tokens * ((model_config.get('reasoning_cost', model_config.get('output_cost')) or output_cost) / 1000000.0)
+        input_rate = model_config.get('input_cost') or 0
+        cached_rate = model_config.get('cached_cost') if model_config.get('cached_cost') is not None else input_rate
+        output_rate = model_config.get('output_cost') or 0
+        reasoning_rate = model_config.get('reasoning_cost') if model_config.get('reasoning_cost') is not None else output_rate
+        input_cost = prompt_tokens * (input_rate / 1000000.0)
+        cached_cost = cached_tokens * (cached_rate / 1000000.0)
+        output_cost = completion_tokens * (output_rate / 1000000.0)
+        reasoning_cost = reasoning_tokens * (reasoning_rate / 1000000.0)
         if cost_transform := model_config.get('cost_transform'):
             input_cost, cached_cost, output_cost, reasoning_cost = cost_transform(
                 prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
