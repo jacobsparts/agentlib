@@ -30,20 +30,48 @@ class UsageTracker:
         with self.lock:
             self.history.append((model_name, usage))
 
+    def _coalesce_paths(self, obj, paths):
+        for path in paths:
+            if isinstance(path, str):
+                path = (path,)
+            value = obj
+            for key in path:
+                if not isinstance(value, dict) or key not in value:
+                    value = None
+                    break
+                value = value[key]
+            if value is not None:
+                return value
+        return 0
+
     def _normalize(self, model_name, usage):
         model_config = get_model_config(model_name)
         if transform := model_config.get('token_transform'):
             usage = transform(usage)
         # Anthropic uses input_tokens/output_tokens; OpenAI uses prompt_tokens/completion_tokens
-        cached_tokens = (usage.get('prompt_tokens_details') or {}).get('cached_tokens', 0)
+        cached_tokens = self._coalesce_paths(usage, [
+            'native_tokens_cached',
+            ('prompt_tokens_details', 'cached_tokens'),
+        ])
         cached_tokens += usage.get('cache_read_input_tokens', 0) + usage.get('cache_creation_input_tokens', 0)
-        prompt_tokens = usage.get('prompt_tokens', 0) or usage.get('input_tokens', 0)
+        prompt_tokens = self._coalesce_paths(usage, [
+            'native_tokens_prompt',
+            'prompt_tokens',
+            'input_tokens',
+        ])
         prompt_tokens -= cached_tokens
         if prompt_tokens < 0:
             logger.warning(f"⚠️ Negative prompt token count: {usage}")
             return {'prompt_tokens': 0, 'cached_tokens': 0, 'completion_tokens': 0, 'reasoning_tokens': 0, 'cost': 0.0}
-        reasoning_tokens = (usage.get('completion_tokens_details') or {}).get('reasoning_tokens', 0)
-        completion_tokens = usage.get('completion_tokens', 0) or usage.get('output_tokens', 0)
+        reasoning_tokens = self._coalesce_paths(usage, [
+            'native_tokens_reasoning',
+            ('completion_tokens_details', 'reasoning_tokens'),
+        ])
+        completion_tokens = self._coalesce_paths(usage, [
+            'native_tokens_completion',
+            'completion_tokens',
+            'output_tokens',
+        ])
         if total := usage.get('total_tokens'):
             if reasoning_tokens > 0:
                 completion_tokens = total - (prompt_tokens + cached_tokens + reasoning_tokens)
