@@ -5,12 +5,14 @@ class TestImports(unittest.TestCase):
         """Test that all public modules can be imported"""
         from agentlib import BaseAgent
         from agentlib.client import LLMClient
+        from agentlib.client import _gemini_transform_schema
         from agentlib.conversation import Conversation
         from agentlib.utils import JSON_INDENT
         
         # Verify the imports worked
         self.assertIsNotNone(BaseAgent)
         self.assertIsNotNone(LLMClient)
+        self.assertIsNotNone(_gemini_transform_schema)
         self.assertIsNotNone(Conversation)
         # JSON_INDENT is intentionally None for compact output
 

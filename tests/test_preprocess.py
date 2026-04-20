@@ -1,6 +1,7 @@
 """Tests for agentlib.preprocess — LLM code preprocessing fixes."""
 
 import ast
+import json
 
 from agentlib.preprocess import (
     _comment_leading_non_code_prefix,
@@ -12,6 +13,8 @@ from agentlib.preprocess import (
     _strip_read_wrappers,
     preprocess,
 )
+from agentlib.client import _gemini_transform_schema
+from agentlib.client import _gemini_schema_has_unsupported_fieldtypes
 
 
 def compiles(code):
@@ -627,3 +630,146 @@ class TestPreprocess:
         r = preprocess(code)
         assert same_ast(r, 'read("CLAUDE.md")')
         assert compiles(r)
+
+
+class TestGeminiSchemaTransform:
+    def test_removes_additional_properties_from_dict_field(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "title": "Value",
+                }
+            },
+            "required": ["value"],
+            "title": "Tool",
+        }
+        out = _gemini_transform_schema(schema)
+        assert out == {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "object",
+                }
+            },
+            "required": ["value"],
+        }
+
+    def test_flattens_optional_anyof_null(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "title": "Query",
+                    "description": "Optional query",
+                }
+            },
+            "title": "Tool",
+        }
+        out = _gemini_transform_schema(schema)
+        assert out == {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional query",
+                }
+            },
+        }
+
+    def test_inlines_refs_and_strips_defs(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "item": {"$ref": "#/$defs/Nested"}
+            },
+            "required": ["item"],
+            "$defs": {
+                "Nested": {
+                    "type": "object",
+                    "title": "Nested",
+                    "properties": {
+                        "name": {"type": "string", "title": "Name"}
+                    },
+                    "required": ["name"],
+                }
+            },
+        }
+        out = _gemini_transform_schema(schema)
+        assert out == {
+            "type": "object",
+            "properties": {
+                "item": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"}
+                    },
+                    "required": ["name"],
+                }
+            },
+            "required": ["item"],
+        }
+
+
+class TestGeminiSchemaFallbackDetection:
+    def test_detects_dict_map_via_additional_properties(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "baselines": {
+                    "type": "object",
+                    "additionalProperties": {"type": "number"},
+                }
+            },
+        }
+        assert _gemini_schema_has_unsupported_fieldtypes(schema) is True
+
+    def test_detects_underspecified_array_items(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "listings": {
+                    "type": "array",
+                    "items": {},
+                }
+            },
+        }
+        assert _gemini_schema_has_unsupported_fieldtypes(schema) is True
+
+    def test_detects_array_of_bare_objects(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "listings": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                }
+            },
+        }
+        assert _gemini_schema_has_unsupported_fieldtypes(schema) is True
+
+    def test_allows_explicit_array_of_objects(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "listings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "listing_id": {"type": "integer"},
+                            "action": {"type": "string"},
+                        },
+                        "required": ["listing_id", "action"],
+                    },
+                }
+            },
+        }
+        assert _gemini_schema_has_unsupported_fieldtypes(schema) is False

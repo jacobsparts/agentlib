@@ -49,6 +49,275 @@ class BadRequestError(Exception): pass
 class MaxTokensError(Exception): pass
 
 
+def _iter_json_dicts(content):
+    decoder = json.JSONDecoder()
+    pos = 0
+    while pos < len(content):
+        while pos < len(content) and content[pos].isspace():
+            pos += 1
+        if pos >= len(content):
+            break
+        if content[pos] != '{':
+            next_brace = content.find('{', pos)
+            if next_brace == -1:
+                break
+            pos = next_brace
+        try:
+            obj, end = decoder.raw_decode(content, pos)
+        except json.JSONDecodeError:
+            pos += 1
+            continue
+        if isinstance(obj, dict):
+            yield obj, pos, end - 1
+        pos = end
+
+
+def _merge_tool_call_documents(content):
+    merged = []
+    for obj, _, _ in _iter_json_dicts(content):
+        function_calls = obj.get("function_calls")
+        if function_calls is None:
+            continue
+        if not isinstance(function_calls, list):
+            raise ValidationError("function_calls must be a list.")
+        merged.extend(function_calls)
+    return merged
+
+
+def _shimpp_merge_multiple_tool_call_documents(content):
+    if content.count('"function_calls"') <= 1:
+        return content
+    merged = _merge_tool_call_documents(content)
+    return json.dumps({"function_calls": merged}, indent=JSON_INDENT) if merged else content
+
+
+def _shimpp_extract_tool_call_document(content):
+    for obj, _, _ in _iter_json_dicts(content):
+        function_calls = obj.get("function_calls")
+        if function_calls is None:
+            continue
+        if not isinstance(function_calls, list):
+            raise ValidationError("function_calls must be a list.")
+        return json.dumps(obj, indent=JSON_INDENT)
+    return content
+
+
+def _shimpp_close_unterminated_tool_call_json(content):
+    if '"function_calls"' not in content:
+        return content
+    try:
+        obj = json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    else:
+        function_calls = obj.get("function_calls") if isinstance(obj, dict) else None
+        if function_calls is not None and not isinstance(function_calls, list):
+            raise ValidationError("function_calls must be a list.")
+        return content
+    stack = []
+    in_string = False
+    escape = False
+    for ch in content:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in '{[':
+            stack.append(ch)
+        elif ch == '}' and stack and stack[-1] == '{':
+            stack.pop()
+        elif ch == ']' and stack and stack[-1] == '[':
+            stack.pop()
+    if not stack:
+        return content
+    candidate = content + ''.join('}' if ch == '{' else ']' for ch in reversed(stack))
+    try:
+        obj = json.loads(candidate)
+    except json.JSONDecodeError:
+        return content
+    function_calls = obj.get("function_calls") if isinstance(obj, dict) else None
+    if function_calls is None:
+        return content
+    if not isinstance(function_calls, list):
+        raise ValidationError("function_calls must be a list.")
+    return candidate
+
+
+TOOL_CALL_RESPONSE_PREPROCESSORS = (
+    _shimpp_merge_multiple_tool_call_documents,
+    _shimpp_close_unterminated_tool_call_json,
+    _shimpp_extract_tool_call_document,
+)
+
+
+def _preprocess_tool_call_response(content):
+    for fn in TOOL_CALL_RESPONSE_PREPROCESSORS:
+        content = fn(content)
+    return content
+
+
+def _extract_tool_calls_json(content):
+    for obj, json_start_index, json_end_index in _iter_json_dicts(content):
+        function_calls = obj.get("function_calls")
+        if function_calls is None:
+            continue
+        if not isinstance(function_calls, list):
+            raise ValidationError("function_calls must be a list.")
+        return obj, json_start_index, json_end_index
+    if '{' not in content:
+        raise ValidationError("No JSON object found (missing '{').")
+    if '}' not in content:
+        raise ValidationError("Found '{' but no corresponding closing '}' found afterwards.")
+    raise ValidationError('No JSON object containing "function_calls" found.')
+
+
+def _gemini_resolve_schema_refs(schema, defs=None):
+    if defs is None:
+        defs = schema.get('$defs', {}) if isinstance(schema, dict) else {}
+    if isinstance(schema, list):
+        return [_gemini_resolve_schema_refs(item, defs) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    if '$ref' in schema:
+        ref = schema['$ref']
+        if not ref.startswith('#/$defs/'):
+            raise ValidationError(f"Unsupported schema ref for Gemini tools: {ref}")
+        name = ref.split('/')[-1]
+        target = defs.get(name)
+        if target is None:
+            raise ValidationError(f"Missing schema ref target for Gemini tools: {ref}")
+        merged = dict(target)
+        for k, v in schema.items():
+            if k != '$ref':
+                merged[k] = v
+        return _gemini_resolve_schema_refs(merged, defs)
+    return {
+        k: _gemini_resolve_schema_refs(v, defs)
+        for k, v in schema.items()
+        if k != '$defs'
+    }
+
+
+def _gemini_transform_schema(schema):
+    """
+    Convert a Pydantic JSON schema into Gemini's function declaration schema subset.
+
+    Gemini supports a narrower subset of OpenAPI/JSON Schema than Pydantic emits.
+    In particular, Pydantic often emits unsupported keys such as:
+    - additionalProperties (for dict[...] fields)
+    - title / default
+    - anyOf with {"type": "null"} for Optional fields
+    - $defs / $ref for nested models
+    """
+    schema = _gemini_resolve_schema_refs(schema)
+
+    def transform(node):
+        if isinstance(node, list):
+            return [transform(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+
+        if 'anyOf' in node:
+            variants = node['anyOf']
+            non_null = [v for v in variants if not (isinstance(v, dict) and v.get('type') == 'null')]
+            if len(non_null) == 1:
+                merged = dict(non_null[0])
+                for k, v in node.items():
+                    if k != 'anyOf':
+                        merged[k] = v
+                node = merged
+            else:
+                raise ValidationError(f"Unsupported union schema for Gemini tools: {node}")
+
+        if 'oneOf' in node or 'allOf' in node:
+            key = 'oneOf' if 'oneOf' in node else 'allOf'
+            raise ValidationError(f"Unsupported composite schema '{key}' for Gemini tools: {node}")
+
+        out = {}
+        if 'description' in node:
+            out['description'] = node['description']
+        if 'enum' in node:
+            out['enum'] = node['enum']
+        if 'format' in node:
+            out['format'] = node['format']
+
+        node_type = node.get('type')
+        if node_type in ('string', 'integer', 'number', 'boolean'):
+            out['type'] = node_type
+            return out
+
+        if node_type == 'array':
+            out['type'] = 'array'
+            if 'items' in node:
+                out['items'] = transform(node['items'])
+            return out
+
+        if node_type == 'object' or 'properties' in node or 'additionalProperties' in node:
+            out['type'] = 'object'
+            props = node.get('properties', {})
+            if props:
+                out['properties'] = {k: transform(v) for k, v in props.items()}
+            required = [name for name in node.get('required', []) if name in props]
+            if required:
+                out['required'] = required
+            return out
+
+        return out or node
+
+    return transform(schema)
+
+
+def _gemini_schema_has_unsupported_fieldtypes(schema):
+    """
+    Return True when a schema uses constructs that Gemini function calling does
+    not reliably support and should therefore use shim mode instead of native
+    tool calling.
+
+    Current unsupported cases:
+    - dict/map-like objects emitted as additionalProperties
+    - unresolved refs outside $defs
+    - non-optional unions / oneOf / allOf composites
+    - underspecified arrays/objects that do not give Gemini enough structure
+    """
+    def visit(node):
+        if isinstance(node, list):
+            return any(visit(item) for item in node)
+        if not isinstance(node, dict):
+            return False
+
+        if '$ref' in node and not str(node['$ref']).startswith('#/$defs/'):
+            return True
+        if 'additionalProperties' in node:
+            return True
+        if 'oneOf' in node or 'allOf' in node:
+            return True
+        if 'anyOf' in node:
+            variants = node['anyOf']
+            non_null = [v for v in variants if not (isinstance(v, dict) and v.get('type') == 'null')]
+            if len(non_null) != 1:
+                return True
+            return any(visit(v) for v in non_null)
+        if node.get('type') == 'array':
+            items = node.get('items')
+            if not isinstance(items, dict) or not items:
+                return True
+            if items.get('type') == 'object' and not items.get('properties') and 'additionalProperties' not in items:
+                return True
+        if node.get('type') == 'object':
+            if not node.get('properties') and 'additionalProperties' not in node:
+                return True
+
+        return any(visit(v) for v in node.values())
+
+    return visit(schema)
+
+
 class LLMClient:
     usage_tracker = UsageTracker()
 
@@ -362,7 +631,7 @@ class LLMClient:
             req["tools"] = [{"functionDeclarations": [{
                 "name": t['function']['name'],
                 "description": t['function']['description'],
-                "parameters": t['function']['parameters'],
+                "parameters": _gemini_transform_schema(t['function']['parameters']),
             } for t in tools]}]
             req["toolConfig"] = {"functionCallingConfig": {"mode": "ANY"}}
         conn = http.client.HTTPSConnection(self.model_config['host'], timeout=self.timeout)
@@ -507,6 +776,13 @@ class LLMClient:
             raise
 
     def tool_call_native(self, messages, tools, retry=5):
+        if self.model_config['api_type'] == "gemini":
+            for tool in tools.values():
+                schema = tool.model_json_schema()
+                if _gemini_schema_has_unsupported_fieldtypes(schema):
+                    logger.info("Gemini native tool calling fallback to shim mode due to unsupported schema field types")
+                    return self.tool_call_shim(messages, tools, retry=retry)
+
         _tools = []
         for name, tool in tools.items():
             schema = tool.model_json_schema()
@@ -637,16 +913,8 @@ class LLMClient:
             raise
         try:
             content = resp_msg.get('content') or resp_msg.get('reasoning_content') or ''
-            json_start_index = content.find('{')
-            if json_start_index == -1:
-                raise ValidationError("No JSON object found (missing '{').")
-            json_end_index = content.rfind('}')
-            if json_end_index == -1:
-                raise ValidationError("Found '{' but no corresponding closing '}' found afterwards.")
-            try:
-                tool_calls = json.loads(content[json_start_index:json_end_index+1])
-            except json.JSONDecodeError as e:
-                raise ValidationError(f"Failed to decode JSON: {e}")
+            content = _preprocess_tool_call_response(content)
+            tool_calls, json_start_index, json_end_index = _extract_tool_calls_json(content)
             if not (function_calls := tool_calls["function_calls"]):
                 raise ValidationError(f"Function calls are required.")
             for call in function_calls:
