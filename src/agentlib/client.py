@@ -49,6 +49,13 @@ class BadRequestError(Exception): pass
 class MaxTokensError(Exception): pass
 
 
+def _parse_completions_response(response_json):
+    if 'choices' not in response_json:
+        raise Exception(f"choices missing from response: {response_json}")
+    choice = response_json['choices'][0]
+    return choice.get('message', {}), choice.get('finish_reason'), response_json.get('usage')
+
+
 def _iter_json_dicts(content):
     decoder = json.JSONDecoder()
     pos = 0
@@ -376,13 +383,14 @@ class LLMClient:
             "Authorization": f"Bearer {self.model_config['api_key']}",
         }
         body = json.dumps(req)
+        request_path = self.model_config.get('request_path', self.model_config['path'])
         try:
             throttle(self.model_config['host'], self.model_config.get('tpm', 5))
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("----------- TO LLM -----------")
-                logger.debug(f"POST {self.model_config['path']} {headers}")
+                logger.debug(f"POST {request_path} {headers}")
                 logger.debug(body)
-            conn.request("POST", self.model_config['path'], body, headers)
+            conn.request("POST", request_path, body, headers)
             response = conn.getresponse()
             response_data = response.read().decode()
             if logger.isEnabledFor(logging.INFO):
@@ -400,13 +408,11 @@ class LLMClient:
                 raise Exception(f"API Error {response.status}: {response_data}")
 
             response_json = json.loads(response_data)
-            if usage := response_json.get('usage'):
+            parser = self.model_config.get('response_parser') or _parse_completions_response
+            message, stop_reason, usage = parser(response_json)
+            if usage:
                 self.usage_tracker.log(self.model_name, usage)
-            if not 'choices' in response_json:
-                raise Exception(f"choices missing from response: {response_json}")
-            choice = response_json['choices'][0]
-            message = choice['message']
-            message['_stop_reason'] = choice.get('finish_reason')
+            message['_stop_reason'] = stop_reason
             # Normalize: some providers return tool_calls: null instead of omitting it
             if 'tool_calls' in message and message['tool_calls'] is None:
                 del message['tool_calls']
