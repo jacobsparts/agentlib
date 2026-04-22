@@ -29,6 +29,7 @@ class RawMode:
         attrs = termios.tcgetattr(self.fd)  # Get fresh copy to modify
         attrs[3] &= ~termios.ECHO
         attrs[3] &= ~termios.ICANON
+        attrs[3] &= ~termios.ISIG
         termios.tcsetattr(self.fd, termios.TCSADRAIN, attrs)
         sys.stdout.write('\x1b[?2004h')  # Enable bracketed paste
         sys.stdout.flush()
