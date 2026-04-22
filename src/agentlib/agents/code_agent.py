@@ -387,7 +387,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 path = partial_read_path
                 partial_read_path = None
                 if self._is_attached(path):
-                    result.append(f"ValueError: Partial read denied for file already in context. Call read() without offset or limit to reload the file, or ask the user to /detach the file to enable partial reads.\n")
+                    result.append(f"ValueError: Partial view_file denied for file already in context. Call view_file() without offset or limit to reload the file, or ask the user to /detach the file to enable partial views.\n")
                     continue
                 result.append(chunk)
                 continue
@@ -410,7 +410,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 formatted = '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
                 self._invalidate_attachment(path)
                 self._read_attachments[path] = formatted
-                result.append(f">>> read({path!r})\n[Attachment: {path}]\n")
+                result.append(f">>> view_file({path!r})\n[Attachment: {path}]\n")
             except Exception:
                 pass
 
@@ -581,12 +581,15 @@ Don't reconnect every turn - the connection object persists.
 
 >>> context_management()
 
-read() outputs file contents directly and returns None. Do NOT assign it or
-wrap it in print(). Just call: read("file.py")
+read() returns file contents as text. Use it when you need to assign, search,
+split, or otherwise process file contents in Python.
 
-Prefer bare read(file_path) without offset/limit. Only use offset/limit
-if the file is too large to read at once (5000+ lines) or you have a specific
-reason to view a narrow range.
+Use view_file("file.py") to display a file with line numbers and attach full
+reads into context.
+
+Use read(file_path, offset=..., limit=...) when you need a text snippet.
+Use view_file(file_path, offset=..., limit=...) when you need numbered output
+for inspection.
 
 File reads are complete unless otherwise indicated. Re-reading wastes tokens.
 Variables persist across turns. Don't re-fetch data you already have.
@@ -668,12 +671,14 @@ emit("Should I read the config file?", release=True)  # WRONG - just read it
 # GOOD: Just do it
 read("config.json")  # Contents appear in your next turn
 
-# BAD: Wrapping read() in print or assigning it (read returns None!)
-content = read("file.py")       # WRONG - content is None
-print(read("file.py"))          # WRONG - prints None
+# BAD: Using view_file() as a value
+content = view_file("file.py")  # WRONG - view_file() is display-only
+print(view_file("file.py"))     # WRONG - use view_file("file.py") directly
 
-# GOOD: Just call read() - output appears directly
-read("file.py")
+# GOOD: read() returns text, view_file() displays/attaches
+content = read("file.py")
+preview(read("file.py"))
+view_file("file.py")
 
 # BAD: Reading in small chunks unnecessarily
 read("file.py", offset=1, limit=50)   # WRONG - just read the whole file
@@ -1538,7 +1543,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         return '\n'.join(parts)
 
     # Target tool names whose bare expressions get rewritten to assignment + preview
-    _preview_targets = frozenset({'grep', 'bash'})
+    _preview_targets = frozenset({'grep', 'bash', 'read'})
 
     def preprocess_code(self, code: str) -> str:
         """Apply base preprocessing then rewrite bare tool calls to assignment + preview."""
@@ -1552,11 +1557,48 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         lines = code.split('\n')
         body = tree.body
 
+        def _source(node):
+            return ast.get_source_segment(code, node)
+
+        def _is_named_call(node, *names):
+            return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in names
+
+        invalid_view_file_message = "view_file() is a display tool, not a value. Use read() for file contents as text."
+
         # Collect all rewrites as (start_line_0idx, end_line_0idx, new_lines)
         all_rewrites = []
 
+        # Pattern 0: reject value-style uses of view_file(...)
+        for node in body:
+            start = node.lineno - 1
+            end = node.end_lineno - 1
+            orig = lines[start:end + 1]
+            indent = orig[0][:len(orig[0]) - len(orig[0].lstrip())]
+
+            if isinstance(node, ast.Assign) and _is_named_call(node.value, 'view_file'):
+                all_rewrites.append((start, end, [
+                    f"{indent}raise ValueError({invalid_view_file_message!r})",
+                ]))
+                continue
+
+            if isinstance(node, ast.AnnAssign) and node.value and _is_named_call(node.value, 'view_file'):
+                all_rewrites.append((start, end, [
+                    f"{indent}raise ValueError({invalid_view_file_message!r})",
+                ]))
+                continue
+
+            if isinstance(node, ast.Expr) and _is_named_call(node.value, 'preview', 'print') and len(node.value.args) == 1 and not node.value.keywords:
+                inner = node.value.args[0]
+                if _is_named_call(inner, 'view_file') or (
+                    isinstance(inner, ast.NamedExpr) and _is_named_call(inner.value, 'view_file')
+                ):
+                    all_rewrites.append((start, end, [
+                        f"{indent}raise ValueError({invalid_view_file_message!r})",
+                    ]))
+                    continue
+
         # Pattern 1: bare target call or print(target(...))
-        for i, node in enumerate(body):
+        for node in body:
             if not isinstance(node, ast.Expr):
                 continue
             call = node.value
@@ -1570,7 +1612,6 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             indent = orig[0][:len(orig[0]) - len(orig[0].lstrip())]
 
             if isinstance(func, ast.Name) and func.id in self._preview_targets:
-                # Bare: grep(...), bash(...)
                 self.__class__._preview_counter += 1
                 var = f"_v{self._preview_counter}"
                 call_source = '\n'.join(orig).strip()
@@ -1580,9 +1621,15 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             elif (isinstance(func, ast.Name) and func.id == 'print'
                   and len(call.args) == 1 and not call.keywords):
                 inner = call.args[0]
-                if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
-                        and inner.func.id in self._preview_targets):
-                    inner_source = ast.get_source_segment(code, inner)
+                if _is_named_call(inner, 'read'):
+                    inner_source = _source(inner)
+                    if inner_source:
+                        all_rewrites.append((start, end, [
+                            f"{indent}view_file{inner_source[len('read'):]}",
+                        ]))
+                    continue
+                if _is_named_call(inner, *self._preview_targets):
+                    inner_source = _source(inner)
                     if inner_source:
                         self.__class__._preview_counter += 1
                         var = f"_v{self._preview_counter}"
@@ -1617,7 +1664,6 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             if not (isinstance(pcall.args[0], ast.Name) and pcall.args[0].id == var_name):
                 continue
 
-            # Rewrite only the print → preview (assignment stays)
             pstart = nxt.lineno - 1
             pend = nxt.end_lineno - 1
             pindent = lines[pstart][:len(lines[pstart]) - len(lines[pstart].lstrip())]
@@ -1628,7 +1674,6 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         if not all_rewrites:
             return code
 
-        # Apply in reverse line order so earlier rewrites don't shift later ones
         all_rewrites.sort(key=lambda x: x[0], reverse=True)
         for start, end, new_lines in all_rewrites:
             lines[start:end + 1] = new_lines
@@ -1683,19 +1728,53 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             offset: Optional[int] = "Line number to start from (1-indexed)",
             limit: Optional[int] = "Number of lines to read (default: 5000)"
         ):
-        """Read a file with line numbers. Outputs directly, returns None.
+        """Read a file and return its contents as text.
 
-        Prefer bare read(path) without offset/limit. Only use them for
-        files too large to read at once (5000+ lines).
+        Use read() when you want file contents as a Python value:
+            content = read("file.py")
+            lines = read("file.py").splitlines()
+            snippet = read("file.py", offset=100, limit=20)
+
+        Use view_file() when you want numbered output and attachment behavior:
+            view_file("file.py")
+            view_file("file.py", offset=100, limit=20)
+        """
+        content = Path(file_path).expanduser().read_text()
+        if offset is None and limit is None:
+            return content
+        all_lines = content.split('\n')
+        start = (offset or 1) - 1
+        end = start + (limit or 5000)
+        return '\n'.join(all_lines[start:end])
+
+    @REPLAgent.tool(inject=True)
+    def view_file(self,
+            file_path: str = "Path to the file",
+            offset: Optional[int] = "Line number to start from (1-indexed)",
+            limit: Optional[int] = "Number of lines to read (default: 5000)"
+        ):
+        """Display a file with line numbers and attach full reads to context.
+
+        Use view_file() for inspection and conversation context:
+            view_file("file.py")
+            view_file("file.py", offset=100, limit=20)
+
+        WRONG — view_file() is not a value:
+            content = view_file("file.py")
+            print(view_file("file.py"))
+            preview(view_file("file.py"))
+
+        Use read() if you need file contents as text:
+            content = read("file.py")
         """
         content = Path(file_path).expanduser().read_text()
         all_lines = content.split('\n')
         total_lines = len(all_lines)
 
-        start = (offset or 1) - 1  # Convert to 0-indexed
+        start = (offset or 1) - 1
         end = start + (limit or 5000)
         lines = all_lines[start:end]
-        start_line = start + 1  # Back to 1-indexed for display
+        start_line = start + 1
 
         formatted = [f"{start_line + i:>5}→{line}" for i, line in enumerate(lines)]
         output = '\n'.join(formatted)
@@ -1704,13 +1783,11 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         if remaining > 0 and limit is None:
             output += f"\n... ({remaining} more lines)"
 
-        # Signal for attachment tracking (host-side check in build_output_for_llm)
         if offset is None and limit is None:
             _send_output("read_attach", file_path + "\n")
         else:
             _send_output("read_partial", file_path + "\n")
 
-        # Send tagged output for agent to see
         _send_output("read", output + "\n")
 
     @REPLAgent.tool(inject=True)

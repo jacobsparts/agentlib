@@ -3,6 +3,7 @@
 import ast
 import json
 
+from agentlib.agents.code_agent import CodeAgent
 from agentlib.preprocess import (
     _comment_leading_non_code_prefix,
     _extract_native_function_call_code,
@@ -10,7 +11,6 @@ from agentlib.preprocess import (
     _fix_js_comments,
     _fix_triple_quote_conflict,
     _comment_out_non_python,
-    _strip_read_wrappers,
     preprocess,
 )
 from agentlib.client import _gemini_transform_schema
@@ -396,38 +396,6 @@ class TestFixTripleQuoteConflict:
         assert r == code or compiles(r)
 
 
-# === _strip_read_wrappers ===
-
-class TestStripReadWrappers:
-    def test_preview_read_becomes_plain_read(self):
-        code = 'preview(read("file.py"))'
-        r = _strip_read_wrappers(code)
-        assert same_ast(r, 'read("file.py")')
-
-    def test_namedexpr_preview_read_becomes_plain_read(self):
-        code = 'preview(somevar := read("file.py"))'
-        r = _strip_read_wrappers(code)
-        assert same_ast(r, 'read("file.py")')
-
-    def test_assign_read_becomes_plain_read(self):
-        code = 'content = read("file.py", offset=1, limit=80)'
-        r = _strip_read_wrappers(code)
-        assert same_ast(r, 'read("file.py", offset=1, limit=80)')
-
-    def test_annotated_assign_read_becomes_plain_read(self):
-        code = 'content: str = read("file.py")'
-        r = _strip_read_wrappers(code)
-        assert same_ast(r, 'read("file.py")')
-
-    def test_non_read_assignment_untouched(self):
-        code = 'content = bash("pwd")'
-        assert _strip_read_wrappers(code) == code
-
-    def test_preview_non_read_untouched(self):
-        code = 'preview(body)'
-        assert _strip_read_wrappers(code) == code
-
-
 # === preprocess (composed pipeline) ===
 
 class TestPreprocess:
@@ -613,23 +581,61 @@ class TestPreprocess:
         r = preprocess(code)
         assert compiles(r)
 
-    def test_preprocess_rewrites_preview_read_pattern(self):
+    def test_preprocess_leaves_preview_read_pattern_alone(self):
         code = 'preview(read("CLAUDE.md"))'
         r = preprocess(code)
-        assert same_ast(r, 'read("CLAUDE.md")')
+        assert same_ast(r, 'preview(read("CLAUDE.md"))')
         assert compiles(r)
 
-    def test_preprocess_rewrites_namedexpr_preview_read_pattern(self):
+    def test_preprocess_leaves_namedexpr_preview_read_pattern_alone(self):
         code = 'preview(somevar := read("CLAUDE.md", offset=1, limit=80))'
         r = preprocess(code)
-        assert same_ast(r, 'read("CLAUDE.md", offset=1, limit=80)')
+        assert same_ast(r, 'preview(somevar := read("CLAUDE.md", offset=1, limit=80))')
         assert compiles(r)
 
-    def test_preprocess_rewrites_assigned_read_pattern(self):
+    def test_preprocess_leaves_assigned_read_pattern_alone(self):
         code = 'content = read("CLAUDE.md")'
         r = preprocess(code)
-        assert same_ast(r, 'read("CLAUDE.md")')
+        assert same_ast(r, 'content = read("CLAUDE.md")')
         assert compiles(r)
+
+
+class TestCodeAgentPreprocessCode:
+    def test_bare_read_gets_previewed(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('read("file.py")')
+        assert same_ast(r, 'preview(_v1 := read("file.py"))')
+
+    def test_print_read_becomes_view_file(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('print(read("file.py"))')
+        assert same_ast(r, 'view_file("file.py")')
+
+    def test_preview_read_left_alone(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('preview(read("file.py"))')
+        assert same_ast(r, 'preview(read("file.py"))')
+
+    def test_view_file_assignment_rejected(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('content = view_file("file.py")')
+        assert same_ast(
+            r,
+            'raise ValueError("view_file() is a display tool, not a value. Use read() for file contents as text.")',
+        )
+
+    def test_print_view_file_rejected(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('print(view_file("file.py"))')
+        assert same_ast(
+            r,
+            'raise ValueError("view_file() is a display tool, not a value. Use read() for file contents as text.")',
+        )
 
 
 class TestGeminiSchemaTransform:
