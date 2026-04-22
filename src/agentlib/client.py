@@ -334,6 +334,7 @@ class LLMClient:
         self.timeout = self.model_config.get('timeout', 300)
         self.concurrency_lock = threading.BoundedSemaphore(self.model_config.get('concurrency',10))
         self.native = self.model_config.get('tools') if native is None else native
+        self.on_retry = None
 
     def _call_completions(self, messages, tools):
         """
@@ -360,6 +361,7 @@ class LLMClient:
         extra_config = dict(self.model_config.get('config', {}))
         current_max_tokens = extra_config.get('max_tokens')
         messages = list(messages)
+        max_tokens_retry = 0
 
         while True:
             req = {
@@ -428,6 +430,9 @@ class LLMClient:
                     prompt_tokens = usage.get('prompt_tokens', 0)
                     next_max_tokens = current_max_tokens * 2
                     if prompt_tokens + next_max_tokens <= context_window:
+                        max_tokens_retry += 1
+                        if self.on_retry:
+                            self.on_retry("max_tokens", max_tokens_retry)
                         messages.append(message)
                         messages.append({'role': 'user', 'content': 'Incomplete response detected. Resubmit your response.'})
                         current_max_tokens = next_max_tokens

@@ -975,6 +975,8 @@ Call help(function_name) for parameter descriptions.
 
                     # Pure syntax error - retry with temporary error context
                     logger.debug(f"SyntaxError, retry #{syntax_retry + 1}")
+                    if hasattr(self, 'on_retry'):
+                        self.on_retry("syntax", syntax_retry + 1)
                     hint = (
                         "Your previous response was rejected because the response body itself must be valid Python source code.\n\n"
                         "Write raw Python only.\n"

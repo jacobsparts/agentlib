@@ -133,6 +133,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             self._pending_explicit_attachment_refs = {}
             self._pending_session_events = []
             self._display_capture = []
+        self.llm_client.on_retry = self.on_retry
 
     def _ensure_live_session(self):
         if self._session_id is None:
@@ -487,6 +488,25 @@ You are an interactive coding assistant operating within a Python REPL.
 Your responses ARE Python code—no markdown blocks, no prose preamble.
 The code you write is executed directly in a persistent environment.
 
+Every assistant turn must be valid Python source code.
+- If you want to communicate with the user, call emit(...)
+- Never reply with plain English outside Python code
+- If the task is complete, use emit(..., release=True)
+- If you are still working, do not release control
+- If a prior attempt would have been invalid as Python, immediately correct it
+  by sending a new turn containing only valid Python code
+
+The user may see REPL echoes, tool output, and prior emitted text mixed into
+the conversation. Treat that transcript as execution context. Continue from the
+latest user instruction rather than explaining the transcript unless asked.
+
+The Python environment persists across turns. Variables, imports, connections,
+and tool state may already exist from earlier execution. Reuse existing state
+when appropriate, but verify assumptions before relying on it.
+
+If the user asks for an opinion or summary and no computation is needed,
+respond with emit(...) directly rather than writing unnecessary setup code.
+
 >>> how_this_works()
 
 1. You write Python code as your response (no markdown fences)
@@ -532,6 +552,13 @@ the same turn. If your emit includes computed results (test output, command
 output, generated data), emit it with release=False first, then review the
 output in your next turn before releasing. This prevents releasing with
 failures you haven't noticed.
+
+When you run code that produces output, treat that output as something you will
+inspect on the next turn before making conclusions. Typical pattern:
+1. execute code
+2. inspect printed / REPL output in the following turn
+3. then emit a verified answer
+Do not claim success based on unreviewed results.
 
     # BAD: Blind release with unreviewed output
     result = bash("pytest")
@@ -968,6 +995,15 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
         print(f"{DIM}{thinking} (turn {self._turn_number}){RESET}\r", end="", flush=True)
 
+    def on_retry(self, kind: str, retry_num: int) -> None:
+        if kind == "syntax":
+            status = f"Syntax Retry #{retry_num}... (turn {getattr(self, '_turn_number', 1)})"
+        elif kind == "max_tokens":
+            status = f"Max Tokens Retry #{retry_num}... (turn {getattr(self, '_turn_number', 1)})"
+        else:
+            return
+        print(f"{DIM}{status}{RESET}\r", end="", flush=True)
+
     def user_repl_session(self, history):
         """Drop into the REPL for direct user interaction."""
         from agentlib.cli.prompt import prompt as raw_prompt
@@ -1130,31 +1166,7 @@ If you don't know how to proceed:
         finally:
             self._suspend_persistence = False
 
-    def _synthetic_exchange(self):
-        self._ensure_setup()
-        repl = self._get_tool_repl()
-        repl.execute('from urllib.request import urlopen; body = "[redacted by system]"')
-        for role, content in (
-            # First user question - styled as REPL output since it follows attachment load
-            ('user', 'What do you think of the title of the example.com page? And what is the length of the page in bytes?\n'),
-            ('assistant', 'emit("Fetching example.com...")\nfrom urllib.request import urlopen\nwith urlopen("http://example.com") as r:\n    body = r.read().decode("utf-8", errors="ignore")\nbody[:100]'),
-            ('user', '>>> emit("Fetching example.com...")\nFetching example.com...\n>>> from urllib.request import urlopen\n>>> with urlopen("http://example.com") as r:\n...     body = r.read().decode("utf-8", errors="ignore")\n>>> body[:100]\n\'<!doctype html><html lang="en"><head><title>Example Domain</title><meta name="viewport" content="wid\'\n'),
-            ('assistant', 'emit(f"The title is \'Example Domain\'--a concise, descriptive title. Page length: {len(body)} bytes.", release=True)'),
-            # User reply appended to emit output (simulating the REPL continuation)
-            ('user', '>>> emit(f"The title is \'Example Domain\'--a concise, descriptive title. Page length: {len(body)} bytes.", release=True)\nThe title is \'Example Domain\'--a concise, descriptive title. Page length: 1256 bytes.\nWhat do you think of the documentation style in CLAUDE.md?\n'),
-            # Assistant makes a mistake - responds in plaintext
-            ('assistant', "The documentation style is good - it's concise and uses a code-first approach with clear section headers."),
-            # Error shown, with recovery hint
-            ('user', ">>> The documentation style is good - it's concise and uses a code-first approach with clear section headers.\n  File \"<repl>\", line 1\n    The documentation style is good - it's concise and uses a code-first approach with clear section headers.\n                                     ^\nSyntaxError: unterminated string literal (detected at line 1)\n\nYour response was not valid Python and was rejected. Try again using only Python code. Use an appropriate function to communicate text.\n"),
-            # Assistant recovers correctly
-            ('assistant', 'emit("The documentation style is good - concise and code-first with clear section headers.", release=True)'),
-            ('user', '>>> emit("The documentation style is good - concise and code-first with clear section headers.", release=True)\nThe documentation style is good - concise and code-first with clear section headers.\n'),
-        ):
-            self.conversation.messages.append({"role": role, "content": content, "_synthetic": True})
-        # Mark that last message is REPL output - next user message should append
-        self._last_was_repl_output = True
-
-    def cli_run(self, max_turns: int | None = None, synth: bool = True, resume: str | bool = False):
+    def cli_run(self, max_turns: int | None = None, resume: str | bool = False):
         """Run CLI loop with Python block delimiters."""
         from agentlib.cli.mixin import SQLiteHistory, InputSession
         from agentlib.cli.altmode import AltMode
@@ -1203,8 +1215,8 @@ If you don't know how to proceed:
                 session_id = select_session_ui(altmode, self._session_store, str(Path.cwd()))
             else:
                 session_id = resume
-            if session_id and self.resume_session(session_id):
-                synth = False
+            if session_id:
+                self.resume_session(session_id)
 
         try:
             preload_input = ""
@@ -1261,10 +1273,8 @@ If you don't know how to proceed:
                         session_id = select_session_ui(altmode, self._session_store, str(Path.cwd()))
                         if session_id:
                             self.resume_session(session_id)
-                            synth = False
                     else:
-                        if self.resume_session(parts[1].strip()):
-                            synth = False
+                        self.resume_session(parts[1].strip())
                     continue
 
                 if user_input.strip().startswith("/skills"):
@@ -1398,12 +1408,6 @@ If you don't know how to proceed:
                         print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
                     continue
 
-                if synth:
-                    try:
-                        self._synthetic_exchange()
-                    except Exception as e:
-                        print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
-                    synth = False
                 self.usermsg(user_input, _user_content=user_input)
 
                 # Reset state for new user interaction
@@ -1948,7 +1952,6 @@ def main():
 Examples:
   code-agent                          # Start with default settings
   code-agent --model sonnet           # Use Claude
-  code-agent --no-synth               # Skip synthetic exchange
   code-agent --max-turns 50           # Limit conversation turns
   code-agent --resume                 # Open session picker on startup
   code-agent --resume <session_id>    # Resume specific session directly
@@ -1958,11 +1961,6 @@ Examples:
         "--model", "-m",
         default=_get_config_value("code_agent_model", "sonnet"),
         help="LLM model to use (default from config or sonnet)"
-    )
-    parser.add_argument(
-        "--no-synth",
-        action="store_true",
-        help="Skip synthetic exchange (cold start)"
     )
     parser.add_argument(
         "--max-turns",
@@ -2015,7 +2013,7 @@ Examples:
 
     try:
         with ConfiguredAgent() as agent:
-            agent.cli_run(synth=not args.no_synth, resume=args.resume)
+            agent.cli_run(resume=args.resume)
     except ModelNotFoundError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
