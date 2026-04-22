@@ -421,6 +421,9 @@ class LLMClient:
                     self.usage_tracker.log(self.model_name, usage)
                 message['_stop_reason'] = stop_reason
 
+                # Truncated response: feed it back and retry with doubled max_tokens.
+                # Keeps doubling until prompt + output would exceed context_window.
+                # Retry messages stay local — they never reach the Conversation history.
                 if stop_reason in ('max_tokens', 'length', 'MAX_TOKENS') and context_window and current_max_tokens and usage:
                     prompt_tokens = usage.get('prompt_tokens', 0)
                     next_max_tokens = current_max_tokens * 2
