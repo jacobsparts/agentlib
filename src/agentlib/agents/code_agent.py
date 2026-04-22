@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import copy
+import re
 from typing import Optional
 from pathlib import Path
 from agentlib import REPLAgent, SandboxMixin, REPLAttachmentMixin, MCPMixin
@@ -539,37 +540,15 @@ Both print() and emit() output are visible. The difference:
 
 >>> autonomous_workflow()
 
-YOU CONTROL THE EXECUTION FLOW. The user cannot respond until you explicitly
-release with emit(..., release=True). Work autonomously through MULTIPLE TURNS:
+You control execution. The user cannot respond until you call
+emit(..., release=True). Work through as many turns as needed.
 
-1. KEEP WORKING silently until the task is complete or you're blocked
-2. Use print() freely to inspect variables, check state, debug
-3. Chain multiple operations across turns - state persists
-4. Only release (release=True) when truly finished or need user input
+Do real work on every turn — read files, run commands, write code.
+Never emit placeholder turns like print("ready") or print("thinking").
 
-VERIFY BEFORE RELEASING: Never build a programmatic response and release in
-the same turn. If your emit includes computed results (test output, command
-output, generated data), emit it with release=False first, then review the
-output in your next turn before releasing. This prevents releasing with
-failures you haven't noticed.
-
-When you run code that produces output, treat that output as something you will
-inspect on the next turn before making conclusions. Typical pattern:
-1. execute code
-2. inspect printed / REPL output in the following turn
-3. then emit a verified answer
-Do not claim success based on unreviewed results.
-
-    # BAD: Blind release with unreviewed output
-    result = bash("pytest")
-    emit(f"All tests pass!\n{result}", release=True)  # You never checked!
-
-    # GOOD: Review first, then release
-    result = bash("pytest")
-    emit(result, release=False)  # Show the output
-
-    # (next turn - you can now see the actual results)
-    emit("All 12 tests pass.", release=True)  # Confirmed by inspection
+If your final emit includes computed results (test output, command output),
+run the computation first, then verify the output on your next turn before
+releasing. Do not claim success based on output you haven't reviewed.
 
 NEVER:
 - Ask permission for read-only operations (reading files, exploring code)
@@ -759,6 +738,7 @@ If you don't know how to proceed:
             # but defer header printing until we know we have visible content
             if not getattr(self, '_turn_output_started', False):
                 self._turn_output_started = True
+                self.console.clear_line()  # Clear "Working..." / retry status from previous turn
                 # Only set header pending if we haven't already printed it this interaction
                 if not getattr(self, '_repl_printed_header', False):
                     self._header_pending = True
@@ -1166,6 +1146,40 @@ If you don't know how to proceed:
         finally:
             self._suspend_persistence = False
 
+    def _synthetic_exchange(self):
+        self._ensure_setup()
+        repl = self._get_tool_repl()
+        repl._inject_code("from datetime import date")
+        today = __import__('datetime').date.today().isoformat()
+        parsed_today = __import__('datetime').date.fromisoformat(today) if today else None
+        formatted_today = (
+            f"{parsed_today.strftime('%A, %B')} {parsed_today.day}, {parsed_today.year}"
+            if parsed_today else today
+        )
+        assistant_probe = 'from datetime import date\nemit("Checking today\'s date...")\nprint(date.today().isoformat())'
+        assistant_emit = f'emit("Today is {formatted_today}.", release=True)'
+        user_probe = f"What's today's date?\n"
+        user_probe_output = (
+            user_probe
+            + '>>> emit("Checking today\'s date...")\n'
+            + "Checking today's date...\n"
+            + f">>> print(date.today().isoformat())\n"
+            + f"{today}\n"
+        )
+        user_emit_output = (
+            f">>> {assistant_emit}\n"
+            f"Today is {formatted_today}.\n"
+        )
+        for role, content in (
+            ('user', user_probe),
+            ('assistant', assistant_probe),
+            ('user', user_probe_output),
+            ('assistant', assistant_emit),
+            ('user', user_emit_output),
+        ):
+            self.conversation.messages.append({"role": role, "content": content, "_synthetic": True})
+        self._last_was_repl_output = True
+
     def cli_run(self, max_turns: int | None = None, resume: str | bool = False):
         """Run CLI loop with Python block delimiters."""
         from agentlib.cli.mixin import SQLiteHistory, InputSession
@@ -1217,6 +1231,7 @@ If you don't know how to proceed:
                 session_id = resume
             if session_id:
                 self.resume_session(session_id)
+        synth = not bool(resume)
 
         try:
             preload_input = ""
@@ -1267,14 +1282,17 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/resume"):
+                    resumed = False
                     parts = user_input.strip().split(None, 1)
                     if len(parts) == 1:
                         from agentlib.cli.sessions import select_session_ui
                         session_id = select_session_ui(altmode, self._session_store, str(Path.cwd()))
                         if session_id:
-                            self.resume_session(session_id)
+                            resumed = self.resume_session(session_id)
                     else:
-                        self.resume_session(parts[1].strip())
+                        resumed = self.resume_session(parts[1].strip())
+                    if resumed:
+                        synth = False
                     continue
 
                 if user_input.strip().startswith("/skills"):
@@ -1407,6 +1425,13 @@ If you don't know how to proceed:
                     except Exception as e:
                         print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
                     continue
+
+                if synth:
+                    try:
+                        self._synthetic_exchange()
+                    except Exception as e:
+                        print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
+                    synth = False
 
                 self.usermsg(user_input, _user_content=user_input)
 
