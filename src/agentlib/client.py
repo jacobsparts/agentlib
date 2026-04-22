@@ -355,70 +355,91 @@ class LLMClient:
                         "url": f"data:{MEDIA_TYPES[img[:3]]};base64,{base64.b64encode(img).decode()}"
                     }} for img in images]
                 ]
-        req = {
-            "model": self.model_config['model'],
-            "messages": messages,
-            **self.model_config.get('config', {})
-        }
-        if tools:
-            req.update({
-                "tools": tools,
-                "tool_choice": "required",
-            })
-        if self.model_config['port'] == 443:
-            conn = http.client.HTTPSConnection(self.model_config['host'], timeout=self.timeout)
-            conn.connect()
-            sock = conn.sock
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            if TCP_KEEPIDLE is not None:
-                sock.setsockopt(
-                    socket.IPPROTO_TCP, TCP_KEEPIDLE, 60
-                )  # 60 sec idle before keepalive
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)    # 10 sec between probes
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)       # 3 probes before giving up
-        else:
-            conn = http.client.HTTPConnection(self.model_config['host'], self.model_config['port'], timeout=self.timeout)
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.model_config['api_key']}",
-        }
-        body = json.dumps(req)
-        request_path = self.model_config.get('request_path', self.model_config['path'])
-        try:
-            throttle(self.model_config['host'], self.model_config.get('tpm', 5))
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("----------- TO LLM -----------")
-                logger.debug(f"POST {request_path} {headers}")
-                logger.debug(body)
-            conn.request("POST", request_path, body, headers)
-            response = conn.getresponse()
-            response_data = response.read().decode()
-            if logger.isEnabledFor(logging.INFO):
-                logger.info("---------- FROM LLM ----------")
-                logger.info(response_data)
-            if response.status == 429:
-                print(response)
-                logger.warning("Throttled. Waiting 20s")
-                time.sleep(20)
-                raise Exception("Throttled")
-            if response.status == 400:
-                logger.debug(req)
-                raise BadRequestError(response_data.strip())
-            elif response.status != 200:
-                raise Exception(f"API Error {response.status}: {response_data}")
 
-            response_json = json.loads(response_data)
-            parser = self.model_config.get('response_parser') or _parse_completions_response
-            message, stop_reason, usage = parser(response_json)
-            if usage:
-                self.usage_tracker.log(self.model_name, usage)
-            message['_stop_reason'] = stop_reason
-            # Normalize: some providers return tool_calls: null instead of omitting it
-            if 'tool_calls' in message and message['tool_calls'] is None:
-                del message['tool_calls']
-            return message
-        finally:
-            conn.close()
+        context_window = self.model_config.get('context_window')
+        extra_config = dict(self.model_config.get('config', {}))
+        current_max_tokens = extra_config.get('max_tokens')
+        messages = list(messages)
+
+        while True:
+            req = {
+                "model": self.model_config['model'],
+                "messages": messages,
+                **extra_config,
+            }
+            if tools:
+                req.update({
+                    "tools": tools,
+                    "tool_choice": "required",
+                })
+            if self.model_config['port'] == 443:
+                conn = http.client.HTTPSConnection(self.model_config['host'], timeout=self.timeout)
+                conn.connect()
+                sock = conn.sock
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                if TCP_KEEPIDLE is not None:
+                    sock.setsockopt(
+                        socket.IPPROTO_TCP, TCP_KEEPIDLE, 60
+                    )  # 60 sec idle before keepalive
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)    # 10 sec between probes
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)       # 3 probes before giving up
+            else:
+                conn = http.client.HTTPConnection(self.model_config['host'], self.model_config['port'], timeout=self.timeout)
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.model_config['api_key']}",
+            }
+            body = json.dumps(req)
+            request_path = self.model_config.get('request_path', self.model_config['path'])
+            try:
+                throttle(self.model_config['host'], self.model_config.get('tpm', 5))
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("----------- TO LLM -----------")
+                    logger.debug(f"POST {request_path} {headers}")
+                    logger.debug(body)
+                conn.request("POST", request_path, body, headers)
+                response = conn.getresponse()
+                response_data = response.read().decode()
+                if logger.isEnabledFor(logging.INFO):
+                    logger.info("---------- FROM LLM ----------")
+                    logger.info(response_data)
+                if response.status == 429:
+                    print(response)
+                    logger.warning("Throttled. Waiting 20s")
+                    time.sleep(20)
+                    raise Exception("Throttled")
+                if response.status == 400:
+                    logger.debug(req)
+                    raise BadRequestError(response_data.strip())
+                elif response.status != 200:
+                    raise Exception(f"API Error {response.status}: {response_data}")
+
+                response_json = json.loads(response_data)
+                parser = self.model_config.get('response_parser') or _parse_completions_response
+                message, stop_reason, usage = parser(response_json)
+                if usage:
+                    self.usage_tracker.log(self.model_name, usage)
+                message['_stop_reason'] = stop_reason
+
+                if stop_reason in ('max_tokens', 'length', 'MAX_TOKENS') and context_window and current_max_tokens and usage:
+                    prompt_tokens = usage.get('prompt_tokens', 0)
+                    next_max_tokens = current_max_tokens * 2
+                    if prompt_tokens + next_max_tokens <= context_window:
+                        content = message.get('content', '')
+                        if content:
+                            messages.append({'role': 'assistant', 'content': content})
+                        messages.append({'role': 'user', 'content': 'Incomplete response detected. Resubmit your response.'})
+                        current_max_tokens = next_max_tokens
+                        extra_config['max_tokens'] = current_max_tokens
+                        logger.warning(f"stop_reason={stop_reason}, doubling max_tokens to {current_max_tokens}")
+                        continue
+
+                # Normalize: some providers return tool_calls: null instead of omitting it
+                if 'tool_calls' in message and message['tool_calls'] is None:
+                    del message['tool_calls']
+                return message
+            finally:
+                conn.close()
 
     def _call_messages(self, messages, tools):
         """

@@ -30,6 +30,7 @@ class ModelConfig:
     provider: ProviderConfig
     path: str = None
     config: dict = field(default_factory=dict)
+    context_window: int = None
     input_cost: float = None
     output_cost: float = None
     cached_cost: float = None
@@ -321,6 +322,7 @@ register_model("cloudflare","kimi-k2.6",
     model="@cf/moonshotai/kimi-k2.6",
     aliases="cf-kimi",
     path=f"/client/v4/accounts/{os.getenv('CLOUDFLARE_ACCOUNT_ID')}/ai/run/@cf/moonshotai/kimi-k2.6",
+    context_window=262144,
     config={
         "temperature": 1.0,
         "max_tokens": 16384,
