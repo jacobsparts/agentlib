@@ -425,9 +425,6 @@ class LLMClient:
                     prompt_tokens = usage.get('prompt_tokens', 0)
                     next_max_tokens = current_max_tokens * 2
                     if prompt_tokens + next_max_tokens <= context_window:
-                        content = message.get('content', '')
-                        if content:
-                            messages.append({'role': 'assistant', 'content': content})
                         messages.append({'role': 'user', 'content': 'Incomplete response detected. Resubmit your response.'})
                         current_max_tokens = next_max_tokens
                         extra_config['max_tokens'] = current_max_tokens
