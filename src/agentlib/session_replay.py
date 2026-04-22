@@ -1,4 +1,5 @@
 import copy
+import re
 from pathlib import Path
 
 
@@ -54,6 +55,7 @@ def _coalesce_user_messages(messages: list[dict]) -> list[dict]:
         else:
             out.append(msg)
     return out
+
 
 def replay_session_into_agent(agent, session_id: str, store):
     events = store.get_events(session_id)
@@ -121,15 +123,30 @@ def replay_session_into_agent(agent, session_id: str, store):
     return deduped
 
 
+def _extract_released_assistant_text(msg: dict) -> str:
+    value = msg.get("_final_result", msg.get("_emit_value"))
+    if value is not None:
+        return str(value)
+
+    content = msg.get("content") or ""
+    match = re.search(
+        r'emit\(\s*(?P<q>["\']{1,3})(?P<text>.*?)(?P=q)\s*,\s*release\s*=\s*True\s*\)',
+        content,
+        re.DOTALL,
+    )
+    if not match:
+        return ""
+    return bytes(match.group("text"), "utf-8").decode("unicode_escape")
+
+
 def replay_display_text(session_id: str, store) -> str:
     events = store.get_events(session_id)
     snapshots = {}
     chunks: list[str] = []
     released_to_user = False
-    pending_released_reply = False
 
     def snapshot(seq):
-        snapshots[seq] = (copy.deepcopy(chunks), released_to_user, pending_released_reply)
+        snapshots[seq] = (copy.deepcopy(chunks), released_to_user)
 
     snapshot(0)
     for event in events:
@@ -144,16 +161,13 @@ def replay_display_text(session_id: str, store) -> str:
                 and "release=True" in (msg.get("content") or "")
             ):
                 released_to_user = True
-                pending_released_reply = True
+                text = _extract_released_assistant_text(msg)
+                if text:
+                    if not text.endswith("\n"):
+                        text += "\n"
+                    chunks.append(text)
         elif event_type == "display":
             kind = payload.get("kind")
-            if released_to_user and kind == "assistant" and pending_released_reply:
-                text = payload.get("text", "")
-                if text:
-                    chunks.append(text)
-                pending_released_reply = False
-                snapshot(seq)
-                continue
             if released_to_user and kind != "input":
                 snapshot(seq)
                 continue
@@ -162,10 +176,9 @@ def replay_display_text(session_id: str, store) -> str:
                 chunks.append(text)
             if kind == "input":
                 released_to_user = False
-                pending_released_reply = False
         elif event_type == "rewind":
             target_seq = payload["target_seq"]
-            chunks, released_to_user, pending_released_reply = copy.deepcopy(snapshots.get(target_seq, snapshots[0]))
+            chunks, released_to_user = copy.deepcopy(snapshots.get(target_seq, snapshots[0]))
         snapshot(seq)
 
     return "".join(chunks)

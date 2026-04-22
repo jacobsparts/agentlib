@@ -7,6 +7,7 @@ user select one to rewind to. Handles truncation and injects a notice message.
 
 import sys
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
@@ -95,6 +96,23 @@ def _find_assistant_after(events: list[dict], after_seq: int) -> str:
         if etype != 'message_added':
             continue
         msg = ev['payload'].get('message', {})
+        if msg.get('role') == 'assistant':
+            value = msg.get('_final_result', msg.get('_emit_value'))
+            if value is not None:
+                text = str(value).strip()
+                if text:
+                    return text
+            content = msg.get('content', '')
+            match = re.search(
+                r'emit\(\s*(?P<q>["\']{1,3})(?P<text>.*?)(?P=q)\s*,\s*release\s*=\s*True\s*\)',
+                content,
+                re.DOTALL,
+            )
+            if match:
+                text = bytes(match.group('text'), 'utf-8').decode('unicode_escape').strip()
+                if text:
+                    return text
+            continue
         if msg.get('role') != 'user':
             continue
         has_input = any(seg.get('type') == 'input' for seg in (msg.get('_render_segments') or []))
@@ -129,18 +147,15 @@ def _render(exchanges, selected, scroll_offset, term_width, term_height):
     """Render the exchange list for the alt buffer."""
     out = ['\x1b[?25l', '\x1b[2J', '\x1b[H']  # Hide cursor, clear, home
 
-    # Title
     title = ' /rewind - Select a user input to rewind to and edit '
     out.append(f'\x1b[7m{title:<{term_width}}\x1b[0m\n')
 
-    # Instructions
     out.append('\x1b[2m  Up/Down = navigate | Enter = load this input for editing | Esc = cancel\x1b[0m\n\n')
 
-    # Available lines for exchanges (2 lines each + 1 blank separator)
     header_lines = 3
     footer_lines = 2
     available = term_height - header_lines - footer_lines
-    lines_per = 3  # user line + assistant line + blank
+    lines_per = 3
     items_visible = max(1, available // lines_per)
 
     visible = exchanges[scroll_offset:scroll_offset + items_visible]
@@ -149,11 +164,10 @@ def _render(exchanges, selected, scroll_offset, term_width, term_height):
         idx = scroll_offset + i
         is_sel = idx == selected
         marker = '>' if is_sel else ' '
-        # Selected wins, otherwise orphaned style
         if is_sel:
-            style = '\x1b[7m'  # reverse video
+            style = '\x1b[7m'
         elif ex.orphaned:
-            style = '\x1b[2;33m'  # dim yellow for orphaned branch
+            style = '\x1b[2;33m'
         else:
             style = ''
         end = '\x1b[0m' if style else ''
@@ -167,33 +181,22 @@ def _render(exchanges, selected, scroll_offset, term_width, term_height):
         if ex.assistant_preview:
             asst_line = f'        Asst: {ex.assistant_preview}'
         else:
-            asst_line = f'        (no response)'
+            asst_line = '        (no response)'
         asst_line = asst_line[:term_width]
         out.append(f'{style}{asst_line:<{term_width}}{end}\n')
 
         out.append('\n')
 
-    # Footer
-    sel_ex = exchanges[selected]
     num = selected + 1
     orphan_count = sum(1 for ex in exchanges if ex.orphaned)
     legend = f' | \x1b[2;33m~ = orphaned ({orphan_count})\x1b[0m\x1b[2m' if orphan_count else ''
-    out.append(f'\x1b[2m  {len(exchanges)} inputs{legend} | '
-               f'Rewind to input {num} (preloads text for editing)\x1b[0m')
+    out.append(f'\x1b[2m  {len(exchanges)} inputs{legend} | Rewind to input {num} (preloads text for editing)\x1b[0m')
 
     return ''.join(out)
 
 
 def rewind_ui(altmode: 'AltMode', events: list[dict]) -> Optional[dict]:
-    """Interactive rewind UI. Returns the selected target metadata.
-
-    Args:
-        altmode: Active AltMode instance.
-        events: Persisted session event log.
-
-    Returns:
-        Dict with target_seq + preload_input, or None if cancelled.
-    """
+    """Interactive rewind UI. Returns the selected target metadata."""
     from .prompt import RawMode
 
     exchanges = build_exchanges_from_events(events)
@@ -213,7 +216,6 @@ def rewind_ui(altmode: 'AltMode', events: list[dict]) -> Optional[dict]:
                 lines_per = 3
                 items_visible = max(1, (term_height - 5) // lines_per)
 
-                # Keep selected in view
                 if selected < scroll_offset:
                     scroll_offset = selected
                 if selected >= scroll_offset + items_visible:
@@ -231,32 +233,22 @@ def rewind_ui(altmode: 'AltMode', events: list[dict]) -> Optional[dict]:
                     continue
 
                 c = k[0]
-
-                # Ctrl-C
                 if c == 3:
                     return None
-
-                # Bare Escape
                 if c == 27 and len(k) == 1:
                     return None
-
-                # q
                 if c == ord('q'):
                     return None
-
-                # Enter
                 if c in (10, 13):
                     chosen = exchanges[selected]
                     return {
                         "target_seq": chosen.target_seq,
                         "preload_input": chosen.input_text,
                     }
-
-                # Arrow keys
                 if c == 27 and len(k) >= 3 and k[1] == 91:
-                    if k[2] == 65:  # Up
+                    if k[2] == 65:
                         selected = max(0, selected - 1)
-                    elif k[2] == 66:  # Down
+                    elif k[2] == 66:
                         selected = min(len(exchanges) - 1, selected + 1)
     finally:
         session.exit()
