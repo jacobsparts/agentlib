@@ -1,3 +1,4 @@
+import ast
 import copy
 import re
 from pathlib import Path
@@ -129,6 +130,36 @@ def _extract_released_assistant_text(msg: dict) -> str:
         return str(value)
 
     content = msg.get("content") or ""
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        tree = None
+    if tree is not None:
+        for node in tree.body:
+            expr = node.value if isinstance(node, ast.Expr) else None
+            if not isinstance(expr, ast.Call):
+                continue
+            if not isinstance(expr.func, ast.Name) or expr.func.id != "emit":
+                continue
+            released = False
+            for kw in expr.keywords:
+                if kw.arg == "release":
+                    try:
+                        released = bool(ast.literal_eval(kw.value))
+                    except Exception:
+                        released = False
+                    break
+            if not released or not expr.args:
+                continue
+            try:
+                return str(ast.literal_eval(expr.args[0]))
+            except Exception:
+                break
+
+    stripped = content.lstrip()
+    if not stripped.startswith("emit("):
+        return ""
+
     match = re.search(
         r'emit\(\s*(?P<q>["\']{1,3})(?P<text>.*?)(?P=q)\s*,\s*release\s*=\s*True\s*\)',
         content,
@@ -139,14 +170,43 @@ def _extract_released_assistant_text(msg: dict) -> str:
     return bytes(match.group("text"), "utf-8").decode("unicode_escape")
 
 
+def _is_released_assistant_message(msg: dict) -> bool:
+    if msg.get("_final_result", msg.get("_emit_value")) is not None:
+        return True
+
+    content = msg.get("content") or ""
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        tree = None
+    if tree is not None:
+        for node in tree.body:
+            expr = node.value if isinstance(node, ast.Expr) else None
+            if not isinstance(expr, ast.Call):
+                continue
+            if not isinstance(expr.func, ast.Name) or expr.func.id != "emit":
+                continue
+            for kw in expr.keywords:
+                if kw.arg == "release":
+                    try:
+                        return bool(ast.literal_eval(kw.value))
+                    except Exception:
+                        return False
+            return False
+
+    stripped = content.lstrip()
+    return stripped.startswith("emit(") and "release=True" in stripped.replace(" ", "")
+
+
 def replay_display_text(session_id: str, store) -> str:
     events = store.get_events(session_id)
     snapshots = {}
     chunks: list[str] = []
     released_to_user = False
+    just_rewound = False
 
     def snapshot(seq):
-        snapshots[seq] = (copy.deepcopy(chunks), released_to_user)
+        snapshots[seq] = (copy.deepcopy(chunks), released_to_user, just_rewound)
 
     snapshot(0)
     for event in events:
@@ -155,11 +215,7 @@ def replay_display_text(session_id: str, store) -> str:
         event_type = event["event_type"]
         if event_type == "message_added":
             msg = payload.get("message", {})
-            if (
-                msg.get("role") == "assistant"
-                and "emit(" in (msg.get("content") or "")
-                and "release=True" in (msg.get("content") or "")
-            ):
+            if msg.get("role") == "assistant" and _is_released_assistant_message(msg):
                 released_to_user = True
                 text = _extract_released_assistant_text(msg)
                 if text:
@@ -168,7 +224,7 @@ def replay_display_text(session_id: str, store) -> str:
                     chunks.append(text)
         elif event_type == "display":
             kind = payload.get("kind")
-            if released_to_user and kind != "input":
+            if released_to_user and kind != "input" and not (just_rewound and kind == "status"):
                 snapshot(seq)
                 continue
             text = payload.get("text", "")
@@ -176,9 +232,11 @@ def replay_display_text(session_id: str, store) -> str:
                 chunks.append(text)
             if kind == "input":
                 released_to_user = False
+            just_rewound = False
         elif event_type == "rewind":
             target_seq = payload["target_seq"]
-            chunks, released_to_user = copy.deepcopy(snapshots.get(target_seq, snapshots[0]))
+            chunks, released_to_user, _ = copy.deepcopy(snapshots.get(target_seq, snapshots[0]))
+            just_rewound = True
         snapshot(seq)
 
     return "".join(chunks)

@@ -91,3 +91,30 @@ def test_replay_display_text_prefers_persisted_final_result():
 
     out = replay_display_text("sid", store)
     assert out == "> question\n\ncomputed answer\n"
+
+
+def test_replay_display_text_extracts_multiline_concatenated_emit_literal():
+    store = DummyStore([
+        {"seq": 1, "event_type": "display", "payload": {"kind": "input", "text": "> question\n\n"}},
+        {"seq": 2, "event_type": "message_added", "payload": {"message": {
+            "role": "assistant",
+            "content": 'emit(\n    "Done.\\n\\n"\n    "Added entrypoint",\n    release=True,\n)',
+        }}},
+    ])
+
+    out = replay_display_text("sid", store)
+    assert out == "> question\n\nDone.\n\nAdded entrypoint\n"
+
+
+def test_replay_display_text_ignores_emit_inside_string_literal():
+    store = DummyStore([
+        {"seq": 1, "event_type": "display", "payload": {"kind": "input", "text": "> question\n\n"}},
+        {"seq": 2, "event_type": "message_added", "payload": {"message": {
+            "role": "assistant",
+            "content": 'Path("x.py").write_text("""def f():\n    emit(\"55\", release=True)\n""")',
+        }}},
+        {"seq": 3, "event_type": "display", "payload": {"kind": "input", "text": "> next\n\n"}},
+    ])
+
+    out = replay_display_text("sid", store)
+    assert out == "> question\n\n> next\n\n"

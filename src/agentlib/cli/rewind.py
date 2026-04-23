@@ -5,6 +5,7 @@ Displays conversation exchanges in the alternate screen buffer and lets the
 user select one to rewind to. Handles truncation and injects a notice message.
 """
 
+import ast
 import sys
 import os
 import re
@@ -84,6 +85,51 @@ def _strip_repl_echo(text: str) -> str:
     return '\n'.join(lines)
 
 
+def _extract_released_assistant_text(msg: dict) -> str:
+    value = msg.get('_final_result', msg.get('_emit_value'))
+    if value is not None:
+        return str(value)
+
+    content = msg.get('content') or ''
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        tree = None
+    if tree is not None:
+        for node in tree.body:
+            expr = node.value if isinstance(node, ast.Expr) else None
+            if not isinstance(expr, ast.Call):
+                continue
+            if not isinstance(expr.func, ast.Name) or expr.func.id != 'emit':
+                continue
+            released = False
+            for kw in expr.keywords:
+                if kw.arg == 'release':
+                    try:
+                        released = bool(ast.literal_eval(kw.value))
+                    except Exception:
+                        released = False
+                    break
+            if not released or not expr.args:
+                continue
+            try:
+                return str(ast.literal_eval(expr.args[0]))
+            except Exception:
+                break
+
+    stripped = content.lstrip()
+    if not stripped.startswith('emit('):
+        return ''
+    match = re.search(
+        r'emit\(\s*(?P<q>["\']{1,3})(?P<text>.*?)(?P=q)\s*,\s*release\s*=\s*True\s*\)',
+        content,
+        re.DOTALL,
+    )
+    if not match:
+        return ''
+    return bytes(match.group('text'), 'utf-8').decode('unicode_escape')
+
+
 def _find_assistant_after(events: list[dict], after_seq: int) -> str:
     """Return the stripped REPL output that follows the given input — i.e.
     what the user actually saw as the assistant's response."""
@@ -97,21 +143,9 @@ def _find_assistant_after(events: list[dict], after_seq: int) -> str:
             continue
         msg = ev['payload'].get('message', {})
         if msg.get('role') == 'assistant':
-            value = msg.get('_final_result', msg.get('_emit_value'))
-            if value is not None:
-                text = str(value).strip()
-                if text:
-                    return text
-            content = msg.get('content', '')
-            match = re.search(
-                r'emit\(\s*(?P<q>["\']{1,3})(?P<text>.*?)(?P=q)\s*,\s*release\s*=\s*True\s*\)',
-                content,
-                re.DOTALL,
-            )
-            if match:
-                text = bytes(match.group('text'), 'utf-8').decode('unicode_escape').strip()
-                if text:
-                    return text
+            text = _extract_released_assistant_text(msg).strip()
+            if text:
+                return text
             continue
         if msg.get('role') != 'user':
             continue

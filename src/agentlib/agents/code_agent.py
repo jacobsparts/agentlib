@@ -216,7 +216,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         for key, value in message.items():
             if key == '_attachments':
                 continue
-            if key in {'role', 'content', '_stdout', '_user_content', 'name', 'tool_call_id', 'images', 'audio', '_synthetic', '_render_segments'}:
+            if key in {'role', 'content', '_stdout', '_user_content', 'name', 'tool_call_id', 'images', 'audio', '_synthetic', '_render_segments', '_final_result', '_emit_value'}:
                 msg[key] = copy.deepcopy(value)
         refs = message.get('_attachment_refs')
         if refs:
@@ -1223,11 +1223,7 @@ If you don't know how to proceed:
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
         self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
 
-        if files := gather_auto_attach_files():
-            self._display_text(f"Loading {', '.join(files)}", kind="status", create_session=False)
-            for filename in files:
-                self.attach_file_ref(filename, filename)
-
+        resumed_on_start = False
         if resume:
             if resume is True:
                 from agentlib.cli.sessions import select_session_ui
@@ -1235,8 +1231,14 @@ If you don't know how to proceed:
             else:
                 session_id = resume
             if session_id:
-                self.resume_session(session_id)
-        synth = not bool(resume)
+                resumed_on_start = self.resume_session(session_id)
+
+        if not resumed_on_start:
+            if files := gather_auto_attach_files():
+                self._display_text(f"Loading {', '.join(files)}", kind="status", create_session=False)
+                for filename in files:
+                    self.attach_file_ref(filename, filename)
+        synth = not resumed_on_start and not bool(resume)
 
         try:
             preload_input = ""
