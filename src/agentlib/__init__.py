@@ -23,6 +23,16 @@ from .tools.subshell import SubShell, STILL_RUNNING
 from .tools.subrepl import SubREPL
 from .cli import CLIMixin, CLIAgent
 from .repl_agent import REPLAgent
+from .repl_benchmark import (
+    BenchmarkRunResult,
+    BenchmarkTask,
+    BenchmarkTaskResult,
+    BenchmarkViolation,
+    InstrumentedREPLBenchmarkMixin,
+    REPLBenchmarkRunner,
+    discover_tasks,
+    register_task,
+)
 from .agents import CodeAgent, CodeAgentBase
 
 __all__ = [
@@ -56,6 +66,14 @@ __all__ = [
     "CLIAgent",
     # REPL-based agent
     "REPLAgent",
+    "BenchmarkTask",
+    "BenchmarkTaskResult",
+    "BenchmarkRunResult",
+    "BenchmarkViolation",
+    "InstrumentedREPLBenchmarkMixin",
+    "REPLBenchmarkRunner",
+    "register_task",
+    "discover_tasks",
     # Ready-to-use agents
     "CodeAgent",
     "CodeAgentBase",

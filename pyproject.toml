@@ -29,6 +29,7 @@ dev = [
 
 [project.scripts]
 code-agent = "agentlib.agents.code_agent:main"
+repl-benchmark = "agentlib.repl_benchmark.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
