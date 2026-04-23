@@ -14,6 +14,7 @@ from collections import defaultdict
 from .utils import throttle, JSON_INDENT, UsageTracker
 from .llm_registry import get_model_config
 from .conversation import Conversation
+from .streaming import wrap_chat_completions_streaming_response
 
 # Define TCP keepalive constants for cross-platform compatibility
 try:
@@ -401,6 +402,11 @@ class LLMClient:
                     logger.debug(body)
                 conn.request("POST", request_path, body, headers)
                 response = conn.getresponse()
+                content_type = ""
+                if getattr(response, "headers", None):
+                    content_type = response.headers.get("Content-Type", "")
+                if "text/event-stream" in content_type.lower():
+                    response = wrap_chat_completions_streaming_response(response)
                 response_data = response.read().decode()
                 if logger.isEnabledFor(logging.INFO):
                     logger.info("---------- FROM LLM ----------")
