@@ -449,6 +449,10 @@ class LLMClient:
                 # Normalize: some providers return tool_calls: null instead of omitting it
                 if 'tool_calls' in message and message['tool_calls'] is None:
                     del message['tool_calls']
+                # Strip response-only media fields — these are already rendered
+                # in content blocks and would crash re-encoding on the next call
+                for k in ('images', 'audio'):
+                    message.pop(k, None)
                 return message
             finally:
                 conn.close()
@@ -808,7 +812,7 @@ class LLMClient:
                 return self._call(messages)
         except Exception as e:
             err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
-            logger.error(f"text_call {type(e).__name__}: {err} (line {sys.exc_info()[2].tb_lineno})")
+            logger.error(f"text_call {type(e).__name__}: {err}", exc_info=True)
             if retry:
                 self._sleep_backoff(attempt)
                 return self.text_call(messages, retry-1, attempt+1)

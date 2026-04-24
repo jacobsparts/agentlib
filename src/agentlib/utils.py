@@ -1,4 +1,5 @@
 import atexit
+import os
 import threading
 import time
 import logging
@@ -24,7 +25,8 @@ class UsageTracker:
     lock = threading.BoundedSemaphore()
     def __init__(self):
         self.history = []
-        atexit.register(self.print_stats)
+        if not os.getenv("AGENTLIB_SUPPRESS_USAGE_ATEXIT"):
+            atexit.register(self.print_stats)
 
     def log(self, model_name, usage):
         with self.lock:

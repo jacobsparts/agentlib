@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -10,7 +11,10 @@ def utc_now_iso() -> str:
 
 
 def resolve_db_path() -> Path:
-    path = Path.home() / ".agentlib" / "sessions.db"
+    if override := os.getenv("AGENTLIB_SESSION_DB"):
+        path = Path(override).expanduser()
+    else:
+        path = Path.home() / ".agentlib" / "sessions.db"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

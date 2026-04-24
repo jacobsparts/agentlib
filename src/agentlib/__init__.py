@@ -33,8 +33,6 @@ from .repl_benchmark import (
     discover_tasks,
     register_task,
 )
-from .agents import CodeAgent, CodeAgentBase
-
 __all__ = [
     "BaseAgent",
     "ToolMixin",
@@ -80,3 +78,10 @@ __all__ = [
 ]
 
 __version__ = "0.3.0"
+
+
+def __getattr__(name):
+    if name in {"CodeAgent", "CodeAgentBase"}:
+        from .agents import CodeAgent, CodeAgentBase
+        return {"CodeAgent": CodeAgent, "CodeAgentBase": CodeAgentBase}[name]
+    raise AttributeError(name)

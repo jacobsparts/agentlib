@@ -1,12 +1,24 @@
 
 import json
 import os
+import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from textwrap import dedent
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from agentlib.repl_benchmark import BenchmarkTask, REPLBenchmarkRunner, discover_tasks, format_summary, register_task
+from agentlib.repl_benchmark import (
+    BenchmarkTask,
+    REPLBenchmarkRunner,
+    build_code_agent_test_env,
+    discover_tasks,
+    format_summary,
+    register_task,
+    run_pty_session,
+    strip_ansi,
+)
 from agentlib.repl_benchmark.core import BenchmarkTaskContext, checker_expected_int, default_checker
 from agentlib.repl_benchmark.registry import task_registry
 
@@ -241,3 +253,252 @@ def test_cli_human_summary_with_fake_agent(tmp_path):
     )
     assert "REPL Benchmark Summary" in proc.stdout
     assert "cli/task: PASS" in proc.stdout
+
+
+def test_code_agent_cli_trivial_pty(tmp_path):
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers["Content-Length"])
+            self.rfile.read(length)
+            payload = {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": 'emit("4", release=True)',
+                    },
+                    "finish_reason": "stop",
+                }],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "total_tokens": 14,
+                },
+            }
+            data = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args, **kwargs):
+            pass
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    server = HTTPServer(("127.0.0.1", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    home = tmp_path / "home"
+    agentlib_dir = home / ".agentlib"
+    agentlib_dir.mkdir(parents=True)
+    (agentlib_dir / "config.py").write_text(dedent(f"""\
+register_provider(
+    "testlocal",
+    host="127.0.0.1",
+    path="/v1/chat/completions",
+    port={port},
+    timeout=10,
+    tpm=1000,
+    concurrency=5,
+    tools=False,
+    api_type="completions",
+)
+register_model(
+    "testlocal",
+    "tiny",
+    aliases="test-code-agent",
+    model="tiny",
+    input_cost=0.0,
+    output_cost=0.0,
+)
+code_agent_model = "test-code-agent"
+"""))
+
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    env["TESTLOCAL_API_KEY"] = "dummy"
+    env["AGENTLIB_SESSION_DB"] = str(tmp_path / "sessions.db")
+    env["AGENTLIB_CLI_HISTORY_DB"] = str(tmp_path / "cli_history.db")
+    env["PYTHONPATH"] = '/home/jacob/agentlib/src:/usr/local/lib/python3.11/site-packages:/home/jacob/.local/lib/python3.11/site-packages'
+
+    try:
+        result = run_pty_session(
+            [sys.executable, "-m", "agentlib.agents.code_agent", "--model", "test-code-agent"],
+            inputs=["What is 2+2?\n"],
+            env=env,
+            cwd=str(Path.cwd()),
+            timeout=20,
+            wait_for="4",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+    text = strip_ansi(result.output)
+    assert result.returncode == 0
+    assert "4" in text
+    assert "Session ended. Goodbye!" in text
+    assert Path(env["AGENTLIB_SESSION_DB"]).exists()
+    assert Path(env["AGENTLIB_CLI_HISTORY_DB"]).exists()
+
+
+def test_cli_includes_code_agent_builtin_suite(tmp_path):
+    class Handler(BaseHTTPRequestHandler):
+        counters = {}
+
+        @classmethod
+        def next_response(cls, text):
+            key_map = [
+                ("YYYY-MM-DD", ['emit("2026-04-23", release=True)']),
+                ("17 * 19 + 23", ['emit("346", release=True)']),
+                ("agentlib benchmark", ['emit("AGENTLIB BENCHMARK", release=True)']),
+                ("sum the numbers [5, 8, 13, 21]", ['emit("47", release=True)']),
+                ("2 ** 10", ['emit("1024", release=True)']),
+                ("release discipline", ['emit("18", release=True)']),
+                ("12345 squared", ['emit("25", release=True)']),
+                ("sum(range(1, 11))", ['emit("55", release=True)']),
+                ("overrides the session sqlite path", ['preview(_v1 := grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)']),
+                ("CLI history sqlite path override", ['preview(_v1 := grep("AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_CLI_HISTORY_DB", release=True)']),
+                ("exact first progress text from the synthetic exchange", ['_code = read("src/agentlib/agents/code_agent.py")\npreview(_code)', 'emit("Checking today\'s date...", release=True)']),
+                ("number of tool names in _preview_targets", ['_code = read("src/agentlib/agents/code_agent.py")\nemit("3", release=True)']),
+                ("sqlite state can be isolated", ['preview(_v1 := grep("AGENTLIB_SESSION_DB|AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))', 'import json\n_s = read("src/agentlib/session_store.py")\n_h = read("src/agentlib/cli/mixin.py")\nemit(json.dumps({"session_db_source":"AGENTLIB_SESSION_DB in session_store.resolve_db_path","history_db_source":"AGENTLIB_CLI_HISTORY_DB in SQLiteHistory.__init__","reason":"Environment variable overrides force each sqlite path to a temp test db, so benchmark state stays isolated."}), release=True)']),
+                ("/resume succeeds", ['_a = read("src/agentlib/agents/code_agent.py")\n_b = read("src/agentlib/session_replay.py")\npreview(_a)', 'emit("resume_session -> replay_session_into_agent -> _replay_display_output; then usermsg adds system_reset / REPL session has been reset", release=True)']),
+                ("functional difference between those tools", ['_code = read("src/agentlib/agents/code_agent.py")\npreview(_code)', 'import json\nemit(json.dumps({"read":"returns file contents as text for use as a Python value","view_file":"shows numbered lines and attachment behavior for conversation context"}), release=True)']),
+            ]
+            for marker, responses in key_map:
+                if marker in text:
+                    idx = cls.counters.get(marker, 0)
+                    cls.counters[marker] = idx + 1
+                    return responses[min(idx, len(responses) - 1)]
+            return 'emit("fallback", release=True)'
+
+        def do_POST(self):
+            length = int(self.headers["Content-Length"])
+            payload = json.loads(self.rfile.read(length))
+            text = payload["messages"][-1]["content"]
+            content = self.next_response(text)
+            response = {
+                "choices": [{
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "total_tokens": 14,
+                },
+            }
+            data = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args, **kwargs):
+            pass
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    server = HTTPServer(("127.0.0.1", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    env = build_code_agent_test_env(tmp_path, port=port)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "agentlib.repl_benchmark.cli", "--model", "test-code-agent", "--json"],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=True,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+    payload = json.loads(proc.stdout)
+    task_ids = {item["task_id"] for item in payload["task_results"]}
+    assert "basic/arithmetic" in task_ids
+    assert "code-agent/sqlite-isolation-explanation" in task_ids
+    assert "code-agent/resume-flow-summary" in task_ids
+
+
+def test_cli_can_stream_code_agent_repl_output(tmp_path):
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers["Content-Length"])
+            payload = json.loads(self.rfile.read(length))
+            text = payload["messages"][-1]["content"]
+            if "overrides the session sqlite path" in text:
+                content = 'preview(_v1 := grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)'
+            else:
+                content = 'emit("fallback", release=True)'
+            response = {
+                "choices": [{
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "total_tokens": 14,
+                },
+            }
+            data = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args, **kwargs):
+            pass
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    server = HTTPServer(("127.0.0.1", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    env = build_code_agent_test_env(
+        tmp_path,
+        port=port,
+        extra_env={"AGENTLIB_CODE_AGENT_MODEL": "test-code-agent"},
+    )
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "agentlib.repl_benchmark.cli",
+                "--model",
+                "test-code-agent",
+                "--no-builtin",
+                "--show-repl-output",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=True,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+    assert "Code Agent" in proc.stderr
+    assert "AGENTLIB_SESSION_DB" in proc.stderr
+    payload = json.loads(proc.stdout)
+    task_ids = {item["task_id"] for item in payload["task_results"]}
+    assert "code-agent/repo-session-db-var" in task_ids

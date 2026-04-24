@@ -25,6 +25,7 @@ Or use the pre-composed CLIAgent:
     MyAssistant.main()
 """
 
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -48,7 +49,7 @@ class SQLiteHistory:
 
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
-            db_path = str(Path.home() / ".agentlib_cli_history.db")
+            db_path = os.getenv("AGENTLIB_CLI_HISTORY_DB") or str(Path.home() / ".agentlib_cli_history.db")
         else:
             db_path = str(Path(db_path).expanduser())
         self.db_path = db_path

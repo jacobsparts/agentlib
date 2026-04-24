@@ -383,6 +383,7 @@ class InstrumentedREPLBenchmarkMixin:
 
     def _ensure_setup(self):
         super()._ensure_setup()
+        self._suspend_persistence = True
         self._benchmark_reset_metrics()
 
     def _benchmark_reset_metrics(self):
