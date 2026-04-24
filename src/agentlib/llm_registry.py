@@ -108,48 +108,28 @@ register_provider("openai",
     tools=True,
     api_type="completions",
 )
-reasoning_none = {"config":{"reasoning_effort": "none"}}
-reasoning_medium = {"config":{"reasoning_effort": "medium"}}
-reasoning_high = {"config":{"reasoning_effort": "high"}}
-gpt52 = {
-    'model': 'gpt-5.2',
-    'input_cost': 1.75,
-    'cached_cost': 0.175,
-    'output_cost': 14.0
-}
-register_model("openai", "gpt-5.2", **gpt52, **reasoning_none)
-register_model("openai", "gpt-5.2-medium", **gpt52, **reasoning_medium)
-register_model("openai", "gpt-5.2-high", **gpt52, **reasoning_high)
-register_model("openai", "gpt-5.1",
-    model="gpt-5.1",
-    input_cost=1.25,
-    cached_cost=0.125,
-    output_cost=10.0,
-    **reasoning_none
-)
-register_model("openai","gpt-5-mini",
-    model="gpt-5-mini",
-    aliases="mini",
-    input_cost=0.25,
-    cached_cost=0.025,
-    output_cost=2.0,
-    **reasoning_high
-)
-register_model("openai","gpt-5-mini-flex",
-    model="gpt-5-mini",
-    input_cost=0.125,
-    cached_cost=0.013,
-    output_cost=1.0,
-    config={"reasoning_effort": "high", "service_tier": "flex"},
-    timeout=1200,
-)
-gpt41 = {
-    "model": "gpt-4.1",
-    "input_cost": 1.75,
-    "cached_cost": 0.175,
-    "output_cost": 14.0,
-}
-register_model("openai", "gpt-4.1", **gpt41)
+
+for conf, efforts in (
+    ({'model': 'gpt-4.1', 'input_cost': 2.0, 'cached_cost': 0.5, 'output_cost': 8.0}, (None,)),
+    ({'model': 'gpt-5-mini', 'input_cost': 0.25, 'cached_cost': 0.025, 'output_cost': 2.0}, ('high',)),
+    ({'model': 'gpt-5.1', 'input_cost': 1.25, 'cached_cost': 0.125, 'output_cost': 10.0}, ('none',)),
+    ({'model': 'gpt-5.2', 'input_cost': 1.75, 'cached_cost': 0.175, 'output_cost': 14.0}, ('none', 'medium', 'high')),
+    ({'model': 'gpt-5.4', 'input_cost': 2.5, 'cached_cost': 0.25, 'output_cost': 15.0}, ('none', 'medium', 'high')),
+    ({'model': 'gpt-5.4-mini', 'input_cost': 0.75, 'cached_cost': 0.075, 'output_cost': 4.5}, ('high',)),
+    ({'model': 'gpt-5.4-nano', 'input_cost': 0.2, 'cached_cost': 0.02, 'output_cost': 1.25}, ('high',)),
+    ({'model': 'gpt-5.5', 'input_cost': 5.0, 'cached_cost': 0.5, 'output_cost': 30.0}, ('none', 'medium', 'high')),
+):
+    for effort in efforts:
+        suffix = '' if (effort == 'none' or len(efforts) == 1) else f"-{effort}"
+        kwargs = {**conf, "config":{"reasoning_effort": effort}} if effort else conf
+        register_model("openai", f"{conf['model']}{suffix}", **kwargs)
+        if conf['model'] == 'gpt-5-mini':
+            kwargs['config']['service_tier'] = "flex"
+            kwargs['timeout'] = 1200
+            for k in ('input_cost','cached_cost','output_cost'):
+                kwargs[k] /= 2
+            register_model("openai", f"{conf['model']}{suffix}-flex", **kwargs)
+
 
 # --- Anthropic ---
 register_provider("anthropic",
