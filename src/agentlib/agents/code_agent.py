@@ -387,7 +387,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 path = partial_read_path
                 partial_read_path = None
                 if self._is_attached(path):
-                    result.append(f"ValueError: Partial view_file denied for file already in context. Call view_file() without offset or limit to reload the file, or ask the user to /detach the file to enable partial views.\n")
+                    result.append(f"ValueError: Partial view_file denied for file already in context. Call view_file() without offset or limit to reload the file, or call unview_file({path!r}) to remove it from future context and enable partial views.\n")
                     continue
                 result.append(chunk)
                 continue
@@ -584,15 +584,24 @@ Don't reconnect every turn - the connection object persists.
 read() returns file contents as text. Use it when you need to assign, search,
 split, or otherwise process file contents in Python.
 
-Use view_file("file.py") to display a file with line numbers and attach full
-reads into context.
+Use view_file("file.py") to display a file with line numbers and attach the
+full file into context. Prefer one full view_file(file_path) when inspecting
+code.
+If you accidentally use view_file() on an irrelevant file, call
+unview_file(file_path) on a later turn to remove it from future context.
 
-Use read(file_path, offset=..., limit=...) when you need a text snippet.
-Use view_file(file_path, offset=..., limit=...) when you need numbered output
-for inspection.
+Avoid repeated narrow view_file(..., offset=..., limit=...) calls on the same
+normal-sized file; they usually create more context churn than one full
+attachment.
+Use view_file(..., offset=..., limit=...) only when the file is genuinely
+huge, minified/generated, or when a very narrow follow-up is clearly more
+efficient.
 
-File reads are complete unless otherwise indicated. Re-reading wastes tokens.
-Variables persist across turns. Don't re-fetch data you already have.
+Full view_file() attachments are refreshed when files change, so re-viewing a
+normal-sized file updates context rather than accumulating stale duplicate
+copies.
+Variables persist across turns. For files you inspect with view_file(), prefer
+one refreshed full-file view over accumulating many partial snippets.
 
 preview(value) displays a potentially long string. Short strings print in
 full; long strings show a head/tail summary with line and character counts.
@@ -606,9 +615,11 @@ full; long strings show a head/tail summary with line and character counts.
 
 >>> doing_tasks()
 
-Before modifying code, read it first. Never propose changes to code you
-haven't seen. Use grep() to search content, Path.glob() to find files,
-or bash() for other shell commands like find, ls, git, etc.
+Before modifying code, view it first. Never propose changes to code you
+haven't seen. Use grep() to locate files or anchors, then prefer one full
+view_file() of the target file rather than several narrow view_file(...,
+offset=..., limit=...) slices, unless the file is genuinely huge. Use read()
+when you need file contents as a Python text value for processing.
 
 Avoid over-engineering:
 - Only make changes directly requested or clearly necessary
@@ -685,6 +696,19 @@ read("file.py", offset=1, limit=50)   # WRONG - just read the whole file
 
 # GOOD: Just call read() directly
 read("file.py")
+
+# BAD: Repeated narrow view_file() calls on the same normal-sized file
+view_file("app.js", offset=2200, limit=40)
+view_file("app.js", offset=2400, limit=30)
+view_file("app.js", offset=3300, limit=20)
+
+# GOOD: Use grep() to locate anchors, then inspect the file once
+grep("triggerFindPrompt|focusTerminalFromTouch", "app.js", None, None, False, 0, False, False)
+view_file("app.js")
+
+# GOOD: If you viewed the wrong file, remove it from future context
+view_file("wrong_file.py")
+unview_file("wrong_file.py")
 
 # BAD: Re-establishing connections
 conn = mysql.connector.connect(...)  # Every turn? No!
@@ -1791,6 +1815,25 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             _send_output("read_partial", file_path + "\n")
 
         _send_output("read", output + "\n")
+
+    @REPLAgent.tool(inject=True)
+    def unview_file(self,
+            file_path: str = "Path to a file previously viewed with view_file()"
+        ):
+        """Remove a previously viewed file from future context.
+
+        Use this if you viewed the wrong file with view_file() or no longer
+        need it in context. This only affects future turns.
+        """
+        attachments = self.list_attachments()
+        explicit_refs = getattr(self, '_explicit_attachment_refs', {})
+        if file_path not in attachments and file_path not in explicit_refs:
+            return f"File not currently in context: {file_path}"
+        if file_path in explicit_refs:
+            self.detach_file_ref(file_path)
+        else:
+            self.detach(file_path)
+        return f"Removed from future context: {file_path}"
 
     @REPLAgent.tool(inject=True)
     def edit(self,
