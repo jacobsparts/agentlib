@@ -19,6 +19,7 @@ from agentlib.repl_benchmark import (
     run_pty_session,
     strip_ansi,
 )
+from agentlib.repl_benchmark.code_agent_harness import strip_events
 from agentlib.repl_benchmark.core import BenchmarkTaskContext, checker_expected_int, default_checker
 from agentlib.repl_benchmark.registry import task_registry
 
@@ -348,6 +349,68 @@ code_agent_model = "test-code-agent"
     assert Path(env["AGENTLIB_CLI_HISTORY_DB"]).exists()
 
 
+def test_code_agent_pty_captures_syntax_retry_event(tmp_path):
+    class Handler(BaseHTTPRequestHandler):
+        calls = 0
+
+        def do_POST(self):
+            type(self).calls += 1
+            length = int(self.headers["Content-Length"])
+            self.rfile.read(length)
+            content = "not valid python !!!" if type(self).calls == 1 else 'emit("fixed", release=True)'
+            payload = {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                    },
+                    "finish_reason": "stop",
+                }],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "total_tokens": 14,
+                },
+            }
+            data = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args, **kwargs):
+            pass
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    server = HTTPServer(("127.0.0.1", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    env = build_code_agent_test_env(tmp_path, port=port, extra_env={"SHOW_EVENTS": "1"})
+    try:
+        result = run_pty_session(
+            [sys.executable, "-m", "agentlib.agents.code_agent", "--model", "test-code-agent"],
+            inputs=["Return fixed\n"],
+            env=env,
+            cwd=str(Path.cwd()),
+            timeout=20,
+            wait_for="fixed",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+    assert result.returncode == 0
+    assert any(event.get("type") == "syntax_retry" and event.get("attempt") == 1 for event in result.events or [])
+    assert "[[AGENTLIB_EVENT:" in result.output
+    assert "[[AGENTLIB_EVENT:" not in strip_events(result.output)
+
+
 def test_cli_includes_code_agent_builtin_suite(tmp_path):
     class Handler(BaseHTTPRequestHandler):
         counters = {}
@@ -355,7 +418,7 @@ def test_cli_includes_code_agent_builtin_suite(tmp_path):
         @classmethod
         def next_response(cls, text):
             key_map = [
-                ("YYYY-MM-DD", ['emit("2026-04-23", release=True)']),
+                ("YYYY-MM-DD", [f'emit("{__import__("datetime").date.today().isoformat()}", release=True)']),
                 ("17 * 19 + 23", ['emit("346", release=True)']),
                 ("agentlib benchmark", ['emit("AGENTLIB BENCHMARK", release=True)']),
                 ("sum the numbers [5, 8, 13, 21]", ['emit("47", release=True)']),
@@ -365,7 +428,7 @@ def test_cli_includes_code_agent_builtin_suite(tmp_path):
                 ("sum(range(1, 11))", ['emit("55", release=True)']),
                 ("overrides the session sqlite path", ['preview(_v1 := grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)']),
                 ("CLI history sqlite path override", ['preview(_v1 := grep("AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_CLI_HISTORY_DB", release=True)']),
-                ("exact first progress text from the synthetic exchange", ['_code = read("src/agentlib/agents/code_agent.py")\npreview(_code)', 'emit("Checking today\'s date...", release=True)']),
+                ("first emit() call", ['_code = read("src/agentlib/agents/code_agent.py")\npreview(_code)', 'emit("Checking today\'s date...", release=True)']),
                 ("number of tool names in _preview_targets", ['_code = read("src/agentlib/agents/code_agent.py")\nemit("3", release=True)']),
                 ("sqlite state can be isolated", ['preview(_v1 := grep("AGENTLIB_SESSION_DB|AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))', 'import json\n_s = read("src/agentlib/session_store.py")\n_h = read("src/agentlib/cli/mixin.py")\nemit(json.dumps({"session_db_source":"AGENTLIB_SESSION_DB in session_store.resolve_db_path","history_db_source":"AGENTLIB_CLI_HISTORY_DB in SQLiteHistory.__init__","reason":"Environment variable overrides force each sqlite path to a temp test db, so benchmark state stays isolated."}), release=True)']),
                 ("/resume succeeds", ['_a = read("src/agentlib/agents/code_agent.py")\n_b = read("src/agentlib/session_replay.py")\npreview(_a)', 'emit("resume_session -> replay_session_into_agent -> _replay_display_output; then usermsg adds system_reset / REPL session has been reset", release=True)']),

@@ -44,6 +44,7 @@ import ast
 import inspect
 import json
 import logging
+import os
 import signal
 import sys
 from multiprocessing import Process, Queue
@@ -51,6 +52,20 @@ from queue import Empty
 from typing import Any, Callable, Optional, Union
 
 logger = logging.getLogger('agentlib')
+_EVENT_PREFIX = "[[AGENTLIB_EVENT:"
+_EVENT_SUFFIX = "]]"
+
+
+def _show_events_enabled() -> bool:
+    value = os.getenv("SHOW_EVENTS", "")
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _emit_event(event_type: str, **payload) -> None:
+    if not _show_events_enabled():
+        return
+    event = {"type": event_type, **payload}
+    print(f"{_EVENT_PREFIX}{json.dumps(event, separators=(',', ':'))}{_EVENT_SUFFIX}", file=sys.stderr, flush=True)
 
 from agentlib.agent import BaseAgent, _CompleteException
 from agentlib.client import BadRequestError
@@ -960,6 +975,7 @@ Call help(function_name) for parameter descriptions.
                         raise
 
                     content = (resp.get('content') or '').strip()
+                    resp['content'] = content
                     if not content:
                         break
 
@@ -977,6 +993,7 @@ Call help(function_name) for parameter descriptions.
                     logger.debug(f"SyntaxError, retry #{syntax_retry + 1}")
                     if hasattr(self, 'on_retry'):
                         self.on_retry("syntax", syntax_retry + 1)
+                    _emit_event("syntax_retry", attempt=syntax_retry + 1)
                     hint = (
                         "Your previous response was rejected because the response body itself must be valid Python source code.\n\n"
                         "Write raw Python only.\n"

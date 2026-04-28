@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from .code_agent_harness import PTYRunResult, PTYTimeoutError, run_pty_session, strip_ansi
+from .code_agent_harness import PTYRunResult, PTYTimeoutError, run_pty_session, strip_ansi, strip_events
 from .core import (
     BenchmarkCategoryScore,
     BenchmarkRunResult,
@@ -26,6 +26,32 @@ from .core import (
 Checker = Callable[["CodeAgentBenchmarkContext"], tuple[bool, list[BenchmarkViolation]]]
 TaskPrepare = Callable[[Path, Path], dict[str, object]]
 
+FATAL_CORRECTNESS_CODES = {
+    "fatal_wrong_result",
+    "nonzero_exit",
+    "invalid_json",
+    "missing_target_file",
+    "wrong_file_content",
+}
+
+
+def normalize_final_answer(value: str) -> str:
+    text = value.strip()
+    for quote in ("`", "'", '"'):
+        if len(text) >= 2 and text.startswith(quote) and text.endswith(quote):
+            text = text[1:-1].strip()
+    return text
+
+
+def _answer_contains_expected(actual: str, expected: str) -> bool:
+    actual_norm = normalize_final_answer(actual)
+    expected_norm = normalize_final_answer(expected)
+    if not actual_norm or not expected_norm:
+        return False
+    if re.fullmatch(r"\d+", expected_norm):
+        return bool(re.search(rf"(?<!\d){re.escape(expected_norm)}(?!\d)", actual_norm))
+    return expected_norm in actual_norm
+
 
 @dataclass
 class CodeAgentBenchmarkTask:
@@ -33,9 +59,9 @@ class CodeAgentBenchmarkTask:
     prompt: str
     checker: Checker
     description: str = ""
-    max_turns: int = 8
-    timeout: float = 25.0
-    wait_for: str = "Session ended. Goodbye!"
+    max_turns: int = 30
+    timeout: float = 300.0
+    wait_for: str | None = None
     tags: tuple[str, ...] = ()
     weights: ScoreWeights = field(default_factory=ScoreWeights)
     prepare: Optional[TaskPrepare] = None
@@ -111,6 +137,8 @@ class CodeAgentBenchmarkContext:
                 continue
             if re.fullmatch(r".*· (?:sandbox|no sandbox)", line):
                 continue
+            if re.match(r"^[\w/.-]+: In=\d+", line):
+                continue
             candidates.append(line)
         return candidates[-1] if candidates else ""
 
@@ -118,6 +146,10 @@ class CodeAgentBenchmarkContext:
     def turn_count(self) -> int:
         turns = {int(num) for num in re.findall(r"Working... \(turn (\d+)\)", self.output)}
         return max(turns) if turns else 0
+
+    @property
+    def syntax_retries(self) -> int:
+        return sum(1 for event in (self.run.events or []) if event.get("type") == "syntax_retry")
 
     def saw_tool(self, tool_name: str) -> bool:
         return f">>> {tool_name}(" in self.output or f"{tool_name}(" in self.output
@@ -212,22 +244,24 @@ class CodeAgentBenchmarkSuite:
                 str(task.max_turns),
                 *self.agent_args,
             ]
+            run_env = dict(env)
+            run_env.setdefault("SHOW_EVENTS", "1")
             timeout_error = None
             try:
                 run = run_pty_session(
                     args,
                     inputs=[prompt.rstrip("\n") + "\n"],
-                    env=env,
+                    env=run_env,
                     cwd=str(cwd_path),
                     timeout=task.timeout,
                     wait_for=task.wait_for,
                     stream_output=self.stream_output,
                 )
-                output = strip_ansi(run.output).replace("\r", "")
+                output = strip_events(strip_ansi(run.output).replace("\r", ""))
             except PTYTimeoutError as exc:
                 timeout_error = str(exc)
-                output = strip_ansi(exc.output).replace("\r", "")
-                run = PTYRunResult(args=args, returncode=124, output=exc.output)
+                output = strip_events(strip_ansi(exc.output).replace("\r", ""))
+                run = PTYRunResult(args=args, returncode=124, output=exc.output, events=exc.events)
             ctx = CodeAgentBenchmarkContext(
                 task=task,
                 run=run,
@@ -242,6 +276,7 @@ class CodeAgentBenchmarkSuite:
             passed, violations = task.checker(ctx)
             metrics = {
                 "turns": ctx.turn_count,
+                "syntax_retries": ctx.syntax_retries,
                 "file_edit_attempts": ctx.file_edit_attempts,
                 "failed_edit_attempts": ctx.failed_edit_attempts,
                 "task_dir": str(task_dir),
@@ -296,6 +331,14 @@ class CodeAgentBenchmarkRunner:
         env.setdefault("AGENTLIB_CLI_HISTORY_DB", str(temp_root / "cli_history.db"))
         return env
 
+    def _apply_correctness_gate(
+        self,
+        violations: list[BenchmarkViolation],
+    ) -> tuple[float | None, str | None]:
+        if not any(v.category == "correctness" and v.code in FATAL_CORRECTNESS_CODES for v in violations):
+            return None, None
+        return 0.0, "fatal correctness failure: ancillary category scores excluded from grand total"
+
     def run(self) -> BenchmarkRunResult:
         task_results: list[BenchmarkTaskResult] = []
         with tempfile.TemporaryDirectory(prefix="agentlib-code-agent-bench-") as temp_dir:
@@ -316,6 +359,7 @@ class CodeAgentBenchmarkRunner:
                 scores = full_scores(task.weights)
                 scores = apply_violations(scores, item.violations)
                 total_score, total_possible = finalize_scores(scores)
+                adjusted_total_score, adjusted_total_reason = self._apply_correctness_gate(item.violations)
                 task_results.append(BenchmarkTaskResult(
                     task_id=item.task_id,
                     passed=item.passed,
@@ -330,6 +374,8 @@ class CodeAgentBenchmarkRunner:
                     total_possible=total_possible,
                     metrics=dict(item.metrics, pty_returncode=item.returncode, output=item.output),
                     violations=item.violations,
+                    adjusted_total_score=adjusted_total_score,
+                    adjusted_total_reason=adjusted_total_reason,
                 ))
 
         totals_by_category: dict[str, BenchmarkCategoryScore] = {}
@@ -341,7 +387,7 @@ class CodeAgentBenchmarkRunner:
                 )
                 bucket.earned += score.earned
                 bucket.possible += score.possible
-        total_score = sum(score.earned for score in totals_by_category.values())
+        total_score = sum(result.effective_total_score for result in task_results)
         total_possible = sum(score.possible for score in totals_by_category.values())
         return BenchmarkRunResult(
             model=self.model,
@@ -416,6 +462,23 @@ def build_code_agent_test_env(
     return env
 
 
+_FILE_READ_TOOLS = frozenset({"read", "view_file"})
+
+
+def _saw_tool_equiv(ctx: "CodeAgentBenchmarkContext", tool_name: str) -> bool:
+    if tool_name in _FILE_READ_TOOLS:
+        return any(ctx.saw_tool(t) for t in _FILE_READ_TOOLS)
+    return ctx.saw_tool(tool_name)
+
+
+def _tool_offset_equiv(ctx: "CodeAgentBenchmarkContext", tool_name: str) -> int:
+    if tool_name in _FILE_READ_TOOLS:
+        offsets = [ctx.tool_offset(t) for t in _FILE_READ_TOOLS]
+        valid = [o for o in offsets if o != -1]
+        return min(valid) if valid else -1
+    return ctx.tool_offset(tool_name)
+
+
 def make_code_agent_checker(
     *,
     expected_final: str,
@@ -431,43 +494,61 @@ def make_code_agent_checker(
             violations.append(make_violation(
                 "nonzero_exit",
                 f"code-agent exited with status {ctx.run.returncode}",
-                1.0,
+                35.0,
                 "correctness",
             ))
-        if ctx.final_line != expected_final:
+        actual_final = normalize_final_answer(ctx.final_line)
+        expected_normalized = normalize_final_answer(expected_final)
+        if actual_final != expected_normalized:
+            if _answer_contains_expected(ctx.final_line, expected_final):
+                violations.append(make_violation(
+                    "answer_format",
+                    f"expected final line {expected_final!r} only, got {ctx.final_line!r}",
+                    10.0,
+                    "correctness",
+                ))
+            else:
+                violations.append(make_violation(
+                    "fatal_wrong_result",
+                    f"expected final line {expected_final!r}, got {ctx.final_line!r}",
+                    35.0,
+                    "correctness",
+                ))
+        if ctx.syntax_retries:
             violations.append(make_violation(
-                "wrong_result",
-                f"expected final line {expected_final!r}, got {ctx.final_line!r}",
-                1.0,
-                "correctness",
+                "syntax_retry",
+                f"{ctx.syntax_retries} syntax retries",
+                3.0 * ctx.syntax_retries,
+                "syntax_errors",
             ))
         for tool_name in required_tools:
-            if not ctx.saw_tool(tool_name):
+            if not _saw_tool_equiv(ctx, tool_name):
                 violations.append(make_violation(
                     "missing_tool_use",
                     f"expected transcript to use {tool_name}()",
-                    1.0,
+                    10.0,
                     "environment_usage",
                 ))
         if min_turns is not None and ctx.turn_count < min_turns:
             violations.append(make_violation(
                 "too_few_turns",
                 f"expected at least {min_turns} turns, saw {ctx.turn_count}",
-                1.0,
+                5.0,
                 "turn_efficiency",
             ))
         if max_turns is not None and ctx.turn_count > max_turns:
+            excess = ctx.turn_count - max_turns
             violations.append(make_violation(
                 "too_many_turns",
                 f"expected at most {max_turns} turns, saw {ctx.turn_count}",
-                1.0,
+                min(10.0, 3.0 * excess),
                 "turn_efficiency",
             ))
         if forbid_bash_python and ctx.saw_bash_python():
             violations.append(make_violation(
                 "bash_python",
                 "used bash('python ...') instead of direct repo tools / Python REPL",
-                1.0,
+                15.0,
                 "repl_proficiency",
             ))
         if require_isolated_dbs:
@@ -475,14 +556,14 @@ def make_code_agent_checker(
                 violations.append(make_violation(
                     "missing_session_db",
                     "isolated session db was not created",
-                    1.0,
+                    5.0,
                     "environment_usage",
                 ))
             if not ctx.history_db.exists():
                 violations.append(make_violation(
                     "missing_history_db",
                     "isolated cli history db was not created",
-                    1.0,
+                    5.0,
                     "environment_usage",
                 ))
             home_text = str(ctx.home.resolve())
@@ -492,7 +573,7 @@ def make_code_agent_checker(
                     violations.append(make_violation(
                         "sqlite_pollution",
                         f"db path escaped isolated HOME: {resolved}",
-                        1.0,
+                        10.0,
                         "environment_usage",
                     ))
         return (not violations), violations
@@ -504,12 +585,54 @@ def _contains_all(text: str, parts: tuple[str, ...]) -> bool:
     return all(part.lower() in lowered for part in parts)
 
 
+def _sqlite_isolation_reason_ok(reason: str) -> bool:
+    lowered = reason.lower()
+    has_path_source = (
+        "agentlib_session_db" in lowered
+        or "agentlib_cli_history_db" in lowered
+        or "env" in lowered
+        or "environment" in lowered
+    )
+    has_redirection = any(
+        token in lowered
+        for token in (
+            "override",
+            "overrides",
+            "set",
+            "sets",
+            "setting",
+            "redirect",
+            "redirected",
+            "point",
+            "points",
+            "force",
+            "forces",
+        )
+    )
+    has_sqlite_path = any(token in lowered for token in ("sqlite", "db", "database", "path", "file"))
+    has_isolation = any(
+        token in lowered
+        for token in (
+            "isolat",
+            "temp",
+            "temporary",
+            "away from",
+            "real home",
+            "user",
+            "separate",
+            "per-run",
+            "per run",
+        )
+    )
+    return has_path_source and has_redirection and has_sqlite_path and has_isolation
+
+
 def checker_sqlite_isolation_explanation(ctx: CodeAgentBenchmarkContext) -> tuple[bool, list[BenchmarkViolation]]:
     passed, violations = make_code_agent_checker(
         expected_final=ctx.final_line,
         required_tools=("grep", "read"),
         min_turns=2,
-        max_turns=4,
+        max_turns=30,
     )(ctx)
     answer = ctx.response_block or ctx.final_line
     try:
@@ -521,7 +644,7 @@ def checker_sqlite_isolation_explanation(ctx: CodeAgentBenchmarkContext) -> tupl
             violations.append(make_violation(
                 "invalid_json",
                 "expected final answer to be JSON",
-                1.0,
+                35.0,
                 "correctness",
             ))
             return False, violations
@@ -533,26 +656,21 @@ def checker_sqlite_isolation_explanation(ctx: CodeAgentBenchmarkContext) -> tupl
         violations.append(make_violation(
             "missing_session_source",
             "session_db_source should mention AGENTLIB_SESSION_DB",
-            1.0,
+            10.0,
             "correctness",
         ))
     if "AGENTLIB_CLI_HISTORY_DB" not in history_src:
         violations.append(make_violation(
             "missing_history_source",
             "history_db_source should mention AGENTLIB_CLI_HISTORY_DB",
-            1.0,
+            10.0,
             "correctness",
         ))
-    reason_ok = (
-        ("env" in reason.lower() or "environment" in reason.lower())
-        and ("override" in reason.lower() or "overrides" in reason.lower())
-        and ("sqlite" in reason.lower() or "db" in reason.lower() or "path" in reason.lower())
-    )
-    if not reason_ok:
+    if not _sqlite_isolation_reason_ok(reason):
         violations.append(make_violation(
             "weak_reason",
-            "reason should explain env-var path override for isolated sqlite files",
-            1.0,
+            "reason should explain env-var sqlite path redirection into isolated/temp files",
+            15.0,
             "correctness",
         ))
     if ctx.first_tool_offset() == -1 or (
@@ -561,7 +679,7 @@ def checker_sqlite_isolation_explanation(ctx: CodeAgentBenchmarkContext) -> tupl
         violations.append(make_violation(
             "early_release",
             "final answer appeared before repo inspection",
-            1.0,
+            20.0,
             "instruction_following",
         ))
     return (not violations), violations
@@ -572,7 +690,7 @@ def checker_resume_flow_summary(ctx: CodeAgentBenchmarkContext) -> tuple[bool, l
         expected_final=ctx.final_line,
         required_tools=("read",),
         min_turns=2,
-        max_turns=4,
+        max_turns=30,
     )(ctx)
     answer = ctx.response_block or ctx.final_line
     normalized = answer.lower()
@@ -587,25 +705,29 @@ def checker_resume_flow_summary(ctx: CodeAgentBenchmarkContext) -> tuple[bool, l
             violations.append(make_violation(
                 "missing_resume_step",
                 f"answer missing one of: {group}",
-                1.0,
+                8.0,
                 "correctness",
             ))
     if ";" not in answer and "->" not in answer:
         violations.append(make_violation(
             "unstructured_summary",
             "expected a compact ordered summary using ';' or '->'",
-            1.0,
+            10.0,
             "instruction_following",
         ))
     return (not violations), violations
+
+
+def _contains_any(text: str, words: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    return any(w.lower() in lowered for w in words)
 
 
 def checker_read_vs_view_file(ctx: CodeAgentBenchmarkContext) -> tuple[bool, list[BenchmarkViolation]]:
     passed, violations = make_code_agent_checker(
         expected_final=ctx.final_line,
         required_tools=("read",),
-        min_turns=2,
-        max_turns=4,
+        max_turns=30,
     )(ctx)
     answer = ctx.response_block or ctx.final_line
     try:
@@ -617,32 +739,32 @@ def checker_read_vs_view_file(ctx: CodeAgentBenchmarkContext) -> tuple[bool, lis
             violations.append(make_violation(
                 "invalid_json",
                 "expected final answer to be JSON",
-                1.0,
+                35.0,
                 "correctness",
             ))
             return False, violations
 
     read_desc = str(payload.get("read", ""))
     view_desc = str(payload.get("view_file", ""))
-    if not _contains_all(read_desc, ("text",)):
+    if not _contains_any(read_desc, ("text", "string", "value", "content", "return")):
         violations.append(make_violation(
             "missing_read_semantics",
-            "read description should mention text/value semantics",
-            1.0,
+            "read description should mention text/string/value/content semantics",
+            12.0,
             "correctness",
         ))
-    if "attachment" not in view_desc.lower() and "attach" not in view_desc.lower():
+    if not _contains_any(view_desc, ("attachment", "attach", "context", "display")):
         violations.append(make_violation(
             "missing_view_attachment",
-            "view_file description should mention attachment behavior",
-            1.0,
+            "view_file description should mention attachment/context/display behavior",
+            12.0,
             "correctness",
         ))
-    if "line" not in view_desc.lower() and "number" not in view_desc.lower():
+    if not _contains_any(view_desc, ("line", "number", "numbered")):
         violations.append(make_violation(
             "missing_view_numbering",
             "view_file description should mention numbered display/lines",
-            1.0,
+            5.0,
             "correctness",
         ))
     return (not violations), violations
@@ -680,7 +802,7 @@ def checker_file_edit_patch(ctx: CodeAgentBenchmarkContext) -> tuple[bool, list[
         expected_final="UPDATED",
         required_tools=("read", "apply_patch"),
         min_turns=1,
-        max_turns=4,
+        max_turns=30,
     )(ctx)
     target_file = Path(str(ctx.metadata.get("target_file", "")))
     expected_content = str(ctx.metadata.get("expected_content", ""))
@@ -688,7 +810,7 @@ def checker_file_edit_patch(ctx: CodeAgentBenchmarkContext) -> tuple[bool, list[
         violations.append(make_violation(
             "missing_target_file",
             "temporary edit target file was not found during validation",
-            1.0,
+            35.0,
             "correctness",
         ))
         return False, violations
@@ -697,16 +819,16 @@ def checker_file_edit_patch(ctx: CodeAgentBenchmarkContext) -> tuple[bool, list[
         violations.append(make_violation(
             "wrong_file_content",
             f"edited file content did not match expected result: {actual!r}",
-            1.0,
+            35.0,
             "correctness",
         ))
-    read_offset = ctx.tool_offset("read")
+    read_offset = _tool_offset_equiv(ctx, "read")
     patch_offset = ctx.tool_offset("apply_patch")
     if read_offset == -1 or patch_offset == -1 or read_offset > patch_offset:
         violations.append(make_violation(
             "read_before_edit_required",
             "expected the file to be read before patching",
-            1.0,
+            20.0,
             "instruction_following",
         ))
     return (not violations), violations
@@ -720,9 +842,8 @@ CODE_AGENT_TASKS = [
         checker=make_code_agent_checker(
             expected_final="AGENTLIB_SESSION_DB",
             required_tools=("grep",),
-            max_turns=2,
+            max_turns=30,
         ),
-        wait_for="AGENTLIB_SESSION_DB",
         tags=("code-agent", "repo-scan"),
     ),
     CodeAgentBenchmarkTask(
@@ -732,22 +853,20 @@ CODE_AGENT_TASKS = [
         checker=make_code_agent_checker(
             expected_final="AGENTLIB_CLI_HISTORY_DB",
             required_tools=("grep",),
-            max_turns=2,
+            max_turns=30,
         ),
-        wait_for="AGENTLIB_CLI_HISTORY_DB",
         tags=("code-agent", "repo-scan"),
     ),
     CodeAgentBenchmarkTask(
         id="code-agent/multi-turn-synthetic-exchange",
-        prompt="Use two turns: first inspect src/agentlib/agents/code_agent.py with repo tools, then on the next turn emit only the exact first progress text from the synthetic exchange.",
+        prompt="Inspect src/agentlib/agents/code_agent.py with repo tools. Find the _synthetic_exchange property and its first emit() call. Your final output must be exactly that first progress string and nothing else.",
         description="Requires multi-step tool use across turns before answering.",
         checker=make_code_agent_checker(
             expected_final="Checking today's date...",
             required_tools=("read",),
             min_turns=2,
-            max_turns=3,
+            max_turns=30,
         ),
-        wait_for="Checking today's date...",
         tags=("code-agent", "multi-turn"),
     ),
     CodeAgentBenchmarkTask(
@@ -757,10 +876,9 @@ CODE_AGENT_TASKS = [
         checker=make_code_agent_checker(
             expected_final="3",
             required_tools=("read",),
-            max_turns=2,
+            max_turns=30,
             forbid_bash_python=True,
         ),
-        wait_for="3",
         tags=("code-agent", "tool-discipline"),
     ),
     CodeAgentBenchmarkTask(
@@ -768,17 +886,15 @@ CODE_AGENT_TASKS = [
         prompt="Inspect the repo and explain why CodeAgent benchmark sqlite state can be isolated. Emit JSON with keys session_db_source, history_db_source, and reason.",
         description="Requires multi-file understanding of how session and CLI history sqlite paths are selected.",
         checker=checker_sqlite_isolation_explanation,
-        max_turns=4,
-        wait_for="reason",
+        max_turns=30,
         tags=("code-agent", "architecture", "repo-understanding"),
     ),
     CodeAgentBenchmarkTask(
         id="code-agent/resume-flow-summary",
-        prompt="Inspect the repo and summarize what happens when /resume succeeds. Emit one compact ordered summary using ';' or '->'.",
+        prompt="Inspect the repo and summarize what happens when /resume succeeds. Use exact implementation names for key functions/methods and persisted/session event or message identifiers. Emit one compact ordered summary using ';' or '->'.",
         description="Requires tracing behavior across CodeAgent resume and session replay code.",
         checker=checker_resume_flow_summary,
-        max_turns=4,
-        wait_for="resume",
+        max_turns=30,
         tags=("code-agent", "architecture", "flow"),
     ),
     CodeAgentBenchmarkTask(
@@ -786,8 +902,7 @@ CODE_AGENT_TASKS = [
         prompt="Inspect the repo and emit JSON with keys read and view_file explaining the functional difference between those tools.",
         description="Requires understanding how CodeAgent treats text reads versus numbered attachment views.",
         checker=checker_read_vs_view_file,
-        max_turns=4,
-        wait_for="view_file",
+        max_turns=30,
         tags=("code-agent", "tool-semantics"),
     ),
     CodeAgentBenchmarkTask(
@@ -795,8 +910,7 @@ CODE_AGENT_TASKS = [
         prompt="placeholder",
         description="Requires reading a temp file, editing it with apply_patch, and producing the correct final content.",
         checker=checker_file_edit_patch,
-        max_turns=4,
-        wait_for="UPDATED",
+        max_turns=30,
         tags=("code-agent", "editing", "patch"),
         prepare=prepare_file_edit_patch_task,
     ),

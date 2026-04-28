@@ -42,6 +42,7 @@ CODEBLOCK = "\x1b[97m"
 LIST_COLOR = "\x1b[36m"
 HR_COLOR = "\x1b[36m"
 LINK_COLOR = "\x1b[38;5;45m"
+TABLE_COLOR = "\x1b[38;5;245m"
 
 # Python syntax highlighting colors
 KW_COLOR = "\x1b[38;5;204m"
@@ -245,6 +246,151 @@ def _wrap_text(text: str, width: int) -> list:
     return lines
 
 
+def _visible_len(text: str) -> int:
+    """Return printable width, ignoring ANSI codes."""
+    return len(strip_ansi(text))
+
+
+def _split_table_cells(line: str) -> list[str]:
+    """Split a markdown table row into cells."""
+    line = line.strip()
+    if line.startswith('|'):
+        line = line[1:]
+    if line.endswith('|'):
+        line = line[:-1]
+    return [cell.strip() for cell in line.split('|')]
+
+
+def _is_table_separator(line: str) -> bool:
+    """Return True for markdown table separator rows."""
+    cells = _split_table_cells(line)
+    if not cells:
+        return False
+    return all(re.match(r'^:?-{3,}:?$', cell.strip()) for cell in cells)
+
+
+def _is_tableish_line(line: str) -> bool:
+    """Return True if a line looks like part of a markdown pipe table."""
+    stripped = line.strip()
+    return stripped.startswith('|') or stripped.endswith('|') or stripped.count('|') >= 2
+
+
+def _collect_table_rows(lines: list[str], start: int) -> tuple[list[list[str]], int] | None:
+    """Collect markdown table rows, repairing wrapped rows when needed."""
+    raw_rows = []
+    i = start
+    while i < len(lines) and _is_tableish_line(lines[i]):
+        raw_rows.append(lines[i])
+        i += 1
+
+    if len(raw_rows) < 2:
+        return None
+
+    separator_index = None
+    for idx, row in enumerate(raw_rows[:4]):
+        if _is_table_separator(row):
+            separator_index = idx
+            break
+    if separator_index is None:
+        return None
+
+    if separator_index == 0:
+        return None
+
+    header_cells = _split_table_cells(' '.join(raw_rows[:separator_index]))
+    if not header_cells:
+        return None
+
+    col_count = len(header_cells)
+    rows = [header_cells]
+    idx = separator_index + 1
+
+    current: list[str] = []
+    while idx < len(raw_rows):
+        cells = _split_table_cells(raw_rows[idx])
+        if not current:
+            current = cells
+        else:
+            current.extend(cells)
+
+        while len(current) >= col_count:
+            rows.append(current[:col_count])
+            current = current[col_count:]
+
+        idx += 1
+
+    if current:
+        current.extend([''] * (col_count - len(current)))
+        rows.append(current)
+
+    return rows, i
+
+
+def _pad_ansi(text: str, width: int) -> str:
+    """Pad ANSI-formatted text to printable width."""
+    return text + ' ' * max(0, width - _visible_len(text))
+
+
+def _render_table(rows: list[list[str]], width: int) -> list[str]:
+    """Render a simple markdown table."""
+    if not rows:
+        return []
+
+    col_count = max(len(row) for row in rows)
+    normalized = [row + [''] * (col_count - len(row)) for row in rows]
+    visible_rows = [[strip_ansi(_colorize_inline(cell)) for cell in row] for row in normalized]
+    col_widths = [
+        max(_visible_len(row[col]) for row in visible_rows)
+        for col in range(col_count)
+    ]
+
+    max_table_width = max(20, width)
+    table_width = sum(col_widths) + 3 * col_count + 1
+    if table_width > max_table_width:
+        available = max_table_width - (3 * col_count + 1)
+        if available > col_count:
+            min_width = 3
+            # Start with natural widths, then shrink the widest columns until the
+            # table fits. This preserves narrow numeric columns better than
+            # forcing every column toward the same average width.
+            col_widths = [max(min_width, w) for w in col_widths]
+            while sum(col_widths) > available:
+                shrinkable = [c for c, w in enumerate(col_widths) if w > min_width]
+                if not shrinkable:
+                    break
+                widest = max(shrinkable, key=lambda c: col_widths[c])
+                col_widths[widest] -= 1
+
+    def truncate(cell: str, col_width: int) -> str:
+        plain = strip_ansi(cell)
+        if len(plain) <= col_width:
+            return cell
+        if col_width <= 1:
+            return '…'
+        return plain[:col_width - 1] + '…'
+
+    rendered = []
+    border = TABLE_COLOR + '┌' + '┬'.join('─' * (w + 2) for w in col_widths) + '┐' + RESET
+    header_sep = TABLE_COLOR + '├' + '┼'.join('─' * (w + 2) for w in col_widths) + '┤' + RESET
+    bottom = TABLE_COLOR + '└' + '┴'.join('─' * (w + 2) for w in col_widths) + '┘' + RESET
+    rendered.append(border)
+
+    for row_index, row in enumerate(normalized):
+        cells = []
+        for col, cell in enumerate(row):
+            colored = _colorize_inline(cell)
+            if row_index == 0:
+                colored = BOLD + colored + RESET
+            colored = truncate(colored, col_widths[col])
+            cells.append(' ' + _pad_ansi(colored, col_widths[col]) + ' ')
+        rendered.append(TABLE_COLOR + '│' + RESET + (TABLE_COLOR + '│' + RESET).join(cells) + TABLE_COLOR + '│' + RESET)
+        if row_index == 0:
+            rendered.append(header_sep)
+
+    rendered.append(bottom)
+    return rendered
+
+
 def render_markdown(text: str, width: Optional[int] = None) -> str:
     """Convert markdown text to ANSI-formatted output."""
     if width is None:
@@ -283,6 +429,14 @@ def render_markdown(text: str, width: Optional[int] = None) -> str:
         if in_code_block:
             code_buffer.append(line)
             i += 1
+            continue
+
+        # Tables
+        table = _collect_table_rows(lines, i)
+        if table is not None:
+            table_rows, next_i = table
+            result.extend(_render_table(table_rows, width))
+            i = next_i
             continue
 
         # Horizontal rules

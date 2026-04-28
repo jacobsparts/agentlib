@@ -198,7 +198,7 @@ def _is_released_assistant_message(msg: dict) -> bool:
     return stripped.startswith("emit(") and "release=True" in stripped.replace(" ", "")
 
 
-def replay_display_text(session_id: str, store) -> str:
+def replay_display_text(session_id: str, store, format_response=None) -> str:
     events = store.get_events(session_id)
     snapshots = {}
     chunks: list[str] = []
@@ -219,6 +219,8 @@ def replay_display_text(session_id: str, store) -> str:
                 released_to_user = True
                 text = _extract_released_assistant_text(msg)
                 if text:
+                    if format_response is not None:
+                        text = format_response(text)
                     if not text.endswith("\n"):
                         text += "\n"
                     chunks.append(text)

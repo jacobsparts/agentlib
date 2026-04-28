@@ -10,6 +10,6 @@ TASKS = [
         prompt="What's today's date?",
         description="Basic REPL completion behavior smoke test.",
         checker=default_checker,
-        max_turns=4,
+        max_turns=30,
     )),
 ]

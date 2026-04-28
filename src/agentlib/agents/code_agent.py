@@ -194,7 +194,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     def _replay_display_output(self):
         if not self._session_id:
             return
-        display_text = replay_display_text(self._session_id, self._session_store)
+        display_text = replay_display_text(self._session_id, self._session_store, format_response=self.format_response)
         sys.stdout.write(display_text)
         if display_text and not display_text.endswith("\n"):
             print()
@@ -402,26 +402,41 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         for path in written_files:
             if path in self._read_attachments:
                 continue  # Agent already re-read this file
-            if not self._is_attached(path):
+            attached_name = self._attached_file_name(path)
+            if attached_name is None:
                 continue  # File wasn't attached
             try:
                 content = Path(path).read_text()
                 lines = content.split('\n')
                 formatted = '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
-                self._invalidate_attachment(path)
-                self._read_attachments[path] = formatted
-                result.append(f">>> view_file({path!r})\n[Attachment: {path}]\n")
+                self._invalidate_attachment(attached_name)
+                self._read_attachments[attached_name] = formatted
+                result.append(f">>> view_file({attached_name!r})\n[Attachment: {attached_name}]\n")
             except Exception:
                 pass
 
         return "".join(result)
 
+    def _same_file(self, left: str, right: str) -> bool:
+        try:
+            return os.path.samefile(left, right)
+        except (FileNotFoundError, OSError, TypeError):
+            try:
+                return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+            except (OSError, RuntimeError):
+                return left == right
+
+    def _attached_file_name(self, path: str) -> str | None:
+        """Return the active attachment name for a filesystem path."""
+        for msg in self.conversation.messages:
+            for name in msg.get('_attachments', {}):
+                if self._same_file(name, path):
+                    return name
+        return None
+
     def _is_attached(self, name: str) -> bool:
         """Check if a file is currently attached in any message."""
-        for msg in self.conversation.messages:
-            if name in msg.get('_attachments', {}):
-                return True
-        return False
+        return self._attached_file_name(name) is not None
 
     @REPLAgent.tool
     def view_images(self,
@@ -582,26 +597,28 @@ Don't reconnect every turn - the connection object persists.
 >>> context_management()
 
 read() returns file contents as text. Use it when you need to assign, search,
-split, or otherwise process file contents in Python.
+split, parse, or otherwise process file contents in Python.
 
-Use view_file("file.py") to display a file with line numbers and attach the
-full file into context. Prefer one full view_file(file_path) when inspecting
-code.
-If you accidentally use view_file() on an irrelevant file, call
-unview_file(file_path) on a later turn to remove it from future context.
+view_file("file.py") is for inspecting code with line numbers:
+- Prefer one full view_file(file_path) when inspecting a normal-sized source
+  file you may need to reason about or edit across turns.
+- Do not use view_file() just to get a string value; use read() for that.
+- Do not repeatedly call partial view_file(..., offset=..., limit=...) on the
+  same normal-sized file.
 
-Avoid repeated narrow view_file(..., offset=..., limit=...) calls on the same
-normal-sized file; they usually create more context churn than one full
-attachment.
-Use view_file(..., offset=..., limit=...) only when the file is genuinely
-huge, minified/generated, or when a very narrow follow-up is clearly more
-efficient.
+Use partial view_file(..., offset=..., limit=...) only when:
+- the file is genuinely huge, minified, generated, or vendored, or
+- you already have the full file in context and need a very narrow line-number
+  check, or
+- the user explicitly asks for a small line range.
 
-Full view_file() attachments are refreshed when files change, so re-viewing a
-normal-sized file updates context rather than accumulating stale duplicate
-copies.
-Variables persist across turns. For files you inspect with view_file(), prefer
-one refreshed full-file view over accumulating many partial snippets.
+If you accidentally view an irrelevant file, call unview_file(file_path) to
+remove it from future context.
+
+When files change, a previous full view_file(file_path) is refreshed
+automatically. Re-viewing a normal-sized file updates context rather than
+accumulating stale duplicate copies. Prefer a refreshed full-file view over
+accumulating partial snippets.
 
 preview(value) displays a potentially long string. Short strings print in
 full; long strings show a head/tail summary with line and character counts.

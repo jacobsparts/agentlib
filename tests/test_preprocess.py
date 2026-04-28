@@ -2,6 +2,7 @@
 
 import ast
 import json
+from pathlib import Path
 
 from agentlib.agents.code_agent import CodeAgent
 from agentlib.preprocess import (
@@ -636,6 +637,28 @@ class TestCodeAgentPreprocessCode:
             r,
             'raise ValueError("view_file() is a display tool, not a value. Use read() for file contents as text.")',
         )
+
+    def test_attached_file_matches_absolute_written_path(self, tmp_path):
+        target = tmp_path / "file.py"
+        target.write_text("before\n")
+        rel = Path.cwd().joinpath(target).relative_to(Path.cwd()) if target.is_relative_to(Path.cwd()) else str(target)
+        name = str(rel)
+
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent.conversation.usermsg(
+            f"[Attachment: {name}]",
+            _attachments={name: "    1→before\n"},
+        )
+
+        target.write_text("after\n")
+        output = agent.build_output_for_llm([("file_written", str(target.resolve()) + "\n")])
+
+        assert f"[Attachment: {name}]" in output
+        rendered = agent.conversation._messages()
+        user_messages = [msg for msg in rendered if msg.get("role") == "user"]
+        assert "before\n" not in json.dumps(user_messages)
+        assert agent._read_attachments[name] == "    1→after\n    2→"
 
 
 class TestGeminiSchemaTransform:

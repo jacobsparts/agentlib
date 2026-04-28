@@ -10,6 +10,7 @@ from agentlib.repl_benchmark.code_agent_benchmark import (
     CODE_AGENT_TASKS,
     CodeAgentBenchmarkRunner,
     CodeAgentBenchmarkSuite,
+    _sqlite_isolation_reason_ok,
     build_code_agent_test_env,
 )
 
@@ -85,6 +86,19 @@ def _codes(result):
     return {violation.code for violation in result.violations}
 
 
+def test_code_agent_benchmark_tasks_allow_repo_discovery_turn_budget():
+    assert all(task.max_turns >= 30 for task in CODE_AGENT_TASKS)
+
+
+def test_sqlite_isolation_reason_accepts_semantic_redirect_wording():
+    assert _sqlite_isolation_reason_ok(
+        "The benchmark harness sets AGENTLIB_SESSION_DB and AGENTLIB_CLI_HISTORY_DB "
+        "to temp-directory sqlite files, so both persisted session events and CLI "
+        "input history are redirected away from the user's real HOME state."
+    )
+    assert not _sqlite_isolation_reason_ok("It uses sqlite somewhere.")
+
+
 def test_code_agent_benchmark_repo_scan_session_db_var(tmp_path):
     task = next(task for task in CODE_AGENT_TASKS if task.id == "code-agent/repo-session-db-var")
     result, env, server = _run_task(
@@ -99,6 +113,37 @@ def test_code_agent_benchmark_repo_scan_session_db_var(tmp_path):
     assert Path(env["AGENTLIB_SESSION_DB"]).exists()
     assert Path(env["AGENTLIB_CLI_HISTORY_DB"]).exists()
     assert len(server.requests) >= 1
+
+
+def test_code_agent_benchmark_counts_syntax_retry(tmp_path):
+    task = next(task for task in CODE_AGENT_TASKS if task.id == "code-agent/repo-session-db-var")
+    result, env, server = _run_task(
+        tmp_path,
+        task,
+        [
+            "not valid python !!!",
+            'preview(_v1 := grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)',
+        ],
+    )
+    assert result.returncode == 0
+    assert result.metrics["syntax_retries"] == 1
+    assert "syntax_retry" in _codes(result)
+    assert any(v.category == "syntax_errors" for v in result.violations)
+    assert len(server.requests) >= 2
+
+
+def test_code_agent_benchmark_accepts_quoted_final_line(tmp_path):
+    task = next(task for task in CODE_AGENT_TASKS if task.id == "code-agent/repo-session-db-var")
+    result, env, server = _run_task(
+        tmp_path,
+        task,
+        [
+            'preview(_v1 := grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("`AGENTLIB_SESSION_DB`", release=True)',
+        ],
+    )
+    assert result.passed, (result.output, _codes(result), [(v.code, v.message) for v in result.violations])
+    assert result.returncode == 0
+    assert "wrong_result" not in _codes(result)
 
 
 def test_code_agent_benchmark_repo_scan_cli_history_var(tmp_path):

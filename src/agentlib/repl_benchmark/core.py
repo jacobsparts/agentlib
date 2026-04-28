@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 DEFAULT_CATEGORIES = (
     "correctness",
     "instruction_following",
+    "syntax_errors",
     "repl_proficiency",
     "turn_efficiency",
     "environment_usage",
@@ -35,7 +36,8 @@ class BenchmarkCategoryScore:
 @dataclass
 class ScoreWeights:
     correctness: float = 35.0
-    instruction_following: float = 20.0
+    instruction_following: float = 10.0
+    syntax_errors: float = 10.0
     repl_proficiency: float = 15.0
     turn_efficiency: float = 10.0
     environment_usage: float = 10.0
@@ -72,7 +74,7 @@ class BenchmarkTask:
     prompt: str
     checker: Callable[[BenchmarkTaskContext], tuple[bool, list[BenchmarkViolation], dict[str, BenchmarkCategoryScore]]]
     description: str = ""
-    max_turns: int = 10
+    max_turns: int = 30
     max_syntax_retries: int = 3
     setup: Optional[Callable[[Any], None]] = None
     teardown: Optional[Callable[[Any], None]] = None
@@ -91,6 +93,12 @@ class BenchmarkTaskResult:
     total_possible: float
     metrics: dict[str, Any]
     violations: list[BenchmarkViolation]
+    adjusted_total_score: Optional[float] = None
+    adjusted_total_reason: Optional[str] = None
+
+    @property
+    def effective_total_score(self) -> float:
+        return self.total_score if self.adjusted_total_score is None else self.adjusted_total_score
 
 
 @dataclass
@@ -121,6 +129,8 @@ class BenchmarkRunResult:
                     },
                     "total_score": item.total_score,
                     "total_possible": item.total_possible,
+                    "adjusted_total_score": item.adjusted_total_score,
+                    "adjusted_total_reason": item.adjusted_total_reason,
                     "metrics": item.metrics,
                     "violations": [
                         {
@@ -214,8 +224,8 @@ def base_scores(ctx: BenchmarkTaskContext) -> tuple[bool, list[BenchmarkViolatio
         violations.append(make_violation(
             "syntax_retry",
             f"{syntax_retries} syntax retries",
-            min(scores["instruction_following"].possible, 3.0 * syntax_retries),
-            "instruction_following",
+            min(scores["syntax_errors"].possible, 3.0 * syntax_retries),
+            "syntax_errors",
         ))
 
     if metrics.get("saw_bash_python"):
