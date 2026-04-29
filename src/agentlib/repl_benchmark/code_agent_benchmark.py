@@ -117,6 +117,7 @@ class CodeAgentBenchmarkContext:
             "[Attachment:",
             "test-code-agent:",
             "<frozen runpy>:",
+            "Resume session:",
         )
         ignored_exact = {
             "",

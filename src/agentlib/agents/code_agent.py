@@ -620,7 +620,7 @@ automatically. Re-viewing a normal-sized file updates context rather than
 accumulating stale duplicate copies. Prefer a refreshed full-file view over
 accumulating partial snippets.
 
-preview(value) displays a potentially long string. Short strings print in
+preview(value) prints a potentially long string. Short strings print in
 full; long strings show a head/tail summary with line and character counts.
 
 >>> tone_and_style()
@@ -1536,6 +1536,9 @@ If you don't know how to proceed:
                 except OSError:
                     pass
             self.console.print("\n[dim]Session ended. Goodbye![/dim]")
+            session_id = getattr(self, "_session_id", None)
+            if session_id:
+                self.console.print(f"[dim]Resume session: code-agent --resume {session_id}[/dim]")
 
 
 class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
@@ -1560,9 +1563,9 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
     @REPLAgent.tool(inject=True)
     def preview(self, value: str = "Value to preview"):
-        """Display a value with head/tail summary for long strings.
+        """Print a value with head/tail summary for long strings.
 
-        Short values are returned in full. Long strings show first and last
+        Short values are printed in full. Long strings print first and last
         few lines with a count of omitted lines in between.
         """
         if not isinstance(value, str):
@@ -1574,16 +1577,19 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
         # Short enough to show in full
         if nlines <= 20 and nchars <= 2000:
-            return value
+            rendered = value
+        else:
+            HEAD = 8
+            TAIL = 4
+            omitted = nlines - HEAD - TAIL
+            parts = [f"({nlines} lines, {nchars} chars)"]
+            parts.extend(lines[:HEAD])
+            parts.append(f"  ... ({omitted} lines omitted)")
+            parts.extend(lines[-TAIL:])
+            rendered = '\n'.join(parts)
 
-        HEAD = 8
-        TAIL = 4
-        omitted = nlines - HEAD - TAIL
-        parts = [f"({nlines} lines, {nchars} chars)"]
-        parts.extend(lines[:HEAD])
-        parts.append(f"  ... ({omitted} lines omitted)")
-        parts.extend(lines[-TAIL:])
-        return '\n'.join(parts)
+        _send_output("print", rendered.rstrip('\n') + "\n")
+
 
     # Target tool names whose bare expressions get rewritten to assignment + preview
     _preview_targets = frozenset({'grep', 'bash', 'read'})
