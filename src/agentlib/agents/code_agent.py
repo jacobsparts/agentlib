@@ -134,6 +134,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             self._pending_explicit_attachment_refs = {}
             self._pending_session_events = []
             self._display_capture = []
+            self._pending_unviewed_files = set()
         self.llm_client.on_retry = self.on_retry
 
     def _ensure_live_session(self):
@@ -369,7 +370,8 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         attach_path = None
         partial_read_path = None
         written_files = []
-        unviewed_files = set()
+        unviewed_files = set(getattr(self, '_pending_unviewed_files', set()))
+        self._pending_unviewed_files = set()
         for msg_type, chunk in output_chunks:
             if msg_type == "emit":
                 continue
@@ -2019,7 +2021,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             self.detach_file_ref(file_path)
         else:
             self.detach(file_path)
-        _send_output("file_unviewed", file_path + "\n")
+        self._pending_unviewed_files.add(file_path)
         return f"Removed from future context: {file_path}"
 
     @REPLAgent.tool(inject=True)

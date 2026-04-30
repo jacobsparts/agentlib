@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from agentlib.agents.code_agent import CodeAgent
+from agentlib import SandboxMixin
 from agentlib.preprocess import (
     _comment_leading_non_code_prefix,
     _extract_native_function_call_code,
@@ -659,6 +660,75 @@ class TestCodeAgentPreprocessCode:
         user_messages = [msg for msg in rendered if msg.get("role") == "user"]
         assert "before\n" not in json.dumps(user_messages)
         assert agent._read_attachments[name] == "    1→after\n    2→"
+
+    def test_unview_does_not_require_repl_send_output(self, tmp_path):
+        target = tmp_path / "file.py"
+        target.write_text("content\n")
+        name = str(target)
+
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent.conversation.usermsg(
+            f"[Attachment: {name}]",
+            _attachments={name: "    1→content\n    2→"},
+        )
+
+        result = agent.unview(name)
+        output = agent.build_output_for_llm([])
+
+        assert result == f"Removed from future context: {name}"
+        assert output == ""
+        assert name not in agent.list_attachments()
+
+    def test_unview_pending_prevents_same_turn_reattach(self, tmp_path):
+        target = tmp_path / "file.py"
+        target.write_text("content\n")
+        name = str(target)
+
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent.conversation.usermsg(
+            f"[Attachment: {name}]",
+            _attachments={name: "    1→old\n    2→"},
+        )
+
+        agent.unview(name)
+        output = agent.build_output_for_llm([
+            ("read_attach", name + "\n"),
+            ("read", "    1→content\n    2→\n"),
+        ])
+
+        assert output == "    1→content\n    2→\n"
+        assert agent._read_attachments == {}
+
+    def test_sandboxed_unview_via_repl_does_not_raise_send_output(self, tmp_path):
+        target = tmp_path / "file.py"
+        target.write_text("content\n")
+        name = str(target)
+
+        class SandboxedCodeAgent(SandboxMixin, CodeAgent):
+            sandbox_target = str(tmp_path)
+
+        agent = SandboxedCodeAgent()
+        try:
+            agent._ensure_setup()
+            agent.complete = False
+            agent.conversation.usermsg(
+                f"[Attachment: {name}]",
+                _attachments={name: "    1→content\n    2→"},
+            )
+            repl = agent._get_tool_repl()
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                f"unview({name!r})",
+            )
+
+            assert pure_syntax_error is False
+            assert "_send_output" not in output
+            assert any("Removed from future context" in chunk for _, chunk in output_chunks)
+            assert name not in agent.list_attachments()
+        finally:
+            agent._cleanup()
 
 
 class TestGeminiSchemaTransform:
