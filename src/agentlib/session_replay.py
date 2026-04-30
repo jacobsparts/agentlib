@@ -1,4 +1,5 @@
 import ast
+import base64
 import copy
 import re
 from pathlib import Path
@@ -73,6 +74,14 @@ def _coalesce_user_messages(messages: list[dict]) -> list[dict]:
     return out
 
 
+def _decode_media(value):
+    if isinstance(value, dict) and "__b64__" in value:
+        return base64.b64decode(value["__b64__"])
+    if isinstance(value, list):
+        return [_decode_media(item) for item in value]
+    return value
+
+
 def replay_session_into_agent(agent, session_id: str, store):
     events = store.get_events(session_id)
     snapshots = {}
@@ -89,6 +98,9 @@ def replay_session_into_agent(agent, session_id: str, store):
         event_type = event["event_type"]
         if event_type == "message_added":
             msg = copy.deepcopy(payload["message"])
+            for key in ("images", "audio"):
+                if msg.get(key):
+                    msg[key] = _decode_media(msg[key])
             refs = msg.pop("_attachment_refs", None) or {}
             local_missing = []
             if refs:

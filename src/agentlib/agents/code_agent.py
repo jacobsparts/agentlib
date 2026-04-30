@@ -11,6 +11,7 @@ Dependencies:
 """
 
 import ast
+import base64
 import json
 import os
 import shutil
@@ -213,11 +214,20 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         self._display_capture = []
 
     def _sanitize_message_for_persistence(self, message: dict) -> dict:
+        def encode_media(value):
+            if isinstance(value, bytes):
+                return {"__b64__": base64.b64encode(value).decode("ascii")}
+            if isinstance(value, list):
+                return [encode_media(item) for item in value]
+            return copy.deepcopy(value)
+
         msg = {}
         for key, value in message.items():
             if key == '_attachments':
                 continue
-            if key in {'role', 'content', '_stdout', '_user_content', 'name', 'tool_call_id', 'images', 'audio', '_synthetic', '_render_segments', '_final_result', '_emit_value'}:
+            if key in {'images', 'audio'}:
+                msg[key] = encode_media(value)
+            elif key in {'role', 'content', '_stdout', '_user_content', 'name', 'tool_call_id', '_synthetic', '_render_segments', '_final_result', '_emit_value'}:
                 msg[key] = copy.deepcopy(value)
         refs = message.get('_attachment_refs')
         if refs:
@@ -580,8 +590,9 @@ If your final emit includes computed results (test output, command output),
 run the computation first, then verify the output on your next turn before
 releasing. Do not claim success based on output you haven't reviewed.
 
-Before final emit after code work, detach viewed files that are no longer
-relevant with unview(path).
+Housekeeping: viewed files persist across turns automatically. Use
+unview(path) to clean up files that turned out to be irrelevant, were viewed
+by mistake, or are no longer needed for the current task.
 
 NEVER:
 - Ask permission for read-only operations (reading files, exploring code)
@@ -1995,10 +2006,6 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
         if offset is None and limit is None:
             _send_output("read_attach", file_path + "\n")
-            output += (
-                "\n[Context reminder: if this file or any other viewed file is no longer needed, "
-                f"call unview({file_path!r}) or unview(...) to remove it from future context.]"
-            )
         else:
             _send_output("read_partial", file_path + "\n")
 
