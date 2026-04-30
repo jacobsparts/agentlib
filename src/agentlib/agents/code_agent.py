@@ -247,6 +247,8 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         new_msg = {"role": "user", "content": content, "_user_content": user_content}
         if kwargs.get('_stdout') is not None:
             new_msg["_stdout"] = kwargs['_stdout']
+        if kwargs.get('_attachment_refs'):
+            new_msg["_attachment_refs"] = copy.deepcopy(kwargs['_attachment_refs'])
         for key in ('images', 'audio'):
             if kwargs.get(key):
                 new_msg[key] = kwargs[key]
@@ -367,8 +369,12 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         attach_path = None
         partial_read_path = None
         written_files = []
+        unviewed_files = set()
         for msg_type, chunk in output_chunks:
             if msg_type == "emit":
+                continue
+            if msg_type == "file_unviewed":
+                unviewed_files.add(chunk.strip())
                 continue
             if msg_type == "read_attach":
                 attach_path = chunk.strip()
@@ -379,6 +385,9 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             if msg_type == "read" and attach_path:
                 path = attach_path
                 attach_path = None
+                if path in unviewed_files:
+                    result.append(chunk)
+                    continue
                 self._invalidate_attachment(path)
                 self._read_attachments[path] = chunk.rstrip('\n')
                 result.append(f"[Attachment: {path}]\n")
@@ -484,6 +493,10 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             existing = kwargs.get('_attachments', {})
             existing.update(pending)
             kwargs['_attachments'] = existing
+            refs = kwargs.get('_attachment_refs', {})
+            for name in pending:
+                refs.setdefault(name, name)
+            kwargs['_attachment_refs'] = refs
             self._read_attachments = {}
         if pending := getattr(self, '_pending_images', None):
             kwargs['images'] = kwargs.get('images', []) + pending
@@ -564,6 +577,9 @@ Never emit placeholder turns like print("ready") or print("thinking").
 If your final emit includes computed results (test output, command output),
 run the computation first, then verify the output on your next turn before
 releasing. Do not claim success based on output you haven't reviewed.
+
+Before final emit after code work, detach viewed files that are no longer
+relevant with unview_file(path).
 
 NEVER:
 - Ask permission for read-only operations (reading files, exploring code)
@@ -780,11 +796,12 @@ If you don't know how to proceed:
         if getattr(self, '_in_user_repl', False):
             return
         if msg_type == "echo":
-            # Mark that we've started processing output (for clearing "Working..." line)
-            # but defer header printing until we know we have visible content
+            # Mark that we've started processing output. Do not clear the
+            # carriage-return status line until we have visible output to draw;
+            # clearing too early can leave a single non-dim character under the
+            # cursor while a long read_attach is processed.
             if not getattr(self, '_turn_output_started', False):
                 self._turn_output_started = True
-                self.console.clear_line()  # Clear "Working..." / retry status from previous turn
                 # Only set header pending if we haven't already printed it this interaction
                 if not getattr(self, '_repl_printed_header', False):
                     self._header_pending = True
@@ -837,6 +854,7 @@ If you don't know how to proceed:
                 if not getattr(self, '_in_emit_echo', False):
                     # We have visible content - print header first if pending
                     if getattr(self, '_header_pending', False):
+                        self.console.clear_line()
                         header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
                         print(f"\x1b[1G\x1b[K{header}")
                         self._capture_display_line("───────────── Python ─────────────")
@@ -864,7 +882,7 @@ If you don't know how to proceed:
                 self._capture_display_line("───────────── Python ─────────────")
                 self._header_pending = False
                 self._repl_printed_header = True
-            # Show output with truncation: up to 240 chars or 3 lines
+            # Show output with truncation: up to 240 chars or 5 lines
             text = chunk.rstrip('\n')
             # For string literals (return values), show value instead of repr
             if msg_type == "output":
@@ -885,8 +903,8 @@ If you don't know how to proceed:
                 total_lines > 0
                 and bool(__import__('re').match(r'^\(\d+ lines, \d+ chars\)$', lines[0]))
             )
-            if not disable_truncation and len(lines) > 3:
-                lines = lines[:3]
+            if not disable_truncation and len(lines) > 5:
+                lines = lines[:5]
                 truncated_at_lines = True
             display = '\n'.join(lines)
             if not disable_truncation and len(display) > 240:
@@ -1803,7 +1821,8 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
     def view_file(self,
             file_path: str = "Path to the file",
             offset: Optional[int] = "Line number to start from (1-indexed)",
-            limit: Optional[int] = "Number of lines to read (default: 5000)"
+            limit: Optional[int] = "Number of lines to read (default: 5000)",
+            **kwargs
         ):
         """Display a file with line numbers and attach full reads to context.
 
@@ -1819,9 +1838,52 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         Use read() if you need file contents as text:
             content = read("file.py")
         """
-        content = Path(file_path).expanduser().read_text()
+        unexpected_kwargs = set(kwargs) - {"_force_partial"}
+        if unexpected_kwargs:
+            unexpected = ", ".join(sorted(unexpected_kwargs))
+            raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
+        force_partial = bool(kwargs.get("_force_partial", False))
+
+        path = Path(file_path).expanduser()
+        content = path.read_text()
         all_lines = content.split('\n')
         total_lines = len(all_lines)
+        is_partial = offset is not None or limit is not None
+        source_extensions = {
+            ".py", ".pyi", ".pyx", ".pxd", ".pxi",
+            ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+            ".html", ".htm", ".xhtml", ".css", ".scss", ".sass", ".less",
+            ".vue", ".svelte", ".astro",
+            ".java", ".kt", ".kts", ".scala", ".groovy",
+            ".c", ".h", ".cc", ".hh", ".cpp", ".cxx", ".hpp", ".hxx",
+            ".cs", ".go", ".rs", ".swift", ".m", ".mm",
+            ".php", ".rb", ".rake", ".pl", ".pm", ".t", ".lua",
+            ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+            ".sql", ".graphql", ".gql",
+            ".xml", ".xsl", ".xslt", ".svg",
+            ".json", ".jsonc", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+            ".md", ".mdx", ".rst", ".tex",
+            ".dockerfile", ".containerfile",
+            ".vim", ".el", ".clj", ".cljs", ".cljc", ".ex", ".exs", ".erl", ".hrl",
+            ".fs", ".fsx", ".fsi", ".hs", ".lhs", ".ml", ".mli", ".nim", ".zig",
+            ".r", ".R", ".jl", ".dart", ".sol", ".tf", ".tfvars", ".hcl",
+        }
+        source_names = {
+            "Dockerfile", "Containerfile", "Makefile", "Rakefile", "Gemfile",
+            "Podfile", "Brewfile", "Justfile", "Taskfile", "Jenkinsfile",
+            "BUILD", "WORKSPACE", "CMakeLists.txt",
+        }
+        if is_partial and not force_partial and (path.suffix in source_extensions or path.name in source_names):
+            raise ValueError(
+                "Partial view_file denied for source file. Prefer one full "
+                "view_file(file_path) when inspecting normal source files you may "
+                "need to reason about or edit across turns; use partial views only "
+                "for genuinely huge, generated, vendored, or minified files, or "
+                "for narrow line-number checks after the full file is already in "
+                "context. To override this denial when a partial view is truly "
+                "appropriate, call view_file(file_path, offset=..., limit=..., "
+                "_force_partial=True)."
+            )
 
         start = (offset or 1) - 1
         end = start + (limit or 5000)
@@ -1837,12 +1899,16 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
         if offset is None and limit is None:
             _send_output("read_attach", file_path + "\n")
+            output += (
+                "\n[Context reminder: if this file or any other viewed file is no longer needed, "
+                f"call unview_file({file_path!r}) or unview_file(...) to remove it from future context.]"
+            )
         else:
             _send_output("read_partial", file_path + "\n")
 
         _send_output("read", output + "\n")
 
-    @REPLAgent.tool(inject=True)
+    @REPLAgent.tool
     def unview_file(self,
             file_path: str = "Path to a file previously viewed with view_file()"
         ):
@@ -1859,6 +1925,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             self.detach_file_ref(file_path)
         else:
             self.detach(file_path)
+        _send_output("file_unviewed", file_path + "\n")
         return f"Removed from future context: {file_path}"
 
     @REPLAgent.tool(inject=True)

@@ -133,6 +133,8 @@ class BaseAgent(metaclass=AgentMeta):
                             return _type, p.default
                     fields = {}
                     for p in list(inspect.signature(fn).parameters.values())[1:]:
+                        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+                            continue
                         field_def = parameter_field(p)
                         if field_def is not None:
                             fields[p.name] = field_def

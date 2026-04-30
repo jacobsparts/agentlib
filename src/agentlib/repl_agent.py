@@ -260,7 +260,7 @@ def _tool_worker_main(
                             code_obj = compile(ast.Expression(node.value), "<repl>", "eval")
                             result = eval(code_obj, repl_locals)
                             if result is not None:
-                                print(repr(result))
+                                output_queue.put(("output", repr(result) + "\n"))
                         else:
                             # Other statement - just exec
                             mod = ast.Module(body=[node], type_ignores=[])
@@ -768,6 +768,14 @@ class REPLMixin:
                     last_msg['images'] = last_msg.get('images', []) + kwargs['images']
                 if 'audio' in kwargs:
                     last_msg['audio'] = last_msg.get('audio', []) + kwargs['audio']
+                if '_attachments' in kwargs:
+                    attachments = last_msg.get('_attachments', {})
+                    attachments.update(kwargs['_attachments'])
+                    last_msg['_attachments'] = attachments
+                if '_attachment_refs' in kwargs:
+                    refs = last_msg.get('_attachment_refs', {})
+                    refs.update(kwargs['_attachment_refs'])
+                    last_msg['_attachment_refs'] = refs
 
                 last_msg.setdefault("_render_segments", []).append(
                     {"type": "input", "content": content}
@@ -856,7 +864,7 @@ class REPLMixin:
                 # Static tool - get params from signature
                 sig = inspect.signature(impl)
                 for pname, param in sig.parameters.items():
-                    if pname == 'self':
+                    if pname == 'self' or param.kind == inspect.Parameter.VAR_KEYWORD:
                         continue
                     type_str = _type_to_str(param.annotation) if param.annotation != inspect.Parameter.empty else ''
                     if type_str:

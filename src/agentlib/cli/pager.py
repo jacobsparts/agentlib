@@ -57,6 +57,10 @@ def _read_key() -> str:
         return "down"
     if data in (b"k", b"K"):
         return "up"
+    if data == b"G":
+        return "end"
+    if data in (b"g", b"gg"):
+        return "home"
     if data in (b" ",):
         return "pagedown"
     if data in (b"b", b"B"):
@@ -89,6 +93,22 @@ def _clip_line(line: str, width: int) -> str:
     return line[:width]
 
 
+def _wrap_line(line: str, width: int) -> list[str]:
+    if width <= 0:
+        return [""]
+    line = line.replace("\t", "    ")
+    if not line:
+        return [""]
+    return [line[i:i + width] for i in range(0, len(line), width)]
+
+
+def _wrap_lines(lines: list[str], width: int) -> list[str]:
+    wrapped = []
+    for line in lines:
+        wrapped.extend(_wrap_line(line, width))
+    return wrapped
+
+
 def _render(lines: list[str], view: ScrollView, title: str, width: int, height: int) -> str:
     body_height = max(1, height - 2)
     visible = view.visible(body_height)
@@ -108,7 +128,7 @@ def _render(lines: list[str], view: ScrollView, title: str, width: int, height: 
             out.append(_clip_line(visible[i], width))
         out.append("\x1b[K")
 
-    footer = " ↑/↓ j/k scroll | PgUp/PgDn b/Space page | Home/End | q/Esc close "
+    footer = " ↑/↓ j/k scroll | PgUp/PgDn b/Space page | gg/Home top | G/End bottom | q/Esc close "
     out.append(f"\x1b[{height};1H\x1b[2m{footer[:width]:<{width}}\x1b[0m")
     return "".join(out)
 
@@ -116,18 +136,22 @@ def _render(lines: list[str], view: ScrollView, title: str, width: int, height: 
 def pager_ui(altmode, lines: list[str], title: str = "Viewer", start: str = "top"):
     from .prompt import RawMode
 
-    view = ScrollView(lines)
+    raw_lines = lines
+    view = ScrollView([])
     session = altmode.session()
     session.enter()
     try:
         with RawMode():
             width, height = _term_size()
+            view.lines = _wrap_lines(raw_lines, width)
             if start == "end":
                 view.end(max(1, height - 2))
             while True:
                 width, height = _term_size()
                 body_height = max(1, height - 2)
-                sys.stdout.write(_render(lines, view, title, width, height))
+                view.lines = _wrap_lines(raw_lines, width)
+                view.clamp(body_height)
+                sys.stdout.write(_render(view.lines, view, title, width, height))
                 sys.stdout.flush()
 
                 key = _read_key()

@@ -285,6 +285,7 @@ def prompt(
                 k = os.read(sys.stdin.fileno(), 4096)
                 if not k:
                     raise EOFError()
+                paste_like_chunk = len(k) > 1
             
                 i = 0
                 while i < len(k):
@@ -498,6 +499,19 @@ def prompt(
 
                     # Enter - submit
                     if c in (10, 13):
+                        # Bracketed paste is preferred, but some terminals or
+                        # paste paths occasionally deliver plain multiline
+                        # paste bytes despite bracketed paste being enabled.
+                        # A real Enter key normally arrives as a single byte;
+                        # if a newline arrives as part of a larger read, treat
+                        # it as pasted content rather than submitting after the
+                        # first pasted row.
+                        if paste_like_chunk:
+                            buf.insert(cursor, '\n')
+                            cursor += 1
+                            redraw(buf, cursor)
+                            i += 1
+                            continue
                         line = ''.join(buf)
                         if alt_input and alt_input.active:
                             alt_input.exit(buf, len(buf))
