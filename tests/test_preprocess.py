@@ -10,6 +10,7 @@ from agentlib.preprocess import (
     _comment_leading_non_code_prefix,
     _extract_native_function_call_code,
     _strip_markdown_fences,
+    _strip_leading_prompts,
     _fix_js_comments,
     _fix_triple_quote_conflict,
     _comment_out_non_python,
@@ -262,6 +263,73 @@ class TestStripMarkdownFences:
         """A lone ``` without a matching pair should not trigger extraction."""
         code = 'x = 1\n```'
         assert _strip_markdown_fences(code) == code
+
+
+# === _strip_leading_prompts ===
+
+class TestStripLeadingPrompts:
+    def test_no_prompts_untouched(self):
+        code = 'x = 1\nprint(x)'
+        assert _strip_leading_prompts(code) == code
+
+    def test_triple_prompt_single_line(self):
+        code = '>>> x = 1'
+        assert _strip_leading_prompts(code) == 'x = 1'
+
+    def test_triple_prompt_multiple_lines(self):
+        code = '>>> x = 1\n>>> print(x)'
+        r = _strip_leading_prompts(code)
+        assert r == 'x = 1\nprint(x)'
+        assert compiles(r)
+
+    def test_triple_prompt_with_continuation(self):
+        code = '>>> for i in range(3):\n...     print(i)'
+        r = _strip_leading_prompts(code)
+        assert r == 'for i in range(3):\n    print(i)'
+        assert compiles(r)
+
+    def test_triple_prompt_bare_line(self):
+        """A bare >>> with nothing after it."""
+        code = '>>> x = 1\n>>>\n>>> y = 2'
+        r = _strip_leading_prompts(code)
+        assert 'x = 1' in r
+        assert 'y = 2' in r
+
+    def test_single_gt_prompt(self):
+        code = '>xpath = ""'
+        r = _strip_leading_prompts(code)
+        assert r == 'xpath = ""'
+        assert compiles(r)
+
+    def test_single_gt_with_space(self):
+        code = '> xpath = ""'
+        r = _strip_leading_prompts(code)
+        assert r == 'xpath = ""'
+        assert compiles(r)
+
+    def test_single_gt_multiple_lines(self):
+        code = '> x = 1\n> print(x)'
+        r = _strip_leading_prompts(code)
+        assert r == 'x = 1\nprint(x)'
+        assert compiles(r)
+
+    def test_gt_in_valid_code_untouched(self):
+        """Greater-than in valid Python should not be stripped."""
+        code = 'if x > 0:\n    print(x)'
+        assert _strip_leading_prompts(code) == code
+
+    def test_triple_prompt_preserves_indentation(self):
+        code = '>>> if True:\n...     x = 1\n...     print(x)'
+        r = _strip_leading_prompts(code)
+        assert compiles(r)
+        assert '    x = 1' in r
+
+    def test_mixed_prompt_and_non_prompt_lines(self):
+        code = '>>> x = 1\nsome output\n>>> y = 2'
+        r = _strip_leading_prompts(code)
+        assert 'x = 1' in r
+        assert 'some output' in r
+        assert 'y = 2' in r
 
 
 # === _fix_js_comments ===

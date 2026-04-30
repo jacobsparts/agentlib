@@ -815,6 +815,7 @@ If you don't know how to proceed:
             # cursor while a long read_attach is processed.
             if not getattr(self, '_turn_output_started', False):
                 self._turn_output_started = True
+                self.console.clear_line()  # Clear status text
                 # Only set header pending if we haven't already printed it this interaction
                 if not getattr(self, '_repl_printed_header', False):
                     self._header_pending = True
@@ -1039,6 +1040,7 @@ If you don't know how to proceed:
         self._turn_number = getattr(self, '_turn_number', 1) + 1
         self._turn_output_started = False  # Reset for next turn's clear_line
         thinking = getattr(self, 'thinking_message', 'Thinking...')
+        self.console.clear_line()  # Clear previous status text
         print(f"{DIM}{thinking} (turn {self._turn_number}){RESET}", end="", flush=True)
 
     def on_retry(self, kind: str, retry_num: int) -> None:
@@ -1048,6 +1050,7 @@ If you don't know how to proceed:
             status = f"Max Tokens Retry #{retry_num}... (turn {getattr(self, '_turn_number', 1)})"
         else:
             return
+        self.console.clear_line()  # Clear previous status text
         print(f"{DIM}{status}{RESET}", end="", flush=True)
 
     def user_repl_session(self, history):

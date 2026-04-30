@@ -158,6 +158,48 @@ def _strip_markdown_fences(code: str) -> str:
     return '\n'.join(result)
 
 
+def _strip_leading_prompts(code: str) -> str:
+    """Strip leading ``>`` or ``>>>`` REPL prompt markers from lines.
+
+    Models sometimes prefix lines with ``>`` or ``>>> `` (Python REPL prompt
+    syntax).  These are never valid at the start of a Python statement — the
+    ``>`` operator requires a left operand — so they can be safely removed.
+
+    Handles both ``>>>`` (interactive prompt) and bare ``>`` (quote marker).
+    Continuation prompts ``...`` are also stripped when ``>>>`` is present.
+    """
+    lines = code.split('\n')
+    has_triple = any(re.match(r'^\s*>>>\s', line) or line.strip() == '>>>' for line in lines)
+
+    if has_triple:
+        # Strip >>> and ... prompts
+        result = []
+        for line in lines:
+            m = re.match(r'^(\s*)>>>\s?(.*)', line)
+            if m:
+                result.append(m.group(1) + m.group(2))
+                continue
+            m = re.match(r'^(\s*)\.\.\.\s?(.*)', line)
+            if m:
+                result.append(m.group(1) + m.group(2))
+                continue
+            result.append(line)
+        return '\n'.join(result)
+
+    # Single > at line start
+    if any(re.match(r'^\s*>(?!>)\s*\S', line) for line in lines):
+        result = []
+        for line in lines:
+            m = re.match(r'^(\s*)>\s?(.*)', line)
+            if m:
+                result.append(m.group(1) + m.group(2))
+            else:
+                result.append(line)
+        return '\n'.join(result)
+
+    return code
+
+
 def _fix_js_comments(code: str) -> str:
     r"""Convert JavaScript-style // comments to Python # comments.
 
@@ -276,6 +318,7 @@ def preprocess(code: str) -> str:
     fixed = code
     fixed = _extract_native_function_call_code(fixed)
     fixed = _strip_markdown_fences(fixed)
+    fixed = _strip_leading_prompts(fixed)
     fixed = _fix_js_comments(fixed)
     fixed = _fix_triple_quote_conflict(fixed)
     fixed = _comment_leading_non_code_prefix(fixed)
