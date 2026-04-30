@@ -969,7 +969,8 @@ class SandboxMixin:
 
                     msg_type, msg_data = msg
 
-                    if msg_type in ("output", "print", "emit", "read", "progress"):
+                    if msg_type in ("output", "print", "preview", "emit", "read", "progress",
+                                    "read_attach", "read_partial", "file_written"):
                         stream(msg_data, msg_type)
 
                     elif msg_type == "tool_request":
@@ -982,7 +983,8 @@ class SandboxMixin:
                                 drain_msg = repl.poll_output(timeout=0.1)
                                 if drain_msg is None:
                                     break
-                                if drain_msg[0] in ("output", "print", "emit", "read", "progress"):
+                                if drain_msg[0] in ("output", "print", "preview", "emit", "read", "progress",
+                                                    "read_attach", "read_partial", "file_written"):
                                     stream(drain_msg[1], drain_msg[0])
                                 elif drain_msg[0] == "done":
                                     break
@@ -998,7 +1000,8 @@ class SandboxMixin:
                             drain = repl.poll_output(timeout=0.01)
                             if drain is None:
                                 break
-                            if drain[0] in ("output", "print", "emit", "read", "progress"):
+                            if drain[0] in ("output", "print", "preview", "emit", "read", "progress",
+                                            "read_attach", "read_partial", "file_written"):
                                 stream(drain[1], drain[0])
                         break
 
@@ -1009,7 +1012,8 @@ class SandboxMixin:
                     drain_msg = repl.poll_output(timeout=0.5)
                     if drain_msg is None:
                         break
-                    if drain_msg[0] in ("output", "print", "emit", "read", "progress"):
+                    if drain_msg[0] in ("output", "print", "preview", "emit", "read", "progress",
+                                        "read_attach", "read_partial", "file_written"):
                         stream(drain_msg[1], drain_msg[0])
                     elif drain_msg[0] == "done":
                         break

@@ -987,12 +987,6 @@ If you don't know how to proceed:
         # Suppress display during direct user REPL mode
         if getattr(self, '_in_user_repl', False):
             return
-        # Count suppressed output for this statement (read only - print/output are displayed)
-        suppressed_lines = 0
-        for msg_type, chunk in statement_chunks:
-            if msg_type == "read":
-                suppressed_lines += chunk.count('\n') or 1
-
         # Collect error output for this statement
         error_chunks = []
         for msg_type, chunk in statement_chunks:
@@ -1000,11 +994,6 @@ If you don't know how to proceed:
                 error_chunks.append(chunk)
 
         error_display = "".join(error_chunks)
-
-        # Show suppressed output summary for this statement
-        if suppressed_lines > 0:
-            print(f"{DIM}... ({suppressed_lines} lines){RESET}", flush=True)
-            self._capture_display_line(f"... ({suppressed_lines} lines)")
 
         # Display error output
         if error_display.strip():
@@ -1588,7 +1577,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             parts.extend(lines[-TAIL:])
             rendered = '\n'.join(parts)
 
-        _send_output("print", rendered.rstrip('\n') + "\n")
+        _send_output("preview", rendered.rstrip('\n') + "\n")
 
 
     # Target tool names whose bare expressions get rewritten to assignment + preview
@@ -1596,6 +1585,9 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
     def preprocess_code(self, code: str) -> str:
         """Apply base preprocessing then rewrite bare tool calls to assignment + preview."""
+        if getattr(self, '_in_user_repl', False):
+            return code
+
         code = super().preprocess_code(code)
 
         try:

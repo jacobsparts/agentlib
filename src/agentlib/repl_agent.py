@@ -732,7 +732,7 @@ class REPLMixin:
 
         Override to filter specific chunk types (e.g., exclude "emit" output).
         Each chunk is a (msg_type, text) tuple where msg_type is one of:
-        "echo", "output", "print", "emit", "read", "read_attach", "file_written", "progress", "error".
+        "echo", "output", "print", "preview", "emit", "read", "read_attach", "file_written", "progress", "error".
         """
         return "".join(chunk for _, chunk in output_chunks)
 
@@ -1217,7 +1217,7 @@ Call help(function_name) for parameter descriptions.
                             while True:
                                 try:
                                     msg_type, msg_data = repl._output_queue.get(timeout=0.1)
-                                    if msg_type in ("output", "print", "emit", "read", "progress",
+                                    if msg_type in ("output", "print", "preview", "emit", "read", "progress",
                                                     "read_attach", "read_partial", "file_written"):
                                         stream(msg_data, msg_type)
                                     elif msg_type == "done":
@@ -1234,7 +1234,7 @@ Call help(function_name) for parameter descriptions.
                     # Check for output
                     try:
                         msg_type, msg_data = repl._output_queue.get(timeout=0.05)
-                        if msg_type in ("output", "print", "emit", "read", "progress",
+                        if msg_type in ("output", "print", "preview", "emit", "read", "progress",
                                         "read_attach", "read_partial", "file_written"):
                             stream(msg_data, msg_type)
                         elif msg_type == "done":
