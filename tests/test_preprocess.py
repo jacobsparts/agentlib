@@ -7,6 +7,7 @@ from pathlib import Path
 from agentlib.agents.code_agent import CodeAgent
 from agentlib import SandboxMixin
 from agentlib.preprocess import (
+    _close_unclosed_string,
     _comment_leading_non_code_prefix,
     _extract_native_function_call_code,
     _strip_markdown_fences,
@@ -443,6 +444,34 @@ class TestCommentOutNonPython:
         assert compiles(r)
 
 
+# === _close_unclosed_string ===
+
+class TestCloseUnclosedString:
+    def test_valid_code_untouched(self):
+        code = 'x = 1'
+        assert _close_unclosed_string(code) == code
+
+    def test_matched_triple_quotes_untouched(self):
+        code = 'x = """hello"""\nprint(x)'
+        assert _close_unclosed_string(code) == code
+
+    def test_odd_double_triple_quote_closed(self):
+        code = 'emit("""text with """ and """ more'
+        r = _close_unclosed_string(code)
+        assert r.count('"""') % 2 == 0
+        assert r.endswith('""")')
+
+    def test_odd_single_triple_quote_closed(self):
+        code = "emit('''text with ''' and ''' more"
+        r = _close_unclosed_string(code)
+        assert r.count("'''") % 2 == 0
+        assert r.endswith("''')")
+
+    def test_already_even_not_modified(self):
+        code = 'print("""a """ b """ c """)'
+        assert _close_unclosed_string(code) == code
+
+
 # === _fix_triple_quote_conflict ===
 
 class TestFixTripleQuoteConflict:
@@ -667,6 +696,26 @@ class TestPreprocess:
         code = 'content = read("CLAUDE.md")'
         r = preprocess(code)
         assert same_ast(r, 'content = read("CLAUDE.md")')
+        assert compiles(r)
+
+    def test_unclosed_triple_quote_in_emit(self):
+        code = 'emit("""Here is how triple quotes work'
+        r = preprocess(code)
+        assert compiles(r)
+
+    def test_unclosed_with_multiple_inner_triple_quotes(self):
+        code = 'emit("""Use """ for docstrings and """ for multiline'
+        r = preprocess(code)
+        assert compiles(r)
+
+    def test_unclosed_closing_absorbs_paren(self):
+        code = 'emit("""text with """ inside, release=True)'
+        r = preprocess(code)
+        assert isinstance(r, str)
+
+    def test_unclosed_single_triple_quote_in_emit(self):
+        code = "emit('''Here is how triple quotes work"
+        r = preprocess(code)
         assert compiles(r)
 
 

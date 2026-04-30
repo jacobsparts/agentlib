@@ -267,6 +267,17 @@ def _comment_out_non_python(code: str) -> str:
     return '\n'.join(lines)
 
 
+def _close_unclosed_string(code: str) -> str:
+    """Append a matching triple-quote delimiter when one is unclosed."""
+    for delim in ['"""', "'''"]:
+        if code.count(delim) % 2 == 1:
+            code = code + delim
+            unmatched = code.count('(') - code.count(')')
+            if unmatched > 0:
+                code = code + ')' * unmatched
+    return code
+
+
 def _fix_triple_quote_conflict(code: str) -> str:
     '''Fix triple-quote conflicts where outer """ contains inner """ docstrings.
 
@@ -320,6 +331,7 @@ def preprocess(code: str) -> str:
     fixed = _strip_markdown_fences(fixed)
     fixed = _strip_leading_prompts(fixed)
     fixed = _fix_js_comments(fixed)
+    fixed = _close_unclosed_string(fixed)
     fixed = _fix_triple_quote_conflict(fixed)
     fixed = _comment_leading_non_code_prefix(fixed)
     fixed = _comment_out_non_python(fixed)
