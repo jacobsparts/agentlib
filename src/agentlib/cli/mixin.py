@@ -103,7 +103,8 @@ class InputSession:
         self._history_list = self.history.load_history()
         self.altmode = altmode
 
-    def prompt(self, prompt_str: str = "> ", initial_text: str = "") -> str:
+    def prompt(self, prompt_str: str = "> ", initial_text: str = "",
+               on_ctrl_o=None) -> str:
         """Get input from user."""
         user_input = raw_prompt(
             prompt_str=prompt_str,
@@ -111,6 +112,7 @@ class InputSession:
             on_submit=self.history.add,
             altmode=self.altmode,
             initial_text=initial_text,
+            on_ctrl_o=on_ctrl_o,
         )
         return user_input
 

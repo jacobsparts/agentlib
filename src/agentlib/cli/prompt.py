@@ -50,6 +50,7 @@ def prompt(
     add_to_history: bool = True,
     altmode: Optional['AltMode'] = None,
     initial_text: str = '',
+    on_ctrl_o: Optional[Callable[[str, int], None]] = None,
 ) -> str:
     """
     Read a line of input with editing support.
@@ -476,6 +477,14 @@ def prompt(
                     if c == 12:
                         sys.stdout.write('\x1b[2J\x1b[H')
                         redraw(buf, cursor)
+                        i += 1
+                        continue
+
+                    # Ctrl+O - optional external UI hook
+                    if c == 15:
+                        if on_ctrl_o:
+                            on_ctrl_o(''.join(buf), cursor)
+                            redraw(buf, cursor)
                         i += 1
                         continue
 

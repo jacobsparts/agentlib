@@ -1250,7 +1250,7 @@ If you don't know how to proceed:
         prompt_str = getattr(self, 'cli_prompt', '> ')
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
-        self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
+        self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+O = transcript | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
         self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
 
         resumed_on_start = False
@@ -1273,8 +1273,19 @@ If you don't know how to proceed:
         try:
             preload_input = ""
             while True:
+                def open_transcript(_buffer: str, _cursor: int):
+                    from agentlib.cli.transcript import transcript_viewer_ui
+                    self._ensure_live_session()
+                    self._flush_pending_session_events()
+                    events = self._session_store.get_events(self._session_id) if self._session_id else []
+                    transcript_viewer_ui(altmode, events)
+
                 try:
-                    user_input = session.prompt(f"\n{prompt_str}", initial_text=preload_input)
+                    user_input = session.prompt(
+                        f"\n{prompt_str}",
+                        initial_text=preload_input,
+                        on_ctrl_o=open_transcript,
+                    )
                 except KeyboardInterrupt:
                     print()
                     preload_input = ""
