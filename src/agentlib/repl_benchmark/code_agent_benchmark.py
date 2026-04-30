@@ -166,7 +166,7 @@ class CodeAgentBenchmarkContext:
 
     def first_tool_offset(self) -> int:
         positions = []
-        for tool_name in ("grep", "read", "view_file", "preview", "bash"):
+        for tool_name in ("grep", "read", "view", "preview", "bash"):
             idx = self.output.find(f">>> {tool_name}(")
             if idx != -1:
                 positions.append(idx)
@@ -463,7 +463,7 @@ def build_code_agent_test_env(
     return env
 
 
-_FILE_READ_TOOLS = frozenset({"read", "view_file"})
+_FILE_READ_TOOLS = frozenset({"read", "view"})
 
 
 def _saw_tool_equiv(ctx: "CodeAgentBenchmarkContext", tool_name: str) -> bool:
@@ -724,7 +724,7 @@ def _contains_any(text: str, words: tuple[str, ...]) -> bool:
     return any(w.lower() in lowered for w in words)
 
 
-def checker_read_vs_view_file(ctx: CodeAgentBenchmarkContext) -> tuple[bool, list[BenchmarkViolation]]:
+def checker_read_vs_view(ctx: CodeAgentBenchmarkContext) -> tuple[bool, list[BenchmarkViolation]]:
     passed, violations = make_code_agent_checker(
         expected_final=ctx.final_line,
         required_tools=("read",),
@@ -746,7 +746,7 @@ def checker_read_vs_view_file(ctx: CodeAgentBenchmarkContext) -> tuple[bool, lis
             return False, violations
 
     read_desc = str(payload.get("read", ""))
-    view_desc = str(payload.get("view_file", ""))
+    view_desc = str(payload.get("view", ""))
     if not _contains_any(read_desc, ("text", "string", "value", "content", "return")):
         violations.append(make_violation(
             "missing_read_semantics",
@@ -757,14 +757,14 @@ def checker_read_vs_view_file(ctx: CodeAgentBenchmarkContext) -> tuple[bool, lis
     if not _contains_any(view_desc, ("attachment", "attach", "context", "display")):
         violations.append(make_violation(
             "missing_view_attachment",
-            "view_file description should mention attachment/context/display behavior",
+            "view description should mention attachment/context/display behavior",
             12.0,
             "correctness",
         ))
     if not _contains_any(view_desc, ("line", "number", "numbered")):
         violations.append(make_violation(
             "missing_view_numbering",
-            "view_file description should mention numbered display/lines",
+            "view description should mention numbered display/lines",
             5.0,
             "correctness",
         ))
@@ -900,9 +900,9 @@ CODE_AGENT_TASKS = [
     ),
     CodeAgentBenchmarkTask(
         id="code-agent/read-vs-view-file",
-        prompt="Inspect the repo and emit JSON with keys read and view_file explaining the functional difference between those tools.",
+        prompt="Inspect the repo and emit JSON with keys read and view explaining the functional difference between those tools.",
         description="Requires understanding how CodeAgent treats text reads versus numbered attachment views.",
-        checker=checker_read_vs_view_file,
+        checker=checker_read_vs_view,
         max_turns=30,
         tags=("code-agent", "tool-semantics"),
     ),

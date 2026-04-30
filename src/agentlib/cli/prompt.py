@@ -51,6 +51,7 @@ def prompt(
     altmode: Optional['AltMode'] = None,
     initial_text: str = '',
     on_ctrl_o: Optional[Callable[[str, int], None]] = None,
+    on_esc_esc: Optional[Callable[[], Optional[str]]] = None,
 ) -> str:
     """
     Read a line of input with editing support.
@@ -95,8 +96,9 @@ def prompt(
         nonlocal prev_lines, prev_cursor_row
 
         try:
-            term_width = os.get_terminal_size().columns
-            term_height = os.get_terminal_size().lines
+            size = os.get_terminal_size()
+            term_width = size.columns or 80
+            term_height = size.lines or 24
         except OSError:
             term_width = 80
             term_height = 24
@@ -216,7 +218,7 @@ def prompt(
         """Return (total_rows, cursor_abs_row) for the current buffer.
         Used by the dispatcher to decide main vs. alt-screen rendering."""
         try:
-            term_width = os.get_terminal_size().columns
+            term_width = os.get_terminal_size().columns or 80
         except OSError:
             term_width = 80
         content = ''.join(buf)
@@ -249,7 +251,7 @@ def prompt(
             return
 
         try:
-            term_height = os.get_terminal_size().lines
+            term_height = os.get_terminal_size().lines or 24
         except OSError:
             term_height = 24
         view_budget = max(1, term_height - 1)
@@ -279,17 +281,34 @@ def prompt(
         cursor = len(buf)
         history_idx = len(history)
         saved_line = []
+        pending_esc = False
         
         try:
             while True:
                 k = os.read(sys.stdin.fileno(), 4096)
                 if not k:
                     raise EOFError()
-                paste_like_chunk = len(k) > 1
+                paste_like_chunk = len(k) > 1 and not (
+                    k.endswith((b"\n", b"\r"))
+                    and k.count(b"\n") + k.count(b"\r") == 1
+                )
             
                 i = 0
                 while i < len(k):
                     c = k[i]
+
+                    if pending_esc:
+                        pending_esc = False
+                        if c == 27 and on_esc_esc:
+                            line = on_esc_esc()
+                            if line is not None:
+                                if alt_input and alt_input.active:
+                                    alt_input.exit(buf, len(buf))
+                                sys.stdout.write('\n')
+                                sys.stdout.flush()
+                                return line
+                            i += 1
+                            continue
                 
                     # Ctrl+D - EOF
                     if c == 4:
@@ -311,6 +330,18 @@ def prompt(
                         buf.insert(cursor, '\n')
                         cursor += 1
                         redraw(buf, cursor)
+                        i += 2
+                        continue
+
+                    # ESC ESC - optional external shortcut hook
+                    if c == 27 and i + 1 < len(k) and k[i+1] == 27 and on_esc_esc:
+                        line = on_esc_esc()
+                        if line is not None:
+                            if alt_input and alt_input.active:
+                                alt_input.exit(buf, len(buf))
+                            sys.stdout.write('\n')
+                            sys.stdout.flush()
+                            return line
                         i += 2
                         continue
                 
@@ -430,6 +461,11 @@ def prompt(
                                 del buf[cursor]
                                 redraw(buf, cursor)
                         continue
+
+                    if c == 27:
+                        pending_esc = True
+                        i += 1
+                        continue
                 
                     # Ctrl+A - start of current line
                     if c == 1:
@@ -533,7 +569,7 @@ def prompt(
                             # Fast path: typing at end of single-line input
                             # on main screen. Skip full redraw.
                             try:
-                                tw = os.get_terminal_size().columns
+                                tw = os.get_terminal_size().columns or 80
                             except OSError:
                                 tw = 80
                             if tw > 0 and (len(display_prompt) + len(buf)) % tw == 0:

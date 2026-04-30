@@ -4,17 +4,32 @@ import re
 from pathlib import Path
 
 
-def render_attachment_content(path: str) -> str:
-    content = Path(path).expanduser().read_text()
+def _preview_key(path: str) -> str | None:
+    prefix = "session://preview/"
+    if isinstance(path, str) and path.startswith(prefix):
+        key = path[len(prefix):]
+        return key or None
+    return None
+
+
+def render_attachment_content(path: str, store=None, session_id: str | None = None) -> str:
+    if key := _preview_key(path):
+        if store is None or session_id is None:
+            raise FileNotFoundError(path)
+        content = store.get_preview_blob(session_id, key)
+        if content is None:
+            raise FileNotFoundError(path)
+    else:
+        content = Path(path).expanduser().read_text()
     lines = content.split('\n')
     return '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
 
 
-def _load_attachment_map(refs: dict[str, str], missing: list[tuple[str, str]]) -> dict[str, str]:
+def _load_attachment_map(refs: dict[str, str], missing: list[tuple[str, str]], store=None, session_id: str | None = None) -> dict[str, str]:
     loaded = {}
     for name, path in refs.items():
         try:
-            loaded[name] = render_attachment_content(path)
+            loaded[name] = render_attachment_content(path, store, session_id)
         except Exception:
             missing.append((name, path))
     return loaded
@@ -77,7 +92,7 @@ def replay_session_into_agent(agent, session_id: str, store):
             refs = msg.pop("_attachment_refs", None) or {}
             local_missing = []
             if refs:
-                loaded = _load_attachment_map(refs, local_missing)
+                loaded = _load_attachment_map(refs, local_missing, store, session_id)
                 if loaded:
                     msg["_attachments"] = loaded
                 msg["_attachment_refs"] = refs
@@ -107,7 +122,11 @@ def replay_session_into_agent(agent, session_id: str, store):
         refs = msg.get("_attachment_refs") or {}
         attachments = msg.get("_attachments", {})
         for name, path in refs.items():
-            if not Path(path).expanduser().exists():
+            if _preview_key(path):
+                if store.get_preview_blob(session_id, _preview_key(path)) is None:
+                    attachments.pop(name, None)
+                    final_missing.append((name, path))
+            elif not Path(path).expanduser().exists():
                 attachments.pop(name, None)
                 final_missing.append((name, path))
         if "_attachments" in msg and not msg["_attachments"]:

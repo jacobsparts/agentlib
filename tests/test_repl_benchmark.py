@@ -427,13 +427,13 @@ def test_cli_includes_code_agent_builtin_suite(tmp_path):
                 ("release discipline", ['emit("18", release=True)']),
                 ("12345 squared", ['emit("25", release=True)']),
                 ("sum(range(1, 11))", ['emit("55", release=True)']),
-                ("overrides the session sqlite path", ['preview(_v1 := grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)']),
-                ("CLI history sqlite path override", ['preview(_v1 := grep("AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_CLI_HISTORY_DB", release=True)']),
+                ("overrides the session sqlite path", ['preview(grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)']),
+                ("CLI history sqlite path override", ['preview(grep("AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_CLI_HISTORY_DB", release=True)']),
                 ("first emit() call", ['_code = read("src/agentlib/agents/code_agent.py")\npreview(_code)', 'emit("Checking today\'s date...", release=True)']),
                 ("number of tool names in _preview_targets", ['_code = read("src/agentlib/agents/code_agent.py")\nemit("3", release=True)']),
-                ("sqlite state can be isolated", ['preview(_v1 := grep("AGENTLIB_SESSION_DB|AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))', 'import json\n_s = read("src/agentlib/session_store.py")\n_h = read("src/agentlib/cli/mixin.py")\nemit(json.dumps({"session_db_source":"AGENTLIB_SESSION_DB in session_store.resolve_db_path","history_db_source":"AGENTLIB_CLI_HISTORY_DB in SQLiteHistory.__init__","reason":"Environment variable overrides force each sqlite path to a temp test db, so benchmark state stays isolated."}), release=True)']),
+                ("sqlite state can be isolated", ['preview(grep("AGENTLIB_SESSION_DB|AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))', 'import json\n_s = read("src/agentlib/session_store.py")\n_h = read("src/agentlib/cli/mixin.py")\nemit(json.dumps({"session_db_source":"AGENTLIB_SESSION_DB in session_store.resolve_db_path","history_db_source":"AGENTLIB_CLI_HISTORY_DB in SQLiteHistory.__init__","reason":"Environment variable overrides force each sqlite path to a temp test db, so benchmark state stays isolated."}), release=True)']),
                 ("/resume succeeds", ['_a = read("src/agentlib/agents/code_agent.py")\n_b = read("src/agentlib/session_replay.py")\npreview(_a)', 'emit("resume_session -> replay_session_into_agent -> _replay_display_output; then usermsg adds system_reset / REPL session has been reset", release=True)']),
-                ("functional difference between those tools", ['_code = read("src/agentlib/agents/code_agent.py")\npreview(_code)', 'import json\nemit(json.dumps({"read":"returns file contents as text for use as a Python value","view_file":"shows numbered lines and attachment behavior for conversation context"}), release=True)']),
+                ("functional difference between those tools", ['_code = read("src/agentlib/agents/code_agent.py")\npreview(_code)', 'import json\nemit(json.dumps({"read":"returns file contents as text for use as a Python value","view":"shows numbered lines and attachment behavior for conversation context"}), release=True)']),
             ]
             for marker, responses in key_map:
                 if marker in text:
@@ -503,7 +503,7 @@ def test_cli_can_stream_code_agent_repl_output(tmp_path):
             payload = json.loads(self.rfile.read(length))
             text = payload["messages"][-1]["content"]
             if "overrides the session sqlite path" in text:
-                content = 'preview(_v1 := grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)'
+                content = 'preview(grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)'
             else:
                 content = 'emit("fallback", release=True)'
             response = {

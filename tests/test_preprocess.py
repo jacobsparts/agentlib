@@ -606,13 +606,13 @@ class TestCodeAgentPreprocessCode:
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
         r = agent.preprocess_code('read("file.py")')
-        assert same_ast(r, 'preview(_v1 := read("file.py"))')
+        assert same_ast(r, 'view("file.py")')
 
-    def test_print_read_becomes_view_file(self):
+    def test_print_read_becomes_view(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
         r = agent.preprocess_code('print(read("file.py"))')
-        assert same_ast(r, 'view_file("file.py")')
+        assert same_ast(r, 'view("file.py")')
 
     def test_preview_read_left_alone(self):
         CodeAgent._preview_counter = 0
@@ -620,22 +620,22 @@ class TestCodeAgentPreprocessCode:
         r = agent.preprocess_code('preview(read("file.py"))')
         assert same_ast(r, 'preview(read("file.py"))')
 
-    def test_view_file_assignment_rejected(self):
+    def test_view_assignment_rejected(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
-        r = agent.preprocess_code('content = view_file("file.py")')
+        r = agent.preprocess_code('content = view("file.py")')
         assert same_ast(
             r,
-            'raise ValueError("view_file() is a display tool, not a value. Use read() for file contents as text.")',
+            'raise ValueError("view() is a display tool, not a value. Use read() for file contents as text.")',
         )
 
-    def test_print_view_file_rejected(self):
+    def test_print_view_rejected(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
-        r = agent.preprocess_code('print(view_file("file.py"))')
+        r = agent.preprocess_code('print(view("file.py"))')
         assert same_ast(
             r,
-            'raise ValueError("view_file() is a display tool, not a value. Use read() for file contents as text.")',
+            'raise ValueError("view() is a display tool, not a value. Use read() for file contents as text.")',
         )
 
     def test_attached_file_matches_absolute_written_path(self, tmp_path):

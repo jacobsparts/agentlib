@@ -396,7 +396,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 path = partial_read_path
                 partial_read_path = None
                 if self._is_attached(path):
-                    result.append(f"ValueError: Partial view_file denied for file already in context. Call view_file() without offset or limit to reload the file, or call unview_file({path!r}) to remove it from future context and enable partial views.\n")
+                    result.append(f"ValueError: Partial view denied for file already in context. Call view() without offset or limit to reload the file, or call unview({path!r}) to remove it from future context and enable partial views.\n")
                     continue
                 result.append(chunk)
                 continue
@@ -420,7 +420,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 formatted = '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
                 self._invalidate_attachment(attached_name)
                 self._read_attachments[attached_name] = formatted
-                result.append(f">>> view_file({attached_name!r})\n[Attachment: {attached_name}]\n")
+                result.append(f">>> view({attached_name!r})\n[Attachment: {attached_name}]\n")
             except Exception:
                 pass
 
@@ -579,7 +579,7 @@ run the computation first, then verify the output on your next turn before
 releasing. Do not claim success based on output you haven't reviewed.
 
 Before final emit after code work, detach viewed files that are no longer
-relevant with unview_file(path).
+relevant with unview(path).
 
 NEVER:
 - Ask permission for read-only operations (reading files, exploring code)
@@ -615,23 +615,23 @@ Don't reconnect every turn - the connection object persists.
 read() returns file contents as text. Use it when you need to assign, search,
 split, parse, or otherwise process file contents in Python.
 
-view_file("file.py") is for inspecting code with line numbers:
-- Prefer one full view_file(file_path) when inspecting a normal-sized source
+view("file.py") is for inspecting code with line numbers:
+- Prefer one full view(file_path) when inspecting a normal-sized source
   file you may need to reason about or edit across turns.
-- Do not use view_file() just to get a string value; use read() for that.
-- Do not repeatedly call partial view_file(..., offset=..., limit=...) on the
+- Do not use view() just to get a string value; use read() for that.
+- Do not repeatedly call partial view(..., offset=..., limit=...) on the
   same normal-sized file.
 
-Use partial view_file(..., offset=..., limit=...) only when:
+Use partial view(..., offset=..., limit=...) only when:
 - the file is genuinely huge, minified, generated, or vendored, or
 - you already have the full file in context and need a very narrow line-number
   check, or
 - the user explicitly asks for a small line range.
 
-If you accidentally view an irrelevant file, call unview_file(file_path) to
+If you accidentally view an irrelevant file, call unview(file_path) to
 remove it from future context.
 
-When files change, a previous full view_file(file_path) is refreshed
+When files change, a previous full view(file_path) is refreshed
 automatically. Re-viewing a normal-sized file updates context rather than
 accumulating stale duplicate copies. Prefer a refreshed full-file view over
 accumulating partial snippets.
@@ -650,7 +650,7 @@ full; long strings show a head/tail summary with line and character counts.
 
 Before modifying code, view it first. Never propose changes to code you
 haven't seen. Use grep() to locate files or anchors, then prefer one full
-view_file() of the target file rather than several narrow view_file(...,
+view() of the target file rather than several narrow view(...,
 offset=..., limit=...) slices, unless the file is genuinely huge. Use read()
 when you need file contents as a Python text value for processing.
 
@@ -715,14 +715,14 @@ emit("Should I read the config file?", release=True)  # WRONG - just read it
 # GOOD: Just do it
 read("config.json")  # Contents appear in your next turn
 
-# BAD: Using view_file() as a value
-content = view_file("file.py")  # WRONG - view_file() is display-only
-print(view_file("file.py"))     # WRONG - use view_file("file.py") directly
+# BAD: Using view() as a value
+content = view("file.py")  # WRONG - view() is display-only
+print(view("file.py"))     # WRONG - use view("file.py") directly
 
-# GOOD: read() returns text, view_file() displays/attaches
+# GOOD: read() returns text, view() displays/attaches
 content = read("file.py")
 preview(read("file.py"))
-view_file("file.py")
+view("file.py")
 
 # BAD: Reading in small chunks unnecessarily
 read("file.py", offset=1, limit=50)   # WRONG - just read the whole file
@@ -730,18 +730,18 @@ read("file.py", offset=1, limit=50)   # WRONG - just read the whole file
 # GOOD: Just call read() directly
 read("file.py")
 
-# BAD: Repeated narrow view_file() calls on the same normal-sized file
-view_file("app.js", offset=2200, limit=40)
-view_file("app.js", offset=2400, limit=30)
-view_file("app.js", offset=3300, limit=20)
+# BAD: Repeated narrow view() calls on the same normal-sized file
+view("app.js", offset=2200, limit=40)
+view("app.js", offset=2400, limit=30)
+view("app.js", offset=3300, limit=20)
 
 # GOOD: Use grep() to locate anchors, then inspect the file once
 grep("triggerFindPrompt|focusTerminalFromTouch", "app.js", None, None, False, 0, False, False)
-view_file("app.js")
+view("app.js")
 
 # GOOD: If you viewed the wrong file, remove it from future context
-view_file("wrong_file.py")
-unview_file("wrong_file.py")
+view("wrong_file.py")
+unview("wrong_file.py")
 
 # BAD: Re-establishing connections
 conn = mysql.connector.connect(...)  # Every turn? No!
@@ -1268,7 +1268,7 @@ If you don't know how to proceed:
         prompt_str = getattr(self, 'cli_prompt', '> ')
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
-        self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+O = transcript | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
+        self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+O = transcript | Esc Esc = rewind | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
         self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
 
         resumed_on_start = False
@@ -1291,6 +1291,8 @@ If you don't know how to proceed:
         try:
             preload_input = ""
             while True:
+                rewind_shortcut = False
+
                 def open_transcript(_buffer: str, _cursor: int):
                     from agentlib.cli.transcript import transcript_viewer_ui
                     self._ensure_live_session()
@@ -1298,11 +1300,17 @@ If you don't know how to proceed:
                     events = self._session_store.get_events(self._session_id) if self._session_id else []
                     transcript_viewer_ui(altmode, events)
 
+                def trigger_rewind():
+                    nonlocal rewind_shortcut
+                    rewind_shortcut = True
+                    return "/rewind"
+
                 try:
                     user_input = session.prompt(
                         f"\n{prompt_str}",
                         initial_text=preload_input,
                         on_ctrl_o=open_transcript,
+                        on_esc_esc=trigger_rewind,
                     )
                 except KeyboardInterrupt:
                     print()
@@ -1320,9 +1328,8 @@ If you don't know how to proceed:
 
                 self._ensure_live_session()
                 self._flush_pending_session_events()
-                self._display_input_block(user_input)
-
                 if user_input.strip() == "/repl":
+                    self._display_input_block(user_input)
                     try:
                         self.user_repl_session(history)
                     except Exception as e:
@@ -1330,12 +1337,17 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip() == "/rewind":
+                    if not rewind_shortcut:
+                        self._display_input_block(user_input)
                     from agentlib.cli.rewind import rewind_ui
                     self._ensure_live_session()
                     self._flush_pending_session_events()
                     events = self._session_store.get_events(self._session_id) if self._session_id else []
                     rewind_result = rewind_ui(altmode, events)
                     if rewind_result is not None:
+                        if rewind_shortcut:
+                            sys.stdout.write("\x1b[1A\r\x1b[K")
+                            sys.stdout.flush()
                         target_seq = rewind_result.get("target_seq")
                         if target_seq is not None:
                             self._append_session_event("rewind", {"target_seq": target_seq})
@@ -1345,9 +1357,13 @@ If you don't know how to proceed:
                         last = self.conversation.messages[-1] if self.conversation.messages else None
                         self._last_was_repl_output = bool(last and last.get('role') == 'user')
                         preload_input = rewind_result.get("preload_input", "") or ""
+                    elif rewind_shortcut:
+                        sys.stdout.write("\x1b[1A\r\x1b[K")
+                        sys.stdout.flush()
                     continue
 
                 if user_input.strip().startswith("/resume"):
+                    self._display_input_block(user_input)
                     resumed = False
                     parts = user_input.strip().split(None, 1)
                     if len(parts) == 1:
@@ -1362,6 +1378,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/skills"):
+                    self._display_input_block(user_input)
                     parts = user_input.strip().split(None, 1)
                     if len(parts) == 1:
                         from agentlib.cli.skills import select_skills_ui
@@ -1380,6 +1397,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/attach "):
+                    self._display_input_block(user_input)
                     filename = user_input.strip()[8:].strip()
                     if filename:
                         try:
@@ -1392,6 +1410,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/detach "):
+                    self._display_input_block(user_input)
                     filename = user_input.strip()[8:].strip()
                     if filename:
                         self.detach_file_ref(filename)
@@ -1399,6 +1418,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip() == "/attachments":
+                    self._display_input_block(user_input)
                     attachments = self.list_attachments()
                     if not attachments:
                         self._display_text(f"{DIM}No attachments{RESET}", kind="status")
@@ -1410,6 +1430,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/model"):
+                    self._display_input_block(user_input)
                     parts = user_input.strip().split(None, 1)
                     if len(parts) == 1:
                         # No argument - show current model
@@ -1440,6 +1461,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip() == "/tokens":
+                    self._display_input_block(user_input)
                     tracker = self.llm_client.usage_tracker
                     if not tracker.history:
                         self._display_text(f"{DIM}No API calls yet{RESET}", kind="status")
@@ -1456,6 +1478,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/subagents"):
+                    self._display_input_block(user_input)
                     try:
                         # Import subagent module into REPL and show docstring to agent
                         # Optional model parameter: /subagents [model]
@@ -1491,6 +1514,8 @@ If you don't know how to proceed:
                     except Exception as e:
                         print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
                     continue
+
+                self._display_input_block(user_input)
 
                 if synth:
                     try:
@@ -1592,6 +1617,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         lines = value.split('\n')
         nlines = len(lines)
         nchars = len(value)
+        uri = None
 
         # Short enough to show in full
         if nlines <= 20 and nchars <= 2000:
@@ -1600,10 +1626,23 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             HEAD = 8
             TAIL = 4
             omitted = nlines - HEAD - TAIL
+            key = __import__("hashlib").sha256(value.encode("utf-8")).hexdigest()[:16]
+            uri = f"session://preview/{key}"
+            import json as _json
+            global _request_id
+            _request_id += 1
+            _req_id = _request_id
+            _send_tool_request(_json.dumps({
+                "tool": "__preview_blob_save__",
+                "args": {"key": key, "content": value},
+                "request_id": _req_id,
+            }))
+            _wait_for_ack(_req_id)
             parts = [f"({nlines} lines, {nchars} chars)"]
             parts.extend(lines[:HEAD])
             parts.append(f"  ... ({omitted} lines omitted)")
             parts.extend(lines[-TAIL:])
+            parts.append(f"[full output saved to {uri}]")
             rendered = '\n'.join(parts)
 
         _send_output("preview", rendered.rstrip('\n') + "\n")
@@ -1633,37 +1672,37 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         def _is_named_call(node, *names):
             return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in names
 
-        invalid_view_file_message = "view_file() is a display tool, not a value. Use read() for file contents as text."
+        invalid_view_message = "view() is a display tool, not a value. Use read() for file contents as text."
 
         # Collect all rewrites as (start_line_0idx, end_line_0idx, new_lines)
         all_rewrites = []
 
-        # Pattern 0: reject value-style uses of view_file(...)
+        # Pattern 0: reject value-style uses of view(...)
         for node in body:
             start = node.lineno - 1
             end = node.end_lineno - 1
             orig = lines[start:end + 1]
             indent = orig[0][:len(orig[0]) - len(orig[0].lstrip())]
 
-            if isinstance(node, ast.Assign) and _is_named_call(node.value, 'view_file'):
+            if isinstance(node, ast.Assign) and _is_named_call(node.value, 'view'):
                 all_rewrites.append((start, end, [
-                    f"{indent}raise ValueError({invalid_view_file_message!r})",
+                    f"{indent}raise ValueError({invalid_view_message!r})",
                 ]))
                 continue
 
-            if isinstance(node, ast.AnnAssign) and node.value and _is_named_call(node.value, 'view_file'):
+            if isinstance(node, ast.AnnAssign) and node.value and _is_named_call(node.value, 'view'):
                 all_rewrites.append((start, end, [
-                    f"{indent}raise ValueError({invalid_view_file_message!r})",
+                    f"{indent}raise ValueError({invalid_view_message!r})",
                 ]))
                 continue
 
             if isinstance(node, ast.Expr) and _is_named_call(node.value, 'preview', 'print') and len(node.value.args) == 1 and not node.value.keywords:
                 inner = node.value.args[0]
-                if _is_named_call(inner, 'view_file') or (
-                    isinstance(inner, ast.NamedExpr) and _is_named_call(inner.value, 'view_file')
+                if _is_named_call(inner, 'view') or (
+                    isinstance(inner, ast.NamedExpr) and _is_named_call(inner.value, 'view')
                 ):
                     all_rewrites.append((start, end, [
-                        f"{indent}raise ValueError({invalid_view_file_message!r})",
+                        f"{indent}raise ValueError({invalid_view_message!r})",
                     ]))
                     continue
 
@@ -1682,12 +1721,15 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             indent = orig[0][:len(orig[0]) - len(orig[0].lstrip())]
 
             if isinstance(func, ast.Name) and func.id in self._preview_targets:
-                self.__class__._preview_counter += 1
-                var = f"_v{self._preview_counter}"
                 call_source = '\n'.join(orig).strip()
-                all_rewrites.append((start, end, [
-                    f"{indent}preview({var} := {call_source})",
-                ]))
+                if func.id == 'read':
+                    all_rewrites.append((start, end, [
+                        f"{indent}view{call_source[len('read'):]}",
+                    ]))
+                else:
+                    all_rewrites.append((start, end, [
+                        f"{indent}preview({call_source})",
+                    ]))
             elif (isinstance(func, ast.Name) and func.id == 'print'
                   and len(call.args) == 1 and not call.keywords):
                 inner = call.args[0]
@@ -1695,16 +1737,14 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                     inner_source = _source(inner)
                     if inner_source:
                         all_rewrites.append((start, end, [
-                            f"{indent}view_file{inner_source[len('read'):]}",
+                            f"{indent}view{inner_source[len('read'):]}",
                         ]))
                     continue
                 if _is_named_call(inner, *self._preview_targets):
                     inner_source = _source(inner)
                     if inner_source:
-                        self.__class__._preview_counter += 1
-                        var = f"_v{self._preview_counter}"
                         all_rewrites.append((start, end, [
-                            f"{indent}preview({var} := {inner_source})",
+                            f"{indent}preview({inner_source})",
                         ]))
 
         # Pattern 2: var = target(...) immediately followed by print(var)
@@ -1749,6 +1789,27 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             lines[start:end + 1] = new_lines
 
         return '\n'.join(lines)
+
+    def _handle_tool_request(self, repl, req: dict) -> None:
+        tool_name = req.get('tool')
+        if tool_name in {'__preview_blob_save__', '__preview_blob_read__'}:
+            request_id = req.get('request_id')
+            args = req.get('args', {})
+            try:
+                if getattr(self, '_session_id', None) is None:
+                    self._ensure_live_session()
+                    self._flush_pending_session_events()
+                if tool_name == '__preview_blob_save__':
+                    self._session_store.save_preview_blob(self._session_id, args.get('key'), args.get('content', ''))
+                    repl.send_reply(request_id, result=True)
+                else:
+                    repl.send_reply(request_id, result=self._session_store.get_preview_blob(self._session_id, args.get('key')))
+            except Exception as e:
+                repl.send_reply(request_id, error=str(e))
+            finally:
+                repl.send_ack(request_id)
+            return
+        return super()._handle_tool_request(repl, req)
 
     @REPLAgent.tool(inject=True)
     def grep(self,
@@ -1805,11 +1866,27 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             lines = read("file.py").splitlines()
             snippet = read("file.py", offset=100, limit=20)
 
-        Use view_file() when you want numbered output and attachment behavior:
-            view_file("file.py")
-            view_file("file.py", offset=100, limit=20)
+        Use view() when you want numbered output and attachment behavior:
+            view("file.py")
+            view("file.py", offset=100, limit=20)
         """
-        content = Path(file_path).expanduser().read_text()
+        prefix = "session://preview/"
+        if isinstance(file_path, str) and file_path.startswith(prefix):
+            key = file_path[len(prefix):]
+            import json as _json
+            global _request_id
+            _request_id += 1
+            _req_id = _request_id
+            _send_tool_request(_json.dumps({
+                "tool": "__preview_blob_read__",
+                "args": {"key": key},
+                "request_id": _req_id,
+            }))
+            content = _wait_for_ack(_req_id)
+            if content is None:
+                raise FileNotFoundError(file_path)
+        else:
+            content = Path(file_path).expanduser().read_text()
         if offset is None and limit is None:
             return content
         all_lines = content.split('\n')
@@ -1818,7 +1895,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         return '\n'.join(all_lines[start:end])
 
     @REPLAgent.tool(inject=True)
-    def view_file(self,
+    def view(self,
             file_path: str = "Path to the file",
             offset: Optional[int] = "Line number to start from (1-indexed)",
             limit: Optional[int] = "Number of lines to read (default: 5000)",
@@ -1826,14 +1903,14 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         ):
         """Display a file with line numbers and attach full reads to context.
 
-        Use view_file() for inspection and conversation context:
-            view_file("file.py")
-            view_file("file.py", offset=100, limit=20)
+        Use view() for inspection and conversation context:
+            view("file.py")
+            view("file.py", offset=100, limit=20)
 
-        WRONG — view_file() is not a value:
-            content = view_file("file.py")
-            print(view_file("file.py"))
-            preview(view_file("file.py"))
+        WRONG — view() is not a value:
+            content = view("file.py")
+            print(view("file.py"))
+            preview(view("file.py"))
 
         Use read() if you need file contents as text:
             content = read("file.py")
@@ -1844,8 +1921,25 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
         force_partial = bool(kwargs.get("_force_partial", False))
 
+        prefix = "session://preview/"
+        is_preview_uri = isinstance(file_path, str) and file_path.startswith(prefix)
         path = Path(file_path).expanduser()
-        content = path.read_text()
+        if is_preview_uri:
+            key = file_path[len(prefix):]
+            import json as _json
+            global _request_id
+            _request_id += 1
+            _req_id = _request_id
+            _send_tool_request(_json.dumps({
+                "tool": "__preview_blob_read__",
+                "args": {"key": key},
+                "request_id": _req_id,
+            }))
+            content = _wait_for_ack(_req_id)
+            if content is None:
+                raise FileNotFoundError(file_path)
+        else:
+            content = path.read_text()
         all_lines = content.split('\n')
         total_lines = len(all_lines)
         is_partial = offset is not None or limit is not None
@@ -1873,15 +1967,15 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             "Podfile", "Brewfile", "Justfile", "Taskfile", "Jenkinsfile",
             "BUILD", "WORKSPACE", "CMakeLists.txt",
         }
-        if is_partial and not force_partial and (path.suffix in source_extensions or path.name in source_names):
+        if not is_preview_uri and is_partial and not force_partial and (path.suffix in source_extensions or path.name in source_names):
             raise ValueError(
-                "Partial view_file denied for source file. Prefer one full "
-                "view_file(file_path) when inspecting normal source files you may "
+                "Partial view denied for source file. Prefer one full "
+                "view(file_path) when inspecting normal source files you may "
                 "need to reason about or edit across turns; use partial views only "
                 "for genuinely huge, generated, vendored, or minified files, or "
                 "for narrow line-number checks after the full file is already in "
                 "context. To override this denial when a partial view is truly "
-                "appropriate, call view_file(file_path, offset=..., limit=..., "
+                "appropriate, call view(file_path, offset=..., limit=..., "
                 "_force_partial=True)."
             )
 
@@ -1901,7 +1995,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             _send_output("read_attach", file_path + "\n")
             output += (
                 "\n[Context reminder: if this file or any other viewed file is no longer needed, "
-                f"call unview_file({file_path!r}) or unview_file(...) to remove it from future context.]"
+                f"call unview({file_path!r}) or unview(...) to remove it from future context.]"
             )
         else:
             _send_output("read_partial", file_path + "\n")
@@ -1909,12 +2003,12 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         _send_output("read", output + "\n")
 
     @REPLAgent.tool
-    def unview_file(self,
-            file_path: str = "Path to a file previously viewed with view_file()"
+    def unview(self,
+            file_path: str = "Path to a file previously viewed with view()"
         ):
         """Remove a previously viewed file from future context.
 
-        Use this if you viewed the wrong file with view_file() or no longer
+        Use this if you viewed the wrong file with view() or no longer
         need it in context. This only affects future turns.
         """
         attachments = self.list_attachments()

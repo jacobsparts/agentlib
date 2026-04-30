@@ -55,6 +55,16 @@ class SessionStore:
                     FOREIGN KEY(session_id) REFERENCES sessions(session_id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS preview_blobs (
+                    session_id TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    PRIMARY KEY(session_id, key),
+                    FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_cwd ON sessions(cwd)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_session_seq ON session_events(session_id, seq)")
@@ -149,3 +159,26 @@ class SessionStore:
         with self._connect() as conn:
             rows = conn.execute(query, args).fetchall()
         return [dict(row) for row in rows]
+    def save_preview_blob(self, session_id: str, key: str, content: str) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO preview_blobs(session_id, key, created_at, content)
+                VALUES (?, ?, ?, ?)
+                """,
+                (session_id, key, now, content),
+            )
+            conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
+                (now, session_id),
+            )
+            conn.commit()
+
+    def get_preview_blob(self, session_id: str, key: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT content FROM preview_blobs WHERE session_id = ? AND key = ?",
+                (session_id, key),
+            ).fetchone()
+        return row["content"] if row else None
