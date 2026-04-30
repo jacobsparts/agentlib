@@ -1039,7 +1039,7 @@ If you don't know how to proceed:
         self._turn_number = getattr(self, '_turn_number', 1) + 1
         self._turn_output_started = False  # Reset for next turn's clear_line
         thinking = getattr(self, 'thinking_message', 'Thinking...')
-        print(f"{DIM}{thinking} (turn {self._turn_number}){RESET}\r", end="", flush=True)
+        print(f"{DIM}{thinking} (turn {self._turn_number}){RESET}", end="", flush=True)
 
     def on_retry(self, kind: str, retry_num: int) -> None:
         if kind == "syntax":
@@ -1048,7 +1048,7 @@ If you don't know how to proceed:
             status = f"Max Tokens Retry #{retry_num}... (turn {getattr(self, '_turn_number', 1)})"
         else:
             return
-        print(f"{DIM}{status}{RESET}\r", end="", flush=True)
+        print(f"{DIM}{status}{RESET}", end="", flush=True)
 
     def user_repl_session(self, history):
         """Drop into the REPL for direct user interaction."""
@@ -1548,7 +1548,7 @@ If you don't know how to proceed:
                 self._in_emit_echo = False
                 self._reset_display_capture()
                 print()  # Blank line after user input
-                print(f"{DIM}{thinking} (turn 1){RESET}\r", end="", flush=True)
+                print(f"{DIM}{thinking} (turn 1){RESET}", end="", flush=True)
 
                 try:
                     response = self.run_loop(max_turns=max_turns)
