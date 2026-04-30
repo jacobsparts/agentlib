@@ -269,8 +269,9 @@ def prompt(
                 reason=AltInputMode.REASON_OVERFLOW,
                 main_cursor_row=prev_cursor_row,
             )
-            prev_cursor_row = alt_input.cursor_row_in_input
-            return
+            if alt_input.active:
+                prev_cursor_row = alt_input.cursor_row_in_input
+                return
 
         _redraw(buf, cursor)
 
@@ -567,13 +568,21 @@ def prompt(
                         if (cursor == len(buf) and '\n' not in buf
                                 and not (alt_input and alt_input.active)):
                             # Fast path: typing at end of single-line input
-                            # on main screen. Skip full redraw.
+                            # on main screen. Preserve it for responsiveness,
+                            # but still run the overflow gate before writing
+                            # directly to stdout.
                             try:
                                 tw = os.get_terminal_size().columns or 80
+                                th = os.get_terminal_size().lines or 24
                             except OSError:
-                                tw = 80
-                            if tw > 0 and (len(display_prompt) + len(buf)) % tw == 0:
-                                # Wrap boundary — full redraw needed.
+                                tw, th = 80, 24
+                            display_len = len(display_prompt) + len(buf)
+                            total_rows = max(1, (display_len + tw - 1) // tw)
+                            cursor_abs_row = display_len // tw
+                            view_budget = max(1, th - 1)
+                            overflow = total_rows > view_budget or cursor_abs_row >= view_budget
+                            wrap_boundary = tw > 0 and (len(display_prompt) + len(buf)) % tw == 0
+                            if overflow or wrap_boundary:
                                 redraw(buf, cursor)
                             else:
                                 sys.stdout.write(ch)

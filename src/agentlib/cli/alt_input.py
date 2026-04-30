@@ -98,7 +98,10 @@ class AltInputMode:
             self.main_cursor_row = self._cursor_row_in_input(buf, cursor, term_width)
 
         self._session = self._altmode.session()
-        self._session.enter()
+        if not self._session.enter():
+            self._session = None
+            self._reason = None
+            return
 
         row, _ = self._session.cursor_pos
         self.main_screen_row = row

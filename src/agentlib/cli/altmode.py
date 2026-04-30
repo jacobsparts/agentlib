@@ -21,6 +21,7 @@ import sys
 import os
 import termios
 import tty
+import select
 from collections import deque
 from typing import Optional, Tuple
 
@@ -43,6 +44,7 @@ class AltMode:
         self._original_stdout = None
         self._installed = False
         self._paused = False
+        self._sessions_available = None
 
     def install(self) -> 'AltMode':
         """Install the capture, replacing sys.stdout.
@@ -195,7 +197,14 @@ def get_cursor_position() -> Tuple[int, int]:
 
             # Read response: \x1b[<row>;<col>R
             response = b''
+            deadline = __import__('time').time() + 0.15
             while True:
+                remaining = deadline - __import__('time').time()
+                if remaining <= 0:
+                    return (0, 0)
+                readable, _, _ = select.select([fd], [], [], remaining)
+                if not readable:
+                    return (0, 0)
                 ch = os.read(fd, 1)
                 if not ch:
                     return (0, 0)
@@ -254,7 +263,13 @@ class Session:
         """
         if self._active:
             return False
+        if self._capture._sessions_available is False:
+            return False
         self._cursor_pos = get_cursor_position()
+        if self._cursor_pos == (0, 0):
+            self._capture._sessions_available = False
+            return False
+        self._capture._sessions_available = True
         self._capture.pause()
         sys.stdout.write('\x1b[?1049h')
         sys.stdout.flush()
