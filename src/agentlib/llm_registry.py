@@ -242,17 +242,15 @@ register_provider("xai",
 )
 register_model("xai","grok-4-1",
     model="grok-4-1-fast-reasoning",
-    aliases="grok",
     input_cost=0.2,
     cached_cost=0.05,
     output_cost=0.5,
 )
-register_model("xai","grok-4.20",
-    model="grok-4.20",
-    aliases="grok",
-    input_cost=2.0,
+register_model("xai","grok-4.3",
+    model="grok-4.3",
+    input_cost=1.25,
     cached_cost=0.2,
-    output_cost=6.0,
+    output_cost=2.5,
 )
 
 # --- OpenRouter ---
@@ -263,23 +261,19 @@ register_provider("openrouter",
     tools=None,
     api_type="completions",
 )
-zai_config = {'provider': {'order': ['z-ai'], 'allow_fallbacks': False}, 'temperature': 0}
-register_model("openrouter","glm-5",
-    model="z-ai/glm-5",
-    aliases="glm-5",
-    config=zai_config,
-    input_cost=1.0,
-    cached_cost=0.2,
-    output_cost=3.2,
-    tools=False,
-)
-moonshotai_config = {'provider': {'order': ['moonshotai'], 'allow_fallbacks': False}, 'temperature': 0}
-register_model("openrouter","kimi-k2.5",
-    model="moonshotai/kimi-k2.5",
-    aliases="kimi",
-    config=moonshotai_config,
-    input_cost=0.6,
-    output_cost=3.0,
+register_model("openrouter","kimi-k2.6",
+    model="moonshotai/kimi-k2.6",
+    config={
+        'provider': {'order': ['cloudflare'], 'allow_fallbacks': False},
+        'reasoning': {'enabled': True},
+        "temperature": 1.0,
+        "top_p": 1,
+        "top_k": 40,
+        "max_tokens": 1024*64,
+    },
+    input_cost=0.95,
+    cached_cost=0.16,
+    output_cost=4.0,
     tools=False,
 )
 

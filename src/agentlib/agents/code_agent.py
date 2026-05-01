@@ -1051,6 +1051,7 @@ If you don't know how to proceed:
         else:
             return
         self.console.clear_line()  # Clear previous status text
+        self._turn_output_started = False  # Reset so next output clears this status
         print(f"{DIM}{status}{RESET}", end="", flush=True)
 
     def user_repl_session(self, history):
