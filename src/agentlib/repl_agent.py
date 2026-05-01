@@ -191,14 +191,20 @@ class _StreamingWriter:
     def __init__(self, queue: Queue, original: Any) -> None:
         self._queue = queue
         self._original = original
+        self._buffer = ""
 
     def write(self, text: str) -> int:
         if text:
-            self._queue.put(("output", text))
+            self._buffer += text
+            while "\n" in self._buffer:
+                line, self._buffer = self._buffer.split("\n", 1)
+                self._queue.put(("output", line + "\n"))
         return len(text)
 
     def flush(self) -> None:
-        pass
+        if self._buffer:
+            self._queue.put(("output", self._buffer))
+            self._buffer = ""
 
     def fileno(self) -> int:
         return self._original.fileno()
@@ -246,8 +252,10 @@ def _tool_worker_main(
 
             old_stdout = sys.stdout
             old_stderr = sys.stderr
-            sys.stdout = _StreamingWriter(output_queue, old_stdout)
-            sys.stderr = _StreamingWriter(output_queue, old_stderr)
+            stdout_writer = _StreamingWriter(output_queue, old_stdout)
+            stderr_writer = _StreamingWriter(output_queue, old_stderr)
+            sys.stdout = stdout_writer
+            sys.stderr = stderr_writer
 
             had_error = False
             try:
@@ -289,6 +297,8 @@ def _tool_worker_main(
                     sys.stderr.write("".join(traceback.format_tb(tb)))
                 sys.stderr.write(f"{type(e).__name__}: {e}\n")
             finally:
+                stdout_writer.flush()
+                stderr_writer.flush()
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
 

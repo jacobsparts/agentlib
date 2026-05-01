@@ -2033,6 +2033,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         else:
             self.detach(file_path)
         self._pending_unviewed_files.add(file_path)
+        return f"Removed from future context: {file_path}"
 
     @REPLAgent.tool(inject=True)
     def edit(self,
