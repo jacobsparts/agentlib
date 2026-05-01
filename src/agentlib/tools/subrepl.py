@@ -191,6 +191,27 @@ def _format_echo(stmt: str, redact_long_strings: bool = True) -> str:
 
 def _format_echo_stdout(stmt: str) -> str:
     """Format a statement for user-facing stdout with truncated string previews."""
+    try:
+        tree = ast.parse(stmt)
+        if len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr):
+            expr = tree.body[0].value
+            if (
+                isinstance(expr, ast.Call)
+                and isinstance(expr.func, ast.Name)
+                and expr.func.id == "preview"
+                and len(expr.args) >= 1
+                and isinstance(expr.args[0], ast.Call)
+                and isinstance(expr.args[0].func, ast.Name)
+                and expr.args[0].func.id == "bash"
+                and expr.args[0].args
+                and isinstance(expr.args[0].args[0], ast.Constant)
+                and isinstance(expr.args[0].args[0].value, str)
+                and "\n" not in expr.args[0].args[0].value
+            ):
+                return f"  $ {expr.args[0].args[0].value}\n"
+    except SyntaxError:
+        pass
+
     stmt = _truncate_long_strings_for_echo(stmt)
     lines = stmt.split('\n')
     while len(lines) > 1 and not lines[-1].strip():
