@@ -877,10 +877,19 @@ class REPLMixin:
                     if pname == 'self' or param.kind == inspect.Parameter.VAR_KEYWORD:
                         continue
                     type_str = _type_to_str(param.annotation) if param.annotation != inspect.Parameter.empty else ''
-                    if type_str:
-                        param_strs.append(f"{pname}: {type_str}")
-                    else:
-                        param_strs.append(pname)
+                    param_str = f"{pname}: {type_str}" if type_str else pname
+                    if param.default != inspect.Parameter.empty:
+                        if isinstance(param.default, str):
+                            ann = param.annotation
+                            is_optional = (
+                                getattr(ann, '__origin__', None) is Union
+                                and type(None) in getattr(ann, '__args__', ())
+                            )
+                            if is_optional:
+                                param_str += " = None"
+                        else:
+                            param_str += f" = {repr(param.default)}"
+                    param_strs.append(param_str)
                 doc = (impl.__doc__ or '').strip()
                 first_line = doc.split('\n')[0] if doc else ''
             else:
@@ -892,10 +901,16 @@ class REPLMixin:
                         if sanitized and sanitized[0].isdigit():
                             sanitized = 'p_' + sanitized
                         type_str = _type_to_str(field_info.annotation) if field_info.annotation else ''
-                        if type_str:
-                            param_strs.append(f"{sanitized}: {type_str}")
-                        else:
-                            param_strs.append(sanitized)
+                        param_str = f"{sanitized}: {type_str}" if type_str else sanitized
+                        has_default = (
+                            field_info.default is not None and
+                            type(field_info.default).__name__ != 'PydanticUndefinedType'
+                        )
+                        if has_default:
+                            param_str += f" = {repr(field_info.default)}"
+                        elif not field_info.is_required():
+                            param_str += " = None"
+                        param_strs.append(param_str)
                     doc = (getattr(spec, '__doc__', '') or '').strip()
                     first_line = doc.split('\n')[0] if doc else ''
                 else:
