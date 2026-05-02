@@ -650,7 +650,9 @@ accumulating stale duplicate copies. Prefer a refreshed full-file view over
 accumulating partial snippets.
 
 preview(value) prints a potentially long value. Non-strings are previewed via
-repr(value). Short values print in full; long values show a head/tail summary.
+repr(value). Short values print in full; long values show a head/tail summary
+and save the full content to a session://preview/... URI. Pass that URI to
+read() to get the full text or view() to inspect it with line numbers.
 
 >>> tone_and_style()
 
@@ -1907,16 +1909,20 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             offset: Optional[int] = "Line number to start from (1-indexed)",
             limit: Optional[int] = "Number of lines to read (default: 5000)"
         ):
-        """Read a file and return its contents as text.
+        """Read a file or session://preview/... URI and return its contents as text.
 
-        Use read() when you want file contents as a Python value:
+        Use read() when you want contents as a Python value:
             content = read("file.py")
             lines = read("file.py").splitlines()
             snippet = read("file.py", offset=100, limit=20)
 
+        Long preview() output is saved to a session://preview/... URI:
+            full_output = read("session://preview/abc123")
+
         Use view() when you want numbered output and attachment behavior:
             view("file.py")
             view("file.py", offset=100, limit=20)
+            view("session://preview/abc123", offset=100, limit=20)
         """
         prefix = "session://preview/"
         if isinstance(file_path, str) and file_path.startswith(prefix):
@@ -1949,19 +1955,24 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             limit: Optional[int] = "Number of lines to read (default: 5000)",
             **kwargs
         ):
-        """Display a file with line numbers and attach full reads to context.
+        """Display a file or session://preview/... URI with line numbers.
 
         Use view() for inspection and conversation context:
             view("file.py")
             view("file.py", offset=100, limit=20)
+            view("session://preview/abc123", offset=100, limit=20)
+
+        Full file reads are attached to context. Preview URI reads are for
+        inspecting saved preview() output and are not filesystem paths.
 
         WRONG — view() is not a value:
             content = view("file.py")
             print(view("file.py"))
             preview(view("file.py"))
 
-        Use read() if you need file contents as text:
+        Use read() if you need contents as text:
             content = read("file.py")
+            full_output = read("session://preview/abc123")
         """
         unexpected_kwargs = set(kwargs) - {"_force_partial"}
         if unexpected_kwargs:
