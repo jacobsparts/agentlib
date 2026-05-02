@@ -299,6 +299,20 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     def _user_skills_dir(self) -> Path:
         return Path.home() / ".agentlib" / "skills"
 
+    @staticmethod
+    def _is_session_uri(name: str) -> bool:
+        return isinstance(name, str) and name.startswith("session://")
+
+    def list_attachments(self, include_session_blobs: bool = False) -> dict[str, str]:
+        attachments = super().list_attachments()
+        if include_session_blobs:
+            return attachments
+        return {
+            name: content
+            for name, content in attachments.items()
+            if not self._is_session_uri(name)
+        }
+
     def list_skills(self) -> list[dict]:
         skills = {}
         for source, directory in (("built-in", self._builtin_skills_dir()), ("user", self._user_skills_dir())):
@@ -2066,7 +2080,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         Use this if you viewed the wrong file with view() or no longer
         need it in context. This only affects future turns.
         """
-        attachments = self.list_attachments()
+        attachments = self.list_attachments(include_session_blobs=True)
         explicit_refs = getattr(self, '_explicit_attachment_refs', {})
         if file_path not in attachments and file_path not in explicit_refs:
             return f"File not currently in context: {file_path}"

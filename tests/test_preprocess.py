@@ -831,6 +831,43 @@ class TestCodeAgentPreprocessCode:
         assert output == ""
         assert name not in agent.list_attachments()
 
+    def test_session_uri_attachments_excluded_from_default_attachment_list(self):
+        agent = CodeAgent()
+        agent._ensure_setup()
+        file_name = "file.py"
+        preview_name = "session://preview/abc123"
+        other_session_name = "session://blob/def456"
+
+        agent.conversation.usermsg(
+            f"[Attachment: {file_name}]\n[Attachment: {preview_name}]\n[Attachment: {other_session_name}]",
+            _attachments={
+                file_name: "    1→file\n",
+                preview_name: "    1→blob\n",
+                other_session_name: "    1→other\n",
+            },
+        )
+
+        assert file_name in agent.list_attachments()
+        assert preview_name not in agent.list_attachments()
+        assert other_session_name not in agent.list_attachments()
+        assert preview_name in agent.list_attachments(include_session_blobs=True)
+        assert other_session_name in agent.list_attachments(include_session_blobs=True)
+
+    def test_unview_session_uri_attachment(self):
+        agent = CodeAgent()
+        agent._ensure_setup()
+        preview_name = "session://preview/abc123"
+
+        agent.conversation.usermsg(
+            f"[Attachment: {preview_name}]",
+            _attachments={preview_name: "    1→blob\n"},
+        )
+
+        result = agent.unview(preview_name)
+
+        assert result == f"Removed from future context: {preview_name}"
+        assert preview_name not in agent.list_attachments(include_session_blobs=True)
+
     def test_unview_pending_prevents_same_turn_reattach(self, tmp_path):
         target = tmp_path / "file.py"
         target.write_text("content\n")
