@@ -738,6 +738,40 @@ class TestCodeAgentPreprocessCode:
         r = agent.preprocess_code('preview(read("file.py"))')
         assert same_ast(r, 'preview(read("file.py"))')
 
+    def test_bare_bash_gets_assigned_and_previewed(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('bash("echo hi")')
+        assert same_ast(r, 'preview(_bash1 := bash("echo hi"))')
+
+    def test_bare_background_bash_gets_assigned_only(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('bash("sleep 10", bg=True)')
+        assert same_ast(r, '_bash1 = bash("sleep 10", bg=True)')
+
+    def test_print_bash_gets_assigned_and_previewed(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('print(bash("echo hi"))')
+        assert same_ast(r, 'preview(_bash1 := bash("echo hi"))')
+
+    def test_assigned_bash_left_alone(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('proc = bash("sleep 10", bg=True)')
+        assert same_ast(r, 'proc = bash("sleep 10", bg=True)')
+
+    def test_preview_accepts_non_string_values(self, monkeypatch):
+        sent = []
+        import agentlib.agents.code_agent as code_agent
+        monkeypatch.setattr(code_agent, "_send_output", lambda msg_type, chunk: sent.append((msg_type, chunk)), raising=False)
+
+        agent = CodeAgent()
+        agent.preview({"pid": 123})
+
+        assert sent == [("preview", "{'pid': 123}\n")]
+
     def test_view_assignment_rejected(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()

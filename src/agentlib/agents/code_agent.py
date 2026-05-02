@@ -649,8 +649,8 @@ automatically. Re-viewing a normal-sized file updates context rather than
 accumulating stale duplicate copies. Prefer a refreshed full-file view over
 accumulating partial snippets.
 
-preview(value) prints a potentially long string. Short strings print in
-full; long strings show a head/tail summary with line and character counts.
+preview(value) prints a potentially long value. Non-strings are previewed via
+repr(value). Short values print in full; long values show a head/tail summary.
 
 >>> tone_and_style()
 
@@ -1622,14 +1622,14 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         return "[Continuing...]"
 
     @REPLAgent.tool(inject=True)
-    def preview(self, value: str = "Value to preview"):
-        """Print a value with head/tail summary for long strings.
+    def preview(self, value: object = "Value to preview"):
+        """Print a value with head/tail summary for long values.
 
-        Short values are printed in full. Long strings print first and last
-        few lines with a count of omitted lines in between.
+        Non-strings are previewed via repr(value). Short values are printed in
+        full. Long values print first and last few lines with omitted counts.
         """
         if not isinstance(value, str):
-            raise ValueError(f"preview() expects a string, got {type(value).__name__}: {repr(value)[:100]}")
+            value = repr(value)
 
         lines = value.split('\n')
         nlines = len(lines)
@@ -1689,6 +1689,16 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         def _is_named_call(node, *names):
             return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in names
 
+        def _has_literal_bg_true(call):
+            return any(
+                kw.arg == 'bg' and isinstance(kw.value, ast.Constant) and kw.value.value is True
+                for kw in call.keywords
+            )
+
+        def _next_bash_var():
+            self._preview_counter += 1
+            return f"_bash{self._preview_counter}"
+
         invalid_view_message = "view() is a display tool, not a value. Use read() for file contents as text."
 
         # Collect all rewrites as (start_line_0idx, end_line_0idx, new_lines)
@@ -1743,6 +1753,16 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                     all_rewrites.append((start, end, [
                         f"{indent}view{call_source[len('read'):]}",
                     ]))
+                elif func.id == 'bash':
+                    var_name = _next_bash_var()
+                    if _has_literal_bg_true(call):
+                        all_rewrites.append((start, end, [
+                            f"{indent}{var_name} = {call_source}",
+                        ]))
+                    else:
+                        all_rewrites.append((start, end, [
+                            f"{indent}preview({var_name} := {call_source})",
+                        ]))
                 else:
                     all_rewrites.append((start, end, [
                         f"{indent}preview({call_source})",
@@ -1760,9 +1780,20 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                 if _is_named_call(inner, *self._preview_targets):
                     inner_source = _source(inner)
                     if inner_source:
-                        all_rewrites.append((start, end, [
-                            f"{indent}preview({inner_source})",
-                        ]))
+                        if _is_named_call(inner, 'bash'):
+                            var_name = _next_bash_var()
+                            if _has_literal_bg_true(inner):
+                                all_rewrites.append((start, end, [
+                                    f"{indent}{var_name} = {inner_source}",
+                                ]))
+                            else:
+                                all_rewrites.append((start, end, [
+                                    f"{indent}preview({var_name} := {inner_source})",
+                                ]))
+                        else:
+                            all_rewrites.append((start, end, [
+                                f"{indent}preview({inner_source})",
+                            ]))
 
         # Pattern 2: var = target(...) immediately followed by print(var)
         for i in range(len(body) - 1):
