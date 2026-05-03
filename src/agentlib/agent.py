@@ -15,6 +15,41 @@ class _CompleteException(BaseException):
 
 logger = logging.getLogger('agentlib')
 
+
+def _is_optional_annotation(annotation):
+    """Return True for Optional[T] / Union[T, None] / T | None."""
+    if annotation in (inspect.Parameter.empty, None):
+        return False
+
+    if isinstance(annotation, str):
+        text = annotation.replace(" ", "")
+        return (
+            text.startswith("Optional[")
+            or "None" in text.split("|")
+            or "NoneType" in text
+        )
+
+    origin = getattr(annotation, "__origin__", None)
+    args = getattr(annotation, "__args__", ())
+
+    try:
+        from typing import Union
+        if origin is Union and type(None) in args:
+            return True
+    except Exception:
+        pass
+
+    try:
+        import types as _types
+        if origin is _types.UnionType and type(None) in args:
+            return True
+    except Exception:
+        pass
+
+    return type(None) in args
+
+
+
 class AgentMeta(type):
     def __new__(mcls, name, bases, clsdict):
         local_tools = {}
@@ -128,7 +163,8 @@ class BaseAgent(metaclass=AgentMeta):
                                     _type = Literal[tuple(_type)]
                                 else:
                                     _type = None
-                            return _type, Field(..., description=p.default)
+                            default = None if _is_optional_annotation(_type) else ...
+                            return _type, Field(default, description=p.default)
                         else:
                             return _type, p.default
                     fields = {}

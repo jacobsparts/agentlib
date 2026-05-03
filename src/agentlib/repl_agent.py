@@ -87,6 +87,37 @@ from agentlib.tools.subrepl import (
 from agentlib.tools.source_extract import extract_method_source as _extract_tool_source
 
 
+def _is_optional_annotation(annotation: Any) -> bool:
+    """Return True for Optional[T] / Union[T, None] / T | None."""
+    if annotation in (inspect.Parameter.empty, None):
+        return False
+
+    if isinstance(annotation, str):
+        text = annotation.replace(" ", "")
+        return (
+            text.startswith("Optional[")
+            or "None" in text.split("|")
+            or "NoneType" in text
+        )
+
+    origin = getattr(annotation, "__origin__", None)
+    args = getattr(annotation, "__args__", ())
+
+    if origin is Union and type(None) in args:
+        return True
+
+    try:
+        import types as _types
+        if origin is _types.UnionType and type(None) in args:
+            return True
+    except Exception:
+        pass
+
+    return type(None) in args
+
+
+
+
 # =============================================================================
 # Shared REPL builtins code (used by both ToolREPL and SandboxedToolREPL)
 # =============================================================================
@@ -525,13 +556,7 @@ def _extract_stub_signature(name: str, impl: Optional[Callable], spec: Any) -> t
                 if isinstance(param.default, str):
                     # In agentlib, string defaults are descriptions, not actual defaults
                     doc_parts.append(f"        {param_name}: {param.default}")
-                    # Check if type annotation is Optional (Union with None)
-                    ann = param.annotation
-                    is_optional = (
-                        getattr(ann, '__origin__', None) is Union
-                        and type(None) in getattr(ann, '__args__', ())
-                    )
-                    if is_optional:
+                    if _is_optional_annotation(param.annotation):
                         optional_sig_parts.append(f"{param_name}=None")
                     else:
                         required_sig_parts.append(param_name)
@@ -880,12 +905,7 @@ class REPLMixin:
                     param_str = f"{pname}: {type_str}" if type_str else pname
                     if param.default != inspect.Parameter.empty:
                         if isinstance(param.default, str):
-                            ann = param.annotation
-                            is_optional = (
-                                getattr(ann, '__origin__', None) is Union
-                                and type(None) in getattr(ann, '__args__', ())
-                            )
-                            if is_optional:
+                            if _is_optional_annotation(param.annotation):
                                 param_str += " = None"
                         else:
                             param_str += f" = {repr(param.default)}"
