@@ -421,9 +421,9 @@ class Parser:
 
             new_index, matched_len = find_context(lines, next_ctx, index, eof)
             if new_index == -1:
-                ctx_txt = "\n".join(next_ctx)
+                ctx_repr = "\n".join(repr(line) for line in next_ctx)
                 raise self._error(
-                    f"Could not find {'EOF ' if eof else ''}context in file:\n{ctx_txt}"
+                    f"Could not find {'EOF ' if eof else ''}context in file:\n{ctx_repr}"
                 )
             # Adjust chunk indices: orig_index was computed relative to parsed context,
             # but if trailing empty line retry matched fewer lines, we need to adjust
