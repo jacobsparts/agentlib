@@ -1074,6 +1074,7 @@ Call help(function_name) for parameter descriptions.
                 # Interrupted output is discarded - don't pollute conversation
                 raise
             except _CompleteException:
+                self.conversation.clear_ephemeral()
                 # Record the terminal assistant message before returning
                 if getattr(self, "complete", False) and getattr(self, "_final_result", None) is not None:
                     resp["_final_result"] = self._final_result
@@ -1085,6 +1086,8 @@ Call help(function_name) for parameter descriptions.
                     del self._complete_value
                     return value
                 return self._final_result
+
+            self.conversation.clear_ephemeral()
 
             # Fire output hook after successful execution
             if hasattr(self, 'on_repl_output'):

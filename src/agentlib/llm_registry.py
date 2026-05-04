@@ -213,7 +213,6 @@ register_model("google","gemini-2.5-pro",
 )
 register_model("google","gemini-3-flash-preview",
     model="gemini-3-flash-preview",
-    aliases="flash",
     config={"thinkingLevel": "high"},
     input_cost=0.5,
     cached_cost=0.05,
@@ -222,7 +221,6 @@ register_model("google","gemini-3-flash-preview",
 )
 register_model("google","gemini-3.1-pro",
     model="gemini-3.1-pro-preview",
-    aliases="pro",
     config={"thinkingLevel": "high"},
     input_cost=2.00,
     cached_cost=0.2,
@@ -277,6 +275,7 @@ register_model("openrouter","kimi-k2.6",
     tools=False,
 )
 
+
 def cloudflare_response_parser(response_json):
     result = response_json.get('result', response_json)
     if 'choices' not in result:
@@ -294,7 +293,6 @@ register_provider("cloudflare",
 )
 register_model("cloudflare","kimi-k2.6",
     model="@cf/moonshotai/kimi-k2.6",
-    aliases="cf-kimi",
     path=f"/client/v4/accounts/{os.getenv('CLOUDFLARE_ACCOUNT_ID')}/ai/run/@cf/moonshotai/kimi-k2.6",
     context_window=262144,
     config={
@@ -304,21 +302,6 @@ register_model("cloudflare","kimi-k2.6",
     input_cost=0.95,
     cached_cost=0.16,
     output_cost=4.0,
-    tools=False,
-)
-
-register_model("openrouter","minimax-m2.5",
-    model="minimax/minimax-m2.5",
-    aliases="minimax",
-    config={
-        'provider': {
-            'order': ['minimax'],
-            'allow_fallbacks': False
-        }, 
-        'temperature': 0
-    },
-    input_cost=0.6,
-    output_cost=3.0,
     tools=False,
 )
 

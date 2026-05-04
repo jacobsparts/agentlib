@@ -732,6 +732,52 @@ class TestCodeAgentPreprocessCode:
         r = agent.preprocess_code('print(read("file.py"))')
         assert same_ast(r, 'view("file.py")')
 
+    def test_print_path_read_text_becomes_view(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('print(Path("README.md").read_text())')
+        assert same_ast(r, 'view("README.md")')
+
+    def test_print_sliced_path_read_text_gets_warning(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('print(Path("README.md").read_text()[:4000])')
+        assert 'Direct file reads bypass code_agent context tools' in r
+        assert 'print(Path("README.md").read_text()[:4000])' in r
+        assert compiles(r)
+
+    def test_bare_path_read_text_becomes_view(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('Path("README.md").read_text()')
+        assert same_ast(r, 'view("README.md")')
+
+    def test_assignment_path_read_text_becomes_read(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('content = Path("README.md").read_text()')
+        assert same_ast(r, 'content = read("README.md")')
+
+    def test_assignment_open_read_becomes_read(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('content = open("README.md").read()')
+        assert same_ast(r, 'content = read("README.md")')
+
+    def test_bare_path_open_read_becomes_view(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('Path("README.md").open().read()')
+        assert same_ast(r, 'view("README.md")')
+
+    def test_ambiguous_direct_file_read_gets_warning(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('content = Path(filename).read_text()')
+        assert 'Direct file reads bypass code_agent context tools' in r
+        assert 'content = Path(filename).read_text()' in r
+        assert compiles(r)
+
     def test_preview_read_left_alone(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
