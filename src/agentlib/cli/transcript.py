@@ -45,4 +45,4 @@ def format_agent_transcript(events: list[dict]) -> list[str]:
 
 
 def transcript_viewer_ui(altmode, events: list[dict]):
-    pager_ui(altmode, format_agent_transcript(events), title="Agent Transcript", start="end")
+    pager_ui(altmode, format_agent_transcript(events), title="Agent Transcript", start="end", vim=True)

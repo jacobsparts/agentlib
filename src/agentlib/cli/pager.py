@@ -1,7 +1,9 @@
 """Reusable alternate-screen line pager."""
 
 import os
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 
 
@@ -65,6 +67,8 @@ def _read_key() -> str:
         return "pagedown"
     if data in (b"b", b"B"):
         return "pageup"
+    if data in (b"v", b"V"):
+        return "vim"
     if data.startswith(b"\x1b["):
         seq = data[2:]
         if seq.startswith(b"A"):
@@ -109,7 +113,7 @@ def _wrap_lines(lines: list[str], width: int) -> list[str]:
     return wrapped
 
 
-def _render(lines: list[str], view: ScrollView, title: str, width: int, height: int) -> str:
+def _render(lines: list[str], view: ScrollView, title: str, width: int, height: int, vim: bool = False) -> str:
     body_height = max(1, height - 2)
     visible = view.visible(body_height)
     total = len(lines)
@@ -128,12 +132,35 @@ def _render(lines: list[str], view: ScrollView, title: str, width: int, height: 
             out.append(_clip_line(visible[i], width))
         out.append("\x1b[K")
 
-    footer = " ↑/↓ j/k scroll | PgUp/PgDn b/Space page | gg/Home top | G/End bottom | q/Esc close "
+    footer = " ↑/↓ j/k scroll | PgUp/PgDn b/Space page | gg/Home top | G/End bottom"
+    if vim:
+        footer += " | v vim"
+    footer += " | q/Esc close "
     out.append(f"\x1b[{height};1H\x1b[2m{footer[:width]:<{width}}\x1b[0m")
     return "".join(out)
 
 
-def pager_ui(altmode, lines: list[str], title: str = "Viewer", start: str = "top"):
+class _OpenVim(Exception):
+    pass
+
+
+def _open_in_vim(lines: list[str], title: str):
+    suffix = os.path.splitext(title)[1] or ".txt"
+    fd, path = tempfile.mkstemp(prefix="agentlib-viewer-", suffix=suffix, text=True)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("\n".join(lines))
+            if lines:
+                f.write("\n")
+        subprocess.run([os.environ.get("EDITOR", "vim"), path])
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def pager_ui(altmode, lines: list[str], title: str = "Viewer", start: str = "top", vim: bool = False):
     from .prompt import RawMode
 
     raw_lines = lines
@@ -151,12 +178,14 @@ def pager_ui(altmode, lines: list[str], title: str = "Viewer", start: str = "top
                 body_height = max(1, height - 2)
                 view.lines = _wrap_lines(raw_lines, width)
                 view.clamp(body_height)
-                sys.stdout.write(_render(view.lines, view, title, width, height))
+                sys.stdout.write(_render(view.lines, view, title, width, height, vim=vim))
                 sys.stdout.flush()
 
                 key = _read_key()
                 if key in ("quit", "escape", "ctrl_c"):
                     return
+                if key == "vim" and vim:
+                    raise _OpenVim
                 if key == "down":
                     view.scroll(1, body_height)
                 elif key == "up":
@@ -169,5 +198,8 @@ def pager_ui(altmode, lines: list[str], title: str = "Viewer", start: str = "top
                     view.home()
                 elif key == "end":
                     view.end(body_height)
+    except _OpenVim:
+        session.exit()
+        _open_in_vim(raw_lines, title)
     finally:
         session.exit()
