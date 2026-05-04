@@ -10,32 +10,32 @@ class DummyClient:
         return {"role": "assistant", "content": "ok", "tool_calls": []}
 
 
-def test_ephemeral_context_injected_at_top_of_last_user_message_and_cleared():
+def test_ephemeral_injected_at_top_of_last_user_message():
     client = DummyClient()
     conv = Conversation(client, "system")
     conv.usermsg("first")
     conv.toolmsg("tool output")
     conv.usermsg("last")
-    conv.ephemeral("temporary context")
+    conv.ephemeral = "temporary context"
 
     messages = conv._messages()
 
     assert messages[-1]["content"] == "temporary context\n\nlast"
     assert conv.messages[-1]["content"] == "last"
-    assert conv._ephemeral_context == ["temporary context"]
+    assert conv.ephemeral == "temporary context"
 
-    conv.clear_ephemeral()
-    assert conv._ephemeral_context == []
+    conv.ephemeral = ""
+    assert conv.ephemeral == ""
 
 
-def test_ephemeral_context_applied_after_attachments():
+def test_ephemeral_applied_after_attachments():
     client = DummyClient()
     conv = Conversation(client, "system")
     conv.usermsg(
         "[Attachment: file.py]\n\nquestion",
         _attachments={"file.py": "file contents"},
     )
-    conv.ephemeral("temporary context")
+    conv.ephemeral = "temporary context"
 
     messages = conv._messages()
 
@@ -43,17 +43,17 @@ def test_ephemeral_context_applied_after_attachments():
     assert conv.messages[-1]["content"] == "[Attachment: file.py]\n\nquestion"
 
 
-def test_ephemeral_context_not_added_to_history_during_llm_call():
+def test_ephemeral_not_added_to_history_or_cleared_by_llm_call():
     client = DummyClient()
     conv = Conversation(client, "system")
     conv.usermsg("question")
-    conv.ephemeral("temporary context")
+    conv.ephemeral = "temporary context"
 
     conv.llm()
 
     assert client.calls[0][0][-1]["content"] == "temporary context\n\nquestion"
     assert conv.messages[1]["content"] == "question"
-    assert conv._ephemeral_context == []
+    assert conv.ephemeral == "temporary context"
 
 
 class FailingClient:
@@ -61,10 +61,10 @@ class FailingClient:
         raise RuntimeError("provider failed")
 
 
-def test_ephemeral_context_preserved_when_llm_call_raises():
+def test_ephemeral_preserved_when_llm_call_raises():
     conv = Conversation(FailingClient(), "system")
     conv.usermsg("question")
-    conv.ephemeral("temporary context")
+    conv.ephemeral = "temporary context"
 
     try:
         conv.llm()
@@ -73,10 +73,21 @@ def test_ephemeral_context_preserved_when_llm_call_raises():
     else:
         raise AssertionError("expected RuntimeError")
 
-    assert conv._ephemeral_context == ["temporary context"]
+    assert conv.ephemeral == "temporary context"
 
 
-def test_base_agent_ephemeral_passthrough():
+def test_ephemeral_supports_string_append():
+    conv = Conversation(DummyClient(), "system")
+    conv.usermsg("question")
+
+    conv.ephemeral = "first"
+    conv.ephemeral += "\n\nsecond"
+
+    assert conv.ephemeral == "first\n\nsecond"
+    assert conv._messages()[-1]["content"] == "first\n\nsecond\n\nquestion"
+
+
+def test_base_agent_ephemeral_property_passthrough():
     from agentlib import BaseAgent
 
     class TestAgent(BaseAgent):
@@ -87,6 +98,8 @@ def test_base_agent_ephemeral_passthrough():
     agent._conversation = Conversation(DummyClient(), "system")
     agent.usermsg("question")
 
-    agent.ephemeral("temporary context")
+    agent.ephemeral = "first"
+    agent.ephemeral += "\n\nsecond"
 
-    assert agent.conversation._messages()[-1]["content"] == "temporary context\n\nquestion"
+    assert agent.conversation.ephemeral == "first\n\nsecond"
+    assert agent.conversation._messages()[-1]["content"] == "first\n\nsecond\n\nquestion"

@@ -250,8 +250,13 @@ class BaseAgent(metaclass=AgentMeta):
     def toolmsg(self, *args, **kwargs):
         return self.conversation.toolmsg(*args, **kwargs)
 
-    def ephemeral(self, *args, **kwargs):
-        return self.conversation.ephemeral(*args, **kwargs)
+    @property
+    def ephemeral(self):
+        return self.conversation.ephemeral
+
+    @ephemeral.setter
+    def ephemeral(self, value):
+        self.conversation.ephemeral = value
 
     def run_loop(self, max_turns):
         self.complete = False

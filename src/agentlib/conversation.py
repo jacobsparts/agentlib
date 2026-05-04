@@ -5,7 +5,7 @@ class Conversation:
     def __init__(self, llm_client, system_prompt):
         self.llm_client = llm_client
         self.messages = [ {"role": "system", "content": system_prompt} ]
-        self._ephemeral_context = []
+        self.ephemeral = ""
 
     def _messages(self):
         result = []
@@ -19,13 +19,12 @@ class Conversation:
             else:
                 result.append(msg)
 
-        if self._ephemeral_context:
-            ephemeral_context = "\n\n".join(self._ephemeral_context)
+        if self.ephemeral:
             for i in range(len(result) - 1, -1, -1):
                 if result[i].get("role") == "user":
                     out = dict(result[i])
                     content = out.get("content", "")
-                    out["content"] = ephemeral_context + ("\n\n" + content if content else "")
+                    out["content"] = self.ephemeral + ("\n\n" + content if content else "")
                     result[i] = out
                     break
 
@@ -36,7 +35,6 @@ class Conversation:
 
     def llm(self, tools=None):
         resp_msg = self.llm_client.call(self._messages(), tools)
-        self.clear_ephemeral()
         self.messages.append(resp_msg)
         return resp_msg
 
@@ -49,10 +47,3 @@ class Conversation:
         content = content if type(content) is str else json.dumps(content)
         message = {"role": 'tool', "content": content, **kwargs}
         self._append_message(message)
-
-    def ephemeral(self, text):
-        self._ephemeral_context.append(text)
-
-    def clear_ephemeral(self):
-        self._ephemeral_context.clear()
-
