@@ -921,6 +921,54 @@ THREE\""")""",
         assert output == ""
         assert name not in agent.list_attachments()
 
+    def test_whole_code_syntax_error_prevents_partial_execution(self):
+        agent = CodeAgent()
+        agent._ensure_setup()
+        repl = agent._get_tool_repl()
+        try:
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                "x = 123\nprint(",
+            )
+
+            assert pure_syntax_error is True
+            assert "SyntaxError" in output
+            assert not any(chunk.startswith(">>> x = 123") for _, chunk in output_chunks)
+
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                "globals().get('x', '<missing>')",
+            )
+
+            assert pure_syntax_error is False
+            assert "'<missing>'" in output
+        finally:
+            repl.close()
+
+    def test_whole_code_indent_syntax_error_prevents_partial_execution(self):
+        agent = CodeAgent()
+        agent._ensure_setup()
+        repl = agent._get_tool_repl()
+        try:
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                "y = 456\n ԥ",
+            )
+
+            assert pure_syntax_error is True
+            assert "unexpected indent" in output
+            assert not any(chunk.startswith(">>> y = 456") for _, chunk in output_chunks)
+
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                "globals().get('y', '<missing>')",
+            )
+
+            assert pure_syntax_error is False
+            assert "'<missing>'" in output
+        finally:
+            repl.close()
+
     def test_session_uri_attachments_excluded_from_default_attachment_list(self):
         agent = CodeAgent()
         agent._ensure_setup()

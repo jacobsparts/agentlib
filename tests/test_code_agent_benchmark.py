@@ -185,7 +185,7 @@ def test_code_agent_benchmark_flags_bash_python_misuse(tmp_path):
         tmp_path,
         task,
         [
-            'bash("python -c \"print(3)\"")\nemit("3", release=True)',
+            'bash("python -c \\\"print(3)\\\"")\nemit("3", release=True)',
         ],
     )
     codes = {violation.code for violation in result.violations}

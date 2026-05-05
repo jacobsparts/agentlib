@@ -1213,6 +1213,15 @@ Call help(function_name) for parameter descriptions.
             - corrected_code is the code after any preprocessing corrections
         """
         code = self.preprocess_code(code)
+        validation_code = self._transform_toplevel_print(code)
+        try:
+            compile(validation_code, '<repl>', 'exec')
+        except SyntaxError as e:
+            output = self._format_syntax_error(e)
+            output_chunks = [("error", output)]
+            if hasattr(self, 'on_repl_chunk'):
+                self.on_repl_chunk(output, "error")
+            return output, True, output_chunks, code
 
         # Split into statements, then transform each individually
         # (Can't transform whole code first because AST strips comments,
