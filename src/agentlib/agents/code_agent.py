@@ -207,6 +207,45 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     def _capture_display_line(self, text: str = ""):
         self._display_capture.append(strip_ansi(text) + "\n")
 
+    def _show_python_header_if_pending(self):
+        if getattr(self, '_header_pending', False):
+            header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
+            print(f"\x1b[1G\x1b[K{header}")
+            self._capture_display_line("───────────── Python ─────────────")
+            self._header_pending = False
+            self._repl_printed_header = True
+
+    def _flush_edit_echo_buffer(self):
+        buffer = getattr(self, '_edit_echo_buffer', [])
+        if not buffer:
+            return
+        self._show_python_header_if_pending()
+        for line in buffer:
+            print(line, flush=True)
+            self._capture_display_line(line)
+        self._edit_echo_buffer = []
+        self._in_edit_echo = False
+
+    def _compact_edit_echo(self, diff: str) -> str:
+        buffer = getattr(self, '_edit_echo_buffer', [])
+        first = buffer[0] if buffer else ""
+        func = "line_patch" if first.startswith(">>> line_patch(") else "edit"
+
+        filename = None
+        for prefix in ("+++ ", "--- "):
+            for line in diff.splitlines():
+                if line.startswith(prefix):
+                    candidate = line[len(prefix):].strip()
+                    if candidate != "/dev/null":
+                        filename = candidate
+                        break
+            if filename is not None:
+                break
+
+        if filename is None:
+            return f">>> {func}(...)"
+        return f">>> {func}({filename!r}, ...)"
+
     def _flush_display_capture(self):
         if not self._display_capture:
             return
@@ -429,6 +468,9 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             if msg_type == "file_written":
                 written_files.append(chunk.strip())
                 continue
+            if msg_type == "file_diff":
+                continue
+
             attach_path = None
             partial_read_path = None
             result.append(chunk)
@@ -678,10 +720,8 @@ Use partial view(..., offset=..., limit=...) only when:
 If you accidentally view an irrelevant file, call unview(file_path) to
 remove it from future context.
 
-When files change, a previous full view(file_path) is refreshed
-automatically. Re-viewing a normal-sized file updates context rather than
-accumulating stale duplicate copies. Prefer a refreshed full-file view over
-accumulating partial snippets.
+When files change, previous full views stay up to date automatically.
+Re-view a file only when you need to inspect it again.
 
 preview(value) prints a potentially long value. Non-strings are previewed via
 repr(value). Short values print in full; long values show a head/tail summary
@@ -725,11 +765,11 @@ edit(file_path, old_string, new_string, replace_all=False)
 line_patch(file_path, patch)
     Edit an existing file that was previously viewed with view(file_path).
     - Requires a full view(file_path) first; partial views do not count
-    - Line numbers refer to that viewed snapshot
+    - Line numbers refer to the current viewed file contents
     - Operation headers must start at column 1 in the patch string
     - Body lines are literal file content; indent only if the file should contain that indentation
     - Multiple operations in one call are atomic
-    - After a successful line_patch(), call view(file_path) before another
+    - You may call line_patch() repeatedly after one full view(file_path)
     - For create/move/delete, use Python file APIs such as Path.write_text(), Path.rename(), or Path.unlink()
 
     line_patch("src/app.py", '''replace 10:12
@@ -864,24 +904,22 @@ If you don't know how to proceed:
             # Echo lines already have >>> or ... prefix
             # Skip emit() calls - user sees progress/result via green text
             # Buffer print() calls - decide display based on output truncation
+            # Buffer edit()/line_patch() calls - replace with compact echo if a diff arrives
             for line in chunk.rstrip('\n').split('\n'):
+
                 if line.startswith('>>> '):
-                    # New statement starting - flush any pending print buffer first
-                    # (handles print() with no output or empty output)
+                    # New statement starting - flush any pending print/edit buffers first
+                    # (handles print() with no output or empty output, or edit errors before diff)
                     if getattr(self, '_print_echo_buffer', []):
-                        # No output came, show the echo
                         for echo_line in self._print_echo_buffer:
-                            if getattr(self, '_header_pending', False):
-                                header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
-                                print(f"\x1b[1G\x1b[K{header}")
-                                self._capture_display_line("───────────── Python ─────────────")
-                                self._header_pending = False
-                                self._repl_printed_header = True
+                            self._show_python_header_if_pending()
                             print(echo_line, flush=True)
                             self._capture_display_line(echo_line)
                         self._print_echo_buffer = []
                         self._in_print_echo = False
-                    # New statement - check if it's emit() or print()
+                    self._flush_edit_echo_buffer()
+
+                    # New statement - check if it's emit(), print(), edit(), or line_patch()
                     self._in_emit_echo = line.startswith('>>> emit(')
                     if line.startswith('>>> print('):
                         self._in_print_echo = True
@@ -900,45 +938,47 @@ If you don't know how to proceed:
                             arg_start.startswith("r'")
                         )
                         continue
-                    else:
-                        self._in_print_echo = False
+                    if line.startswith('>>> edit(') or line.startswith('>>> line_patch('):
+                        self._in_edit_echo = True
+                        self._edit_echo_buffer = [line]
+                        continue
+                    self._in_print_echo = False
+                    self._in_edit_echo = False
+
                 # Buffer continuation lines for print()
                 if getattr(self, '_in_print_echo', False):
                     self._print_echo_buffer.append(line)
                     continue
+                # Buffer continuation lines for edit()/line_patch()
+                if getattr(self, '_in_edit_echo', False):
+                    self._edit_echo_buffer.append(line)
+                    continue
+
                 # Skip emit() echo
                 if not getattr(self, '_in_emit_echo', False):
-                    # We have visible content - print header first if pending
-                    if getattr(self, '_header_pending', False):
-                        self.console.clear_line()
-                        header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
-                        print(f"\x1b[1G\x1b[K{header}")
-                        self._capture_display_line("───────────── Python ─────────────")
-                        self._header_pending = False
-                        self._repl_printed_header = True
+                    self._show_python_header_if_pending()
                     print(line, flush=True)
                     self._capture_display_line(line)
-        elif msg_type == "progress":
-            # Show progress updates immediately (emit with release=False)
-            # This should open the Python block since more output is expected
-            if getattr(self, '_header_pending', False):
-                header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
-                print(f"\x1b[1G\x1b[K{header}")
-                self._capture_display_line("───────────── Python ─────────────")
-                self._header_pending = False
-                self._repl_printed_header = True
-            for line in chunk.rstrip('\n').split('\n'):
+
+        elif msg_type in ("progress", "emit"):
+            # Show progress/emit in green immediately (emit release=True also shown at turn end)
+            text = chunk.rstrip('\n')
+            for line in text.split('\n'):
                 print(f"\x1b[92m{line}\x1b[0m", flush=True)  # Bright green
                 self._capture_display_line(line)
         elif msg_type in ("output", "print"):
+            if msg_type == "output" and getattr(self, '_suppress_next_edit_result', False):
+                stripped = chunk.strip()
+                if (
+                    stripped in {"'Edit applied.'", "'Line patch applied.'"}
+                    or re.match(r"^'All \d+ occurrences replaced\.'$", stripped)
+                ):
+                    self._suppress_next_edit_result = False
+                    return
+
             # Print header if pending (in case output comes before visible echo)
-            if getattr(self, '_header_pending', False):
-                header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
-                print(f"\x1b[1G\x1b[K{header}")
-                self._capture_display_line("───────────── Python ─────────────")
-                self._header_pending = False
-                self._repl_printed_header = True
-            # Show output with truncation: up to 240 chars or 5 lines
+            self._show_python_header_if_pending()
+
             text = chunk.rstrip('\n')
             # For string literals (return values), show value instead of repr
             if msg_type == "output":
@@ -1004,13 +1044,32 @@ If you don't know how to proceed:
                 for line in display.split('\n'):
                     print(f"{DIM}{line}{RESET}", flush=True)
                     self._capture_display_line(line)
-        # "emit" (release=True) shown via format_response at turn end
-        # "print" and "read" shown as summary in on_statement_output
+        elif msg_type == "file_diff":
+            self._show_python_header_if_pending()
+            if getattr(self, '_edit_echo_buffer', []):
+                echo_line = self._compact_edit_echo(chunk)
+                print(echo_line, flush=True)
+                self._capture_display_line(echo_line)
+                self._edit_echo_buffer = []
+                self._in_edit_echo = False
+            for line in chunk.rstrip('\n').split('\n'):
+                if line.startswith('--- ') or line.startswith('+++ '):
+                    continue
+                if line.startswith('+'):
+                    color = "\x1b[32m"
+                elif line.startswith('-'):
+                    color = "\x1b[31m"
+                elif line.startswith('@@'):
+                    color = "\x1b[36m"
+                else:
+                    color = DIM
+                print(f"{color}{line}{RESET}", flush=True)
+                self._capture_display_line(line)
+            self._suppress_next_edit_result = True
 
     max_display_chars = _get_config_value("code_agent_max_display_chars", 200)  # Max chars per line to show user (agent sees full output)
 
     def _truncate_for_display(self, output: str) -> str:
-        """Truncate long lines and read() output blocks for user display."""
         import re
 
         lines = output.split('\n')
@@ -1076,10 +1135,17 @@ If you don't know how to proceed:
                 self._capture_display_line(line)
             self._repl_has_output = True
 
+        if getattr(self, '_suppress_next_edit_result', False):
+            # A file_diff was displayed for a statement whose return value was
+            # not shown (e.g. assignment or multi-statement exec). Clear the
+            # suppression so it cannot affect later unrelated output.
+            self._suppress_next_edit_result = False
+
     def on_repl_output(self, output_chunks: list) -> None:
         """Called at end of turn. Updates thinking message for next turn."""
         # Show thinking for next turn
         self._turn_number = getattr(self, '_turn_number', 1) + 1
+        self._flush_edit_echo_buffer()
         self._turn_output_started = False  # Reset for next turn's clear_line
         thinking = getattr(self, 'thinking_message', 'Thinking...')
         self.console.clear_line()  # Clear previous status text
@@ -1808,7 +1874,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         Long preview() output is saved to a session://preview/... URI:
             full_output = read("session://preview/abc123")
 
-        Use view() when you want numbered output and attachment behavior:
+        Use view() when you want numbered file output:
             view("file.py")
             view("file.py", offset=100, limit=20)
             view("session://preview/abc123", offset=100, limit=20)
@@ -1846,13 +1912,13 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         ):
         """Display a file or session://preview/... URI with line numbers.
 
-        Use view() for inspection and conversation context:
+        Use view() for inspection with numbered lines:
             view("file.py")
             view("file.py", offset=100, limit=20)
             view("session://preview/abc123", offset=100, limit=20)
 
-        Full file reads are attached to context. Preview URI reads are for
-        inspecting saved preview() output and are not filesystem paths.
+        Preview URI reads are for inspecting saved preview() output and are
+        not filesystem paths.
 
         WRONG — view() is not a value:
             content = view("file.py")
@@ -2002,7 +2068,15 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
         new_content = content.replace(old_string, new_string, -1 if replace_all else 1)
         path.write_text(new_content)
-
+        import difflib
+        diff = ''.join(difflib.unified_diff(
+            content.splitlines(keepends=True),
+            new_content.splitlines(keepends=True),
+            fromfile=file_path,
+            tofile=file_path,
+        ))
+        if diff:
+            _send_output("file_diff", diff.rstrip('\n') + "\n")
         _send_output("file_written", str(path.resolve()) + "\n")
 
         if replace_all and count > 1:
@@ -2017,11 +2091,10 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         """Edit an existing viewed file by line number.
 
         Requires a full view(file_path) first; partial views do not count.
-        Line numbers refer to that viewed snapshot. Multiple operations in one
-        call are applied atomically against the original snapshot.
+        Line numbers refer to the current viewed file contents. Multiple operations
+        in one call are applied atomically.
 
-        After a successful edit, call view(file_path) before another line_patch()
-        on the same file.
+        You may call line_patch() repeatedly after one full view(file_path).
 
         Operations:
           replace START:END
@@ -2059,10 +2132,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         if snapshot is None:
             raise ValueError(f"line_patch requires a full view({file_path!r}) before editing by line number.")
         if snapshot.get("line_patch_stale"):
-            raise ValueError(
-                f"Line numbers for {file_path} are stale after a previous edit. "
-                f"Call view({file_path!r}) before using line_patch() again."
-            )
+            raise ValueError(f"Call view({file_path!r}) before using line_patch().")
 
         path = Path(file_path).expanduser()
         old_text = path.read_text()
@@ -2211,7 +2281,21 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             raise ValueError("line_patch produced no changes.")
 
         path.write_text(new_text)
-        snapshot["line_patch_stale"] = True
+        snapshot.update({
+            "content": new_text,
+            "sha256": hashlib.sha256(new_text.encode()).hexdigest(),
+            "line_count": len(new_text.split('\n')),
+            "line_patch_stale": False,
+        })
+        import difflib
+        diff = ''.join(difflib.unified_diff(
+            old_text.splitlines(keepends=True),
+            new_text.splitlines(keepends=True),
+            fromfile=file_path,
+            tofile=file_path,
+        ))
+        if diff:
+            _send_output("file_diff", diff.rstrip('\n') + "\n")
         _send_output("file_written", str(path.resolve()) + "\n")
         return "Line patch applied."
 

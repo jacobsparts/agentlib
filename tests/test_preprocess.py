@@ -871,6 +871,37 @@ class TestCodeAgentPreprocessCode:
         assert "before\n" not in json.dumps(user_messages)
         assert agent._read_attachments[name] == "    1→after\n    2→"
 
+
+    def test_line_patch_allows_consecutive_patches_after_success(self, tmp_path):
+        target = tmp_path / "file.py"
+        target.write_text("one\ntwo\nthree\n")
+        name = str(target)
+
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent.complete = False
+        repl = agent._get_tool_repl()
+        try:
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                f"view({name!r})",
+            )
+            assert pure_syntax_error is False
+            agent.usermsg(agent.build_output_for_llm(output_chunks))
+
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                f"""line_patch({name!r}, \"""replace 2:2
+TWO\""")
+line_patch({name!r}, \"""replace 3:3
+THREE\""")""",
+            )
+
+            assert pure_syntax_error is False
+            assert "stale after a previous edit" not in output
+            assert target.read_text() == "one\nTWO\nTHREE\n"
+        finally:
+            repl.close()
     def test_unview_does_not_require_repl_send_output(self, tmp_path):
         target = tmp_path / "file.py"
         target.write_text("content\n")
