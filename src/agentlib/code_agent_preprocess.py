@@ -43,6 +43,20 @@ def preprocess_code_agent(
             for kw in call.keywords
         )
 
+    def _preview_uri_read_arg(call):
+        if not _is_named_call(call, "read"):
+            return None
+        if call.keywords or len(call.args) != 1:
+            return None
+        arg = call.args[0]
+        if (
+            isinstance(arg, ast.Constant)
+            and isinstance(arg.value, str)
+            and arg.value.startswith("session://preview/")
+        ):
+            return repr(arg.value)
+        return None
+
     def _literal_path_expr(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return repr(node.value)
@@ -311,9 +325,15 @@ def preprocess_code_agent(
         pstart = nxt.lineno - 1
         pend = nxt.end_lineno - 1
         pindent = lines[pstart][: len(lines[pstart]) - len(lines[pstart].lstrip())]
-        all_rewrites.append(
-            (pstart, pend, [f"{pindent}preview({var_name})"])
-        )
+        preview_uri_arg = _preview_uri_read_arg(assign.value)
+        if preview_uri_arg is not None:
+            all_rewrites.append(
+                (pstart, pend, [f"{pindent}view({preview_uri_arg})"])
+            )
+        else:
+            all_rewrites.append(
+                (pstart, pend, [f"{pindent}preview({var_name})"])
+            )
 
     if not all_rewrites:
         return code, counter

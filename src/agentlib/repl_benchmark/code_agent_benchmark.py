@@ -178,7 +178,7 @@ class CodeAgentBenchmarkContext:
 
     @property
     def file_edit_attempts(self) -> int:
-        return self.output.count(">>> apply_patch(") + self.output.count(">>> edit(")
+        return self.output.count(">>> line_patch(") + self.output.count(">>> edit(")
 
     @property
     def failed_edit_attempts(self) -> int:
@@ -788,8 +788,8 @@ def prepare_file_edit_patch_task(task_dir: Path, cwd: Path) -> dict[str, object]
     target_file.write_text(original)
     return {
         "prompt": (
-            f"Read {target_file} first, then update only the status line from 'STATUS: pending' "
-            f"to 'STATUS: done' using apply_patch. Emit only UPDATED when finished."
+            f"View {target_file} first, then update only the status line from 'STATUS: pending' "
+            f"to 'STATUS: done' using line_patch. Emit only UPDATED when finished."
         ),
         "metadata": {
             "target_file": str(target_file),
@@ -801,7 +801,7 @@ def prepare_file_edit_patch_task(task_dir: Path, cwd: Path) -> dict[str, object]
 def checker_file_edit_patch(ctx: CodeAgentBenchmarkContext) -> tuple[bool, list[BenchmarkViolation]]:
     passed, violations = make_code_agent_checker(
         expected_final="UPDATED",
-        required_tools=("read", "apply_patch"),
+        required_tools=("view", "line_patch"),
         min_turns=1,
         max_turns=30,
     )(ctx)
@@ -824,11 +824,11 @@ def checker_file_edit_patch(ctx: CodeAgentBenchmarkContext) -> tuple[bool, list[
             "correctness",
         ))
     read_offset = _tool_offset_equiv(ctx, "read")
-    patch_offset = ctx.tool_offset("apply_patch")
+    patch_offset = ctx.tool_offset("line_patch")
     if read_offset == -1 or patch_offset == -1 or read_offset > patch_offset:
         violations.append(make_violation(
             "read_before_edit_required",
-            "expected the file to be read before patching",
+            "expected the file to be viewed before line patching",
             20.0,
             "instruction_following",
         ))
@@ -909,7 +909,7 @@ CODE_AGENT_TASKS = [
     CodeAgentBenchmarkTask(
         id="code-agent/file-edit-patch",
         prompt="placeholder",
-        description="Requires reading a temp file, editing it with apply_patch, and producing the correct final content.",
+        description="Requires viewing a temp file, editing it with line_patch, and producing the correct final content.",
         checker=checker_file_edit_patch,
         max_turns=30,
         tags=("code-agent", "editing", "patch"),

@@ -784,6 +784,19 @@ class TestCodeAgentPreprocessCode:
         r = agent.preprocess_code('preview(read("file.py"))')
         assert same_ast(r, 'preview(read("file.py"))')
 
+    def test_print_assigned_preview_uri_read_becomes_view(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code(
+            'fail = read("session://preview/abc123")\n'
+            'print(fail)'
+        )
+        assert same_ast(
+            r,
+            'fail = read("session://preview/abc123")\n'
+            'view("session://preview/abc123")',
+        )
+
     def test_bare_bash_gets_assigned_and_previewed(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()

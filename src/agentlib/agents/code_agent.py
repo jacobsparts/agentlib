@@ -722,27 +722,33 @@ edit(file_path, old_string, new_string, replace_all=False)
     - old_string must match exactly (whitespace, indentation)
     - Fails if not found or multiple matches (unless replace_all=True)
 
-apply_patch(patch)
-    Diff-like format with context lines.
-    - Context lines must match file content exactly
-    - Use ~3 lines of context to locate the change position
-    - Batch multiple changes across files in one call
-    - Add/Update/Delete files
+line_patch(file_path, patch)
+    Edit an existing file that was previously viewed with view(file_path).
+    - Requires a full view(file_path) first; partial views do not count
+    - Line numbers refer to that viewed snapshot
+    - Operation headers must start at column 1 in the patch string
+    - Body lines are literal file content; indent only if the file should contain that indentation
+    - Multiple operations in one call are atomic
+    - After a successful line_patch(), call view(file_path) before another
+    - For create/move/delete, use Python file APIs such as Path.write_text(), Path.rename(), or Path.unlink()
 
-    *** Begin Patch
-    *** Update File: path/to/file.py
-    @@ class MyClass (optional anchor)
-     context line
-    -old line
-    +new line
-     context line
-    *** Add File: new_file.py
-    +content
-    *** Delete File: obsolete.py
-    *** End Patch
+    line_patch("src/app.py", '''replace 10:12
+def name():
+    return "new"
 
-    Prefixes: space=context, -=remove, +=add
-    Use @@ with function/class if context isn't unique
+insert after 25
+print("done")
+
+delete 40:44''')
+
+    Operations:
+      replace START:END
+      delete START:END
+      insert before LINE
+      insert after LINE
+
+    `insert after 0` prepends to the file.
+    `insert before LINE_COUNT + 1` appends to the file.
 
 >>> anti_patterns()
 
@@ -1720,10 +1726,14 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
     def _handle_tool_request(self, repl, req: dict) -> None:
         tool_name = req.get('tool')
-        if tool_name in {'__preview_blob_save__', '__preview_blob_read__'}:
+        if tool_name in {'__preview_blob_save__', '__preview_blob_read__', '__line_patch_is_attached__'}:
             request_id = req.get('request_id')
             args = req.get('args', {})
             try:
+                if tool_name == '__line_patch_is_attached__':
+                    repl.send_reply(request_id, result=self._is_attached(args.get('path')))
+                    repl.send_ack(request_id)
+                    return
                 if getattr(self, '_session_id', None) is None:
                     self._ensure_live_session()
                     self._flush_pending_session_events()
@@ -1738,6 +1748,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                 repl.send_ack(request_id)
             return
         return super()._handle_tool_request(repl, req)
+
 
     @REPLAgent.tool(inject=True)
     def grep(self,
@@ -1929,6 +1940,17 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             output += f"\n... ({remaining} more lines)"
 
         if offset is None and limit is None:
+            if not is_preview_uri:
+                import hashlib
+                snapshots = globals().setdefault("_line_patch_snapshots", {})
+                snapshots[file_path] = {
+                    "path": file_path,
+                    "resolved_path": str(path.resolve()),
+                    "content": content,
+                    "sha256": hashlib.sha256(content.encode()).hexdigest(),
+                    "line_count": len(all_lines),
+                    "line_patch_stale": False,
+                }
             _send_output("read_attach", file_path + "\n")
         else:
             _send_output("read_partial", file_path + "\n")
@@ -1952,6 +1974,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             self.detach_file_ref(file_path)
         else:
             self.detach(file_path)
+        globals().get("_line_patch_snapshots", {}).pop(file_path, None)
         self._pending_unviewed_files.add(file_path)
         return f"Removed from future context: {file_path}"
 
@@ -1987,20 +2010,210 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         return "Edit applied."
 
     @REPLAgent.tool(inject=True)
-    def apply_patch(self,
-            patch: str = "Patch text in apply_patch format"
+    def line_patch(self,
+            file_path: str = "Path to a file previously viewed with view()",
+            patch: str = "Line patch operations"
         ):
-        """Apply a patch to add, update, or delete files."""
-        from agentlib.tools.apply_patch import process_patch, DiffError
-        try:
-            result = process_patch(patch)
-        except DiffError as e:
-            raise type(e)(*e.args) from None
-        # Signal written files for attachment refresh
-        for line in result.split('\n'):
-            if line.startswith(('M ', 'A ')):
-                _send_output("file_written", line[2:] + "\n")
-        return result
+        """Edit an existing viewed file by line number.
+
+        Requires a full view(file_path) first; partial views do not count.
+        Line numbers refer to that viewed snapshot. Multiple operations in one
+        call are applied atomically against the original snapshot.
+
+        After a successful edit, call view(file_path) before another line_patch()
+        on the same file.
+
+        Operations:
+          replace START:END
+          delete START:END
+          insert before LINE
+          insert after LINE
+
+        Operation headers must start at column 1 in the patch string. Body lines
+        are literal file content and continue until the next operation header; do
+        not indent body lines unless the file should contain that indentation.
+
+        Use Python file APIs such as Path.write_text(), Path.rename(), or
+        Path.unlink() for create, move, and delete.
+        """
+        import hashlib
+        import json as _json
+        import re
+
+        if isinstance(file_path, str) and file_path.startswith("session://"):
+            raise ValueError("line_patch cannot edit session:// preview URIs.")
+
+        global _request_id
+        _request_id += 1
+        _req_id = _request_id
+        _send_tool_request(_json.dumps({
+            "tool": "__line_patch_is_attached__",
+            "args": {"path": file_path},
+            "request_id": _req_id,
+        }))
+        if not _wait_for_ack(_req_id):
+            raise ValueError(f"line_patch requires a full view({file_path!r}) before editing by line number.")
+
+        snapshots = globals().setdefault("_line_patch_snapshots", {})
+        snapshot = snapshots.get(file_path)
+        if snapshot is None:
+            raise ValueError(f"line_patch requires a full view({file_path!r}) before editing by line number.")
+        if snapshot.get("line_patch_stale"):
+            raise ValueError(
+                f"Line numbers for {file_path} are stale after a previous edit. "
+                f"Call view({file_path!r}) before using line_patch() again."
+            )
+
+        path = Path(file_path).expanduser()
+        old_text = path.read_text()
+        old_hash = hashlib.sha256(old_text.encode()).hexdigest()
+        if old_hash != snapshot.get("sha256"):
+            raise ValueError(f"{file_path} changed on disk since it was viewed. Call view({file_path!r}) again before line_patch().")
+
+        header_re = re.compile(r'^(replace) (\d+):(\d+)$|^(delete) (\d+):(\d+)$|^(insert) (before|after) (\d+)$')
+        raw_lines = patch.split('\n')
+        ops = []
+        current = None
+
+        def finish_current():
+            if current is not None:
+                ops.append(current)
+
+        for raw in raw_lines:
+            match = header_re.match(raw)
+            if match:
+                finish_current()
+                if match.group(1):
+                    current = {
+                        "kind": "replace",
+                        "start": int(match.group(2)),
+                        "end": int(match.group(3)),
+                        "body": [],
+                        "header": raw,
+                    }
+                elif match.group(4):
+                    current = {
+                        "kind": "delete",
+                        "start": int(match.group(5)),
+                        "end": int(match.group(6)),
+                        "body": [],
+                        "header": raw,
+                    }
+                else:
+                    current = {
+                        "kind": "insert",
+                        "where": match.group(8),
+                        "line": int(match.group(9)),
+                        "body": [],
+                        "header": raw,
+                    }
+                continue
+            if current is None:
+                if raw.strip():
+                    raise ValueError(f"Expected line_patch operation header, got: {raw!r}")
+                continue
+            current["body"].append(raw)
+        finish_current()
+
+        if raw_lines and raw_lines[-1] == "":
+            for op in reversed(ops):
+                if op.get("body") and op["body"][-1] == "":
+                    op["body"].pop()
+                    break
+
+        if not ops:
+            raise ValueError("line_patch has no operations.")
+
+        lines = old_text.split('\n')
+        line_count = len(lines)
+        range_ops = []
+        insertion_points = set()
+
+        for op in ops:
+            kind = op["kind"]
+            if kind in {"replace", "delete"}:
+                start = op["start"]
+                end = op["end"]
+                if start < 1 or end < start or end > line_count:
+                    raise ValueError(f"Invalid range {start}:{end} for {file_path} with {line_count} lines.")
+                range_ops.append((start, end, op))
+                if kind == "delete" and any(line.strip() for line in op["body"]):
+                    raise ValueError(f"{op['header']} does not accept a body.")
+            else:
+                line = op["line"]
+                where = op["where"]
+                if where == "before":
+                    valid = 1 <= line <= line_count + 1
+                    point = ("before", line)
+                else:
+                    valid = 0 <= line <= line_count
+                    point = ("after", line)
+                if not valid:
+                    raise ValueError(f"Invalid insert {where} {line} for {file_path} with {line_count} lines.")
+                if point in insertion_points:
+                    raise ValueError(f"Duplicate line_patch insertion point: insert {where} {line}.")
+                insertion_points.add(point)
+                if not op["body"]:
+                    raise ValueError(f"insert {where} {line} has no body.")
+
+        for i, (start_a, end_a, op_a) in enumerate(range_ops):
+            for start_b, end_b, op_b in range_ops[i + 1:]:
+                if start_a <= end_b and start_b <= end_a:
+                    raise ValueError(f"Overlapping line_patch operations: {op_a['header']} conflicts with {op_b['header']}.")
+        for op in ops:
+            if op["kind"] != "insert":
+                continue
+            line = op["line"]
+            for start, end, range_op in range_ops:
+                inside = (
+                    (op["where"] == "before" and start <= line <= end)
+                    or (op["where"] == "after" and start <= line < end)
+                )
+                if inside:
+                    raise ValueError(f"Overlapping line_patch operations: {op['header']} conflicts with {range_op['header']}.")
+
+        by_start = {start: op for start, end, op in range_ops}
+        by_before = {}
+        by_after = {}
+        for op in ops:
+            if op["kind"] == "insert":
+                if op["where"] == "before":
+                    by_before[op["line"]] = op
+                else:
+                    by_after[op["line"]] = op
+
+        new_lines = []
+        if 0 in by_after:
+            new_lines.extend(by_after[0]["body"])
+
+        i = 1
+        while i <= line_count:
+            if i in by_before:
+                new_lines.extend(by_before[i]["body"])
+            replace_op = by_start.get(i)
+            if replace_op is not None:
+                if replace_op["kind"] == "replace":
+                    new_lines.extend(replace_op["body"])
+                i = replace_op["end"] + 1
+                if i - 1 in by_after:
+                    new_lines.extend(by_after[i - 1]["body"])
+                continue
+            new_lines.append(lines[i - 1])
+            if i in by_after:
+                new_lines.extend(by_after[i]["body"])
+            i += 1
+
+        if line_count + 1 in by_before:
+            new_lines.extend(by_before[line_count + 1]["body"])
+
+        new_text = '\n'.join(new_lines)
+        if new_text == old_text:
+            raise ValueError("line_patch produced no changes.")
+
+        path.write_text(new_text)
+        snapshot["line_patch_stale"] = True
+        _send_output("file_written", str(path.resolve()) + "\n")
+        return "Line patch applied."
 
     @REPLAgent.tool(inject=True)
     def bash(self,

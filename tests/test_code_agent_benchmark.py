@@ -272,29 +272,21 @@ def test_code_agent_benchmark_file_edit_patch_tracks_attempts_and_cleans_up(tmp_
 
     def first_response(payload):
         text = payload["messages"][-1]["content"]
-        match = re.search(r"Read (.+?) first, then update only the status line", text)
+        match = re.search(r"View (.+?) first, then update only the status line", text)
         assert match, text
         state["target"] = match.group(1)
-        return f"read({state['target']!r})"
+        return f"view({state['target']!r})"
 
     def second_response(payload):
         return (
-            'apply_patch("""*** Begin Patch\n'
-            f'*** Update File: {state["target"]}\n'
-            '@@\n'
-            '-STATUS: waiting\n'
-            '+STATUS: done\n'
-            '*** End Patch""")'
+            f'line_patch({state["target"]!r}, """replace 99:99\n'
+            'STATUS: done""")'
         )
 
     def third_response(payload):
         return (
-            'apply_patch("""*** Begin Patch\n'
-            f'*** Update File: {state["target"]}\n'
-            '@@\n'
-            '-STATUS: pending\n'
-            '+STATUS: done\n'
-            '*** End Patch""")\n'
+            f'line_patch({state["target"]!r}, """replace 2:2\n'
+            'STATUS: done""")\n'
             'emit("UPDATED", release=True)'
         )
 
