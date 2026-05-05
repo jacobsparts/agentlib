@@ -508,6 +508,23 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
     view_images._tool_files_param = "files"
 
+    def _file_context_ephemeral(self, names: list[str]) -> str:
+        if not names:
+            return ""
+        lines = ["Files currently in context:"]
+        lines.extend(f"- {name}" for name in names)
+        lines.extend(["", "Remove files that are irrelevant to recent conversation state with unview(path)."])
+        return "\n".join(lines)
+
+    def _current_file_context_names(self, extra=None) -> list[str]:
+        names = {}
+        for name in self.list_attachments():
+            names[name] = None
+        for name in (extra or {}):
+            if not self._is_session_uri(name):
+                names[name] = None
+        return list(names)
+
     def usermsg(self, content, **kwargs):
         """Override to attach pending images and read-attachments."""
         if getattr(self, '_pending_explicit_attachment_refs', None):
@@ -527,6 +544,9 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         if pending := getattr(self, '_pending_images', None):
             kwargs['images'] = kwargs.get('images', []) + pending
             self._pending_images = []
+        self.ephemeral = self._file_context_ephemeral(
+            self._current_file_context_names(kwargs.get('_attachments'))
+        )
         before_len = len(self.conversation.messages)
         result = super().usermsg(content, **kwargs)
         if len(self.conversation.messages) > before_len:

@@ -899,6 +899,50 @@ class TestCodeAgentPreprocessCode:
         assert preview_name in agent.list_attachments(include_session_blobs=True)
         assert other_session_name in agent.list_attachments(include_session_blobs=True)
 
+    def test_usermsg_sets_empty_ephemeral_when_no_files_in_context(self):
+        agent = CodeAgent()
+        agent._ensure_setup()
+
+        agent.usermsg("question")
+
+        assert agent.ephemeral == ""
+
+    def test_usermsg_sets_file_context_ephemeral_for_viewed_files(self):
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent.conversation.usermsg(
+            "[Attachment: file.py]",
+            _attachments={"file.py": "    1→content\\n"},
+        )
+
+        agent.usermsg("next question")
+
+        assert agent.ephemeral == (
+            "Files currently in context:\n"
+            "- file.py\n"
+            "\n"
+            "Remove files that are irrelevant to recent conversation state with unview(path)."
+        )
+        assert "attachment" not in agent.ephemeral.lower()
+
+    def test_usermsg_file_context_ephemeral_includes_new_read_context(self):
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent._read_attachments = {"new.py": "    1→content\\n"}
+
+        agent.usermsg("[Attachment: new.py]\\n\\nnext question")
+
+        assert "new.py" in agent.ephemeral
+
+    def test_usermsg_file_context_ephemeral_excludes_session_blobs(self):
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent._read_attachments = {"session://preview/abc123": "    1→blob\\n"}
+
+        agent.usermsg("[Attachment: session://preview/abc123]\\n\\nnext question")
+
+        assert agent.ephemeral == ""
+
     def test_unview_session_uri_attachment(self):
         agent = CodeAgent()
         agent._ensure_setup()
