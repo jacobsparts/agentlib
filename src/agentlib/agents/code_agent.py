@@ -780,9 +780,9 @@ edit(file_path, old_string, new_string, replace_all=False)
     - Fails if not found or multiple matches (unless replace_all=True)
 
 line_patch(file_path, patch)
-    Edit an existing file that was previously viewed with view(file_path).
-    - Requires a full view(file_path) first; partial views do not count
-    - Line numbers refer to the current viewed file contents
+    Edit an existing file by line number.
+    - Prefer a full view(file_path) first; if absent, line_patch uses current on-disk contents
+    - Line numbers refer to the current viewed file contents, or current file contents if not viewed
     - Operation headers must start at column 1 in the patch string
     - Body lines are literal file content; indent only if the file should contain that indentation
     - Multiple operations in one call are atomic
@@ -841,6 +841,13 @@ read("file.py", offset=1, limit=50)   # WRONG - just read the whole file
 
 # GOOD: Just call read() directly
 read("file.py")
+
+# BAD: Recreating a partial view manually for source inspection
+content = read("file.py")
+print("\n".join(content.splitlines()[100:140]))
+
+# GOOD: Use view() for source inspection with line numbers/context tracking
+view("file.py")
 
 # BAD: Repeated narrow view() calls on the same normal-sized file
 view("app.js", offset=2200, limit=40)
@@ -2104,14 +2111,15 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
     @REPLAgent.tool(inject=True)
     def line_patch(self,
-            file_path: str = "Path to a file previously viewed with view()",
+            file_path: str = "Path to an existing file",
             patch: str = "Line patch operations"
         ):
-        """Edit an existing viewed file by line number.
+        """Edit an existing file by line number.
 
-        Requires a full view(file_path) first; partial views do not count.
-        Line numbers refer to the current viewed file contents. Multiple operations
-        in one call are applied atomically.
+        Prefer a full view(file_path) first. If no current view snapshot exists,
+        line_patch uses the file's current on-disk contents as the line-number
+        baseline and attaches the edited file for future context.
+        Multiple operations in one call are applied atomically.
 
         You may call line_patch() repeatedly after one full view(file_path).
 
@@ -2143,21 +2151,38 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             "args": {"path": file_path},
             "request_id": _req_id,
         }))
-        if not _wait_for_ack(_req_id):
-            raise ValueError(f"line_patch requires a full view({file_path!r}) before editing by line number.")
-
-        snapshots = globals().setdefault("_line_patch_snapshots", {})
-        snapshot = snapshots.get(file_path)
-        if snapshot is None:
-            raise ValueError(f"line_patch requires a full view({file_path!r}) before editing by line number.")
-        if snapshot.get("line_patch_stale"):
-            raise ValueError(f"Call view({file_path!r}) before using line_patch().")
+        was_attached = bool(_wait_for_ack(_req_id))
 
         path = Path(file_path).expanduser()
         old_text = path.read_text()
         old_hash = hashlib.sha256(old_text.encode()).hexdigest()
+
+        snapshots = globals().setdefault("_line_patch_snapshots", {})
+        snapshot = snapshots.get(file_path)
+        if snapshot is None:
+            all_lines = old_text.split('\n')
+            snapshot = {
+                "path": file_path,
+                "resolved_path": str(path.resolve()),
+                "content": old_text,
+                "sha256": old_hash,
+                "line_count": len(all_lines),
+                "line_patch_stale": False,
+            }
+            snapshots[file_path] = snapshot
+            was_attached = False
+        if snapshot.get("line_patch_stale"):
+            raise ValueError(f"Call view({file_path!r}) before using line_patch().")
         if old_hash != snapshot.get("sha256"):
-            raise ValueError(f"{file_path} changed on disk since it was viewed. Call view({file_path!r}) again before line_patch().")
+            if not was_attached:
+                snapshot.update({
+                    "content": old_text,
+                    "sha256": old_hash,
+                    "line_count": len(old_text.split('\n')),
+                    "line_patch_stale": False,
+                })
+            else:
+                raise ValueError(f"{file_path} changed on disk since it was viewed. Call view({file_path!r}) again before line_patch().")
 
         header_re = re.compile(r'^(replace) (\d+):(\d+)$|^(delete) (\d+):(\d+)$|^(insert) (before|after) (\d+)$')
         raw_lines = patch.split('\n')
@@ -2316,6 +2341,11 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         if diff:
             _send_output("file_diff", diff.rstrip('\n') + "\n")
         _send_output("file_written", str(path.resolve()) + "\n")
+        if not was_attached:
+            lines = new_text.split('\n')
+            formatted = '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
+            _send_output("read_attach", file_path + "\n")
+            _send_output("read", formatted + "\n")
         return "Line patch applied."
 
     @REPLAgent.tool(inject=True)

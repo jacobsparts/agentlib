@@ -902,6 +902,32 @@ THREE\""")""",
             assert target.read_text() == "one\nTWO\nTHREE\n"
         finally:
             repl.close()
+
+    def test_line_patch_without_prior_view_uses_current_file_and_attaches(self, tmp_path):
+        target = tmp_path / "file.py"
+        target.write_text("one\ntwo\nthree\n")
+        name = str(target)
+
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent.complete = False
+        repl = agent._get_tool_repl()
+        try:
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                f"""line_patch({name!r}, \"""replace 2:2
+TWO\""")""",
+            )
+
+            assert pure_syntax_error is False
+            assert "line_patch requires a full view" not in output
+            assert target.read_text() == "one\nTWO\nthree\n"
+            llm_output = agent.build_output_for_llm(output_chunks)
+            assert f"[Attachment: {name}]" in llm_output
+            assert name in agent._read_attachments
+        finally:
+            repl.close()
+
     def test_unview_does_not_require_repl_send_output(self, tmp_path):
         target = tmp_path / "file.py"
         target.write_text("content\n")
@@ -924,6 +950,7 @@ THREE\""")""",
     def test_whole_code_syntax_error_prevents_partial_execution(self):
         agent = CodeAgent()
         agent._ensure_setup()
+        agent.complete = False
         repl = agent._get_tool_repl()
         try:
             output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
@@ -948,6 +975,7 @@ THREE\""")""",
     def test_whole_code_indent_syntax_error_prevents_partial_execution(self):
         agent = CodeAgent()
         agent._ensure_setup()
+        agent.complete = False
         repl = agent._get_tool_repl()
         try:
             output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
