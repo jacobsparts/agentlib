@@ -991,6 +991,26 @@ THREE\""")""",
         assert preview_name in agent.list_attachments(include_session_blobs=True)
         assert other_session_name in agent.list_attachments(include_session_blobs=True)
 
+    def test_auto_context_files_can_be_excluded_from_attachment_list(self):
+        agent = CodeAgent()
+        agent._ensure_setup()
+
+        agent._auto_context_attachment_names = {"CLAUDE.md", "docs/imported.md"}
+        agent.conversation.usermsg(
+            "[Attachment: CLAUDE.md]\n[Attachment: docs/imported.md]\n[Attachment: file.py]",
+            _attachments={
+                "CLAUDE.md": "    1→rules\n",
+                "docs/imported.md": "    1→imported rules\n",
+                "file.py": "    1→code\n",
+            },
+        )
+
+        assert "CLAUDE.md" not in agent.list_attachments(include_auto_context=False)
+        assert "docs/imported.md" not in agent.list_attachments(include_auto_context=False)
+        assert "file.py" in agent.list_attachments(include_auto_context=False)
+        assert "CLAUDE.md" in agent.list_attachments()
+        assert "docs/imported.md" in agent.list_attachments()
+
     def test_usermsg_sets_empty_ephemeral_when_no_files_in_context(self):
         agent = CodeAgent()
         agent._ensure_setup()
@@ -1034,6 +1054,25 @@ THREE\""")""",
         agent.usermsg("[Attachment: session://preview/abc123]\\n\\nnext question")
 
         assert agent.ephemeral == ""
+
+    def test_usermsg_file_context_ephemeral_excludes_auto_context_files(self):
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent._auto_context_attachment_names = {"CLAUDE.md", "docs/imported.md"}
+        agent.conversation.usermsg(
+            "[Attachment: CLAUDE.md]\n[Attachment: docs/imported.md]\n[Attachment: file.py]",
+            _attachments={
+                "CLAUDE.md": "    1→rules\n",
+                "docs/imported.md": "    1→imported rules\n",
+                "file.py": "    1→code\n",
+            },
+        )
+
+        agent.usermsg("next question")
+
+        assert "CLAUDE.md" not in agent.ephemeral
+        assert "docs/imported.md" not in agent.ephemeral
+        assert "file.py" in agent.ephemeral
 
     def test_unview_session_uri_attachment(self):
         agent = CodeAgent()

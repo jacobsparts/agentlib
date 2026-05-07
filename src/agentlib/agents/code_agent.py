@@ -136,6 +136,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             self._pending_session_events = []
             self._display_capture = []
             self._pending_unviewed_files = set()
+            self._auto_context_attachment_names = set()
         self.llm_client.on_retry = self.on_retry
 
     def _ensure_live_session(self):
@@ -342,15 +343,31 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     def _is_session_uri(name: str) -> bool:
         return isinstance(name, str) and name.startswith("session://")
 
-    def list_attachments(self, include_session_blobs: bool = False) -> dict[str, str]:
+    def _is_auto_context_file(self, name: str) -> bool:
+        return (
+            isinstance(name, str)
+            and (
+                name in getattr(self, '_auto_context_attachment_names', set())
+                or Path(name).name in {"CLAUDE.md", "AGENTS.md"}
+            )
+        )
+
+    def list_attachments(self, include_session_blobs: bool = False, include_auto_context: bool = True) -> dict[str, str]:
         attachments = super().list_attachments()
-        if include_session_blobs:
-            return attachments
-        return {
-            name: content
-            for name, content in attachments.items()
-            if not self._is_session_uri(name)
-        }
+        if not include_session_blobs:
+            attachments = {
+                name: content
+                for name, content in attachments.items()
+                if not self._is_session_uri(name)
+            }
+        if not include_auto_context:
+            attachments = {
+                name: content
+                for name, content in attachments.items()
+                if not self._is_auto_context_file(name)
+            }
+        return attachments
+
 
     def list_skills(self) -> list[dict]:
         skills = {}
@@ -560,10 +577,10 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
     def _current_file_context_names(self, extra=None) -> list[str]:
         names = {}
-        for name in self.list_attachments():
+        for name in self.list_attachments(include_auto_context=False):
             names[name] = None
         for name in (extra or {}):
-            if not self._is_session_uri(name):
+            if not self._is_session_uri(name) and not self._is_auto_context_file(name):
                 names[name] = None
         return list(names)
 
@@ -960,12 +977,13 @@ If you don't know how to proceed:
                     print(line, flush=True)
                     self._capture_display_line(line)
 
-        elif msg_type in ("progress", "emit"):
-            # Show progress/emit in green immediately (emit release=True also shown at turn end)
+        elif msg_type == "progress":
             text = chunk.rstrip('\n')
             for line in text.split('\n'):
                 print(f"\x1b[92m{line}\x1b[0m", flush=True)  # Bright green
                 self._capture_display_line(line)
+        elif msg_type == "emit":
+            return
         elif msg_type in ("output", "print"):
             if msg_type == "output" and getattr(self, '_suppress_next_edit_result', False):
                 stripped = chunk.strip()
@@ -1409,6 +1427,7 @@ If you don't know how to proceed:
         if not resumed_on_start:
             if files := gather_auto_attach_files():
                 self._display_text(f"Loading {', '.join(files)}", kind="status", create_session=False)
+                self._auto_context_attachment_names.update(files)
                 for filename in files:
                     self.attach_file_ref(filename, filename)
         synth = not resumed_on_start and not bool(resume)

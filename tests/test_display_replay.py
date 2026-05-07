@@ -118,3 +118,17 @@ def test_replay_display_text_ignores_emit_inside_string_literal():
 
     out = replay_display_text("sid", store)
     assert out == "> question\n\n> next\n\n"
+
+
+def test_replay_display_text_does_not_duplicate_emit_display_event():
+    store = DummyStore([
+        {"seq": 1, "event_type": "display", "payload": {"kind": "input", "text": "> question\n\n"}},
+        {"seq": 2, "event_type": "message_added", "payload": {"message": {
+            "role": "assistant",
+            "content": 'emit("answer", release=True)',
+        }}},
+        {"seq": 3, "event_type": "display", "payload": {"kind": "emit", "text": "answer\n"}},
+    ])
+
+    out = replay_display_text("sid", store)
+    assert out == "> question\n\nanswer\n"
