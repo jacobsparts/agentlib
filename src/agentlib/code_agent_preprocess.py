@@ -286,6 +286,25 @@ def preprocess_code_agent(
                 )
         elif (
             isinstance(func, ast.Name)
+            and func.id == "preview"
+            and len(call.args) == 1
+            and not call.keywords
+            and _is_named_call(call.args[0], "bash")
+        ):
+            inner = call.args[0]
+            inner_source = _source(inner)
+            if inner_source:
+                var_name = _next_bash_var()
+                if _has_literal_bg_true(inner):
+                    all_rewrites.append(
+                        (start, end, [f"{indent}{var_name} = {inner_source}"])
+                    )
+                else:
+                    all_rewrites.append(
+                        (start, end, [f"{indent}preview({var_name} := {inner_source})"])
+                    )
+        elif (
+            isinstance(func, ast.Name)
             and func.id == "print"
             and len(call.args) == 1
             and not call.keywords

@@ -823,6 +823,18 @@ class TestCodeAgentPreprocessCode:
         r = agent.preprocess_code('print(bash("echo hi"))')
         assert same_ast(r, 'preview(_bash1 := bash("echo hi"))')
 
+    def test_preview_bash_gets_assigned_and_previewed(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('preview(bash("echo hi"))')
+        assert same_ast(r, 'preview(_bash1 := bash("echo hi"))')
+
+    def test_preview_background_bash_gets_assigned_only(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('preview(bash("sleep 10", bg=True))')
+        assert same_ast(r, '_bash1 = bash("sleep 10", bg=True)')
+
     def test_assigned_bash_left_alone(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
