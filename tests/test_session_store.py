@@ -72,3 +72,42 @@ def test_session_lock_same_owner_refreshes(tmp_path):
 
     assert second["owner"] == "owner-a"
     assert datetime.fromisoformat(second["expires_at"]) >= datetime.fromisoformat(first["expires_at"])
+
+
+
+def test_create_session_from_messages_appends_events_and_copies_preview_blobs(tmp_path):
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    source = store.create_session("/repo", "model-a")
+    store.append_event(source, 1, "message_added", {"message": {"role": "user", "_user_content": "source"}})
+    store.save_preview_blob(source, "abc", "blob content")
+    messages = [
+        {"role": "system", "content": "system"},
+        {
+            "role": "user",
+            "content": "condensed",
+            "_attachments": {"file.txt": "content"},
+            "_attachment_refs": {"blob": "session://preview/abc"},
+            "_render_segments": [{"type": "stdout", "content": "condensed"}],
+        },
+        {"role": "assistant", "content": "emit('ok')"},
+    ]
+
+    created = store.create_session_from_messages(
+        messages,
+        cwd="/new",
+        model="model-b",
+        preview_blobs_from=source,
+    )
+
+    assert created != source
+    assert store.get_session(created)["cwd"] == "/new"
+    assert store.get_session(created)["model"] == "model-b"
+    assert store.get_preview_blob(created, "abc") == "blob content"
+    events = store.get_events(created)
+    assert [event["seq"] for event in events] == [1, 2]
+    assert [event["event_type"] for event in events] == ["message_added", "message_added"]
+    first_message = events[0]["payload"]["message"]
+    assert first_message["role"] == "user"
+    assert first_message["_attachment_refs"] == {"blob": "session://preview/abc"}
+    assert "_attachments" not in first_message
+    assert store.get_events(source)[0]["payload"]["message"]["_user_content"] == "source"

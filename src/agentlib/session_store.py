@@ -145,6 +145,44 @@ class SessionStore:
             )
             conn.commit()
         return new_session_id
+    def copy_preview_blobs(self, source_session_id: str, target_session_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO preview_blobs(session_id, key, created_at, content)
+                SELECT ?, key, created_at, content
+                FROM preview_blobs
+                WHERE session_id = ?
+                """,
+                (target_session_id, source_session_id),
+            )
+            conn.commit()
+
+    @staticmethod
+    def _message_payload_for_event(msg: dict) -> dict:
+        return {
+            key: value
+            for key, value in msg.items()
+            if key != "_attachments"
+        }
+
+    def create_session_from_messages(
+        self,
+        messages: list[dict],
+        *,
+        cwd: str,
+        model: str | None = None,
+        preview_blobs_from: str | None = None,
+    ) -> str:
+        session_id = self.create_session(cwd, model)
+        if preview_blobs_from:
+            self.copy_preview_blobs(preview_blobs_from, session_id)
+        seq = 1
+        for msg in messages[1:]:
+            self.append_event(session_id, seq, "message_added", {"message": self._message_payload_for_event(msg)})
+            seq += 1
+        return session_id
+
 
     def _lock_expiry(self, ttl_seconds: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()

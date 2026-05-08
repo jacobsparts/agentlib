@@ -184,6 +184,44 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             return None
         print(f"{DIM}Forked session: {new_session_id}{RESET}")
         return new_session_id
+    def condense_session(self):
+        from agentlib.code_agent_condense import condense_code_agent_messages
+
+        self._ensure_live_session()
+        self._flush_pending_session_events()
+
+        old_session_id = self._session_id
+        condensed = condense_code_agent_messages(self.conversation.messages)
+
+        persisted_messages = [condensed[0]]
+        for msg in condensed[1:]:
+            persisted_messages.append(self._sanitize_message_for_persistence(msg))
+
+        new_session_id = self._session_store.create_session_from_messages(
+            persisted_messages,
+            cwd=str(Path.cwd()),
+            model=getattr(self, "model", None),
+            preview_blobs_from=old_session_id,
+        )
+
+        if not self._acquire_session_lock(new_session_id):
+            return None
+
+        self._release_session_lock(old_session_id)
+
+        self.conversation.messages = condensed
+        self._session_id = new_session_id
+        self._next_event_seq = self._session_store.get_next_seq(new_session_id)
+        self._last_was_repl_output = False
+        self._explicit_attachment_refs = {}
+        self._pending_explicit_attachment_refs = {}
+
+        for msg in self.conversation.messages:
+            for name, path in (msg.get("_attachment_refs") or {}).items():
+                self._explicit_attachment_refs[name] = path
+
+        return new_session_id
+
 
     def _resolve_session_selection(self, selection) -> str | None:
         if not selection:
@@ -1493,7 +1531,7 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+O = transcript | Esc Esc = rewind | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /fork [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
+        self.console.print("[dim]Commands: /repl, /rewind, /condense, /resume [session_id], /fork [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
 
         resumed_on_start = False
         if resume:
@@ -1587,6 +1625,32 @@ If you don't know how to proceed:
                     elif rewind_shortcut:
                         sys.stdout.write("\x1b[1A\r\x1b[K")
                         sys.stdout.flush()
+                    continue
+
+                if user_input.strip() == "/condense":
+                    self._display_input_block(user_input)
+                    before_messages = len(self.conversation.messages)
+                    before_chars = sum(len(m.get("content") or "") for m in self.conversation.messages)
+                    old_session_id = self._session_id
+
+                    try:
+                        new_session_id = self.condense_session()
+                    except Exception as e:
+                        self._display_text(f"{DIM}Condense failed: {type(e).__name__}: {e}{RESET}", kind="status")
+                        continue
+
+                    if new_session_id:
+                        after_messages = len(self.conversation.messages)
+                        after_chars = sum(len(m.get("content") or "") for m in self.conversation.messages)
+                        self._display_text(
+                            f"{DIM}Condensed session: {before_messages}  {after_messages} messages, "
+                            f"{before_chars/1000:.1f}K  {after_chars/1000:.1f}K chars{RESET}",
+                            kind="status",
+                        )
+                        self._display_text(f"{DIM}New session: {new_session_id}{RESET}", kind="status")
+                        self._display_text(f"{DIM}Previous session: {old_session_id}{RESET}", kind="status")
+                    else:
+                        self._display_text(f"{DIM}Condense failed.{RESET}", kind="status")
                     continue
 
                 if user_input.strip().startswith("/resume"):
