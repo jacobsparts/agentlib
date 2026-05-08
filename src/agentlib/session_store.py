@@ -1,8 +1,9 @@
 import json
 import os
+import socket
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -65,9 +66,22 @@ class SessionStore:
                     FOREIGN KEY(session_id) REFERENCES sessions(session_id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS session_locks (
+                    session_id TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    pid INTEGER NOT NULL,
+                    hostname TEXT,
+                    acquired_at TEXT NOT NULL,
+                    heartbeat_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_cwd ON sessions(cwd)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_session_seq ON session_events(session_id, seq)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_session_locks_expires_at ON session_locks(expires_at)")
             conn.commit()
 
     def create_session(self, cwd: str, model: str | None = None) -> str:
@@ -83,6 +97,139 @@ class SessionStore:
             )
             conn.commit()
         return session_id
+
+    def fork_session(self, source_session_id: str, *, cwd: str | None = None, model: str | None = None) -> str:
+        new_session_id = str(uuid.uuid4())
+        now = utc_now_iso()
+        with self._connect() as conn:
+            source = conn.execute(
+                "SELECT * FROM sessions WHERE session_id = ?",
+                (source_session_id,),
+            ).fetchone()
+            if source is None:
+                raise ValueError(f"Session not found: {source_session_id}")
+
+            conn.execute(
+                """
+                INSERT INTO sessions(session_id, cwd, created_at, updated_at, model, title, last_user_text)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_session_id,
+                    cwd if cwd is not None else source["cwd"],
+                    now,
+                    now,
+                    model if model is not None else source["model"],
+                    source["title"],
+                    source["last_user_text"],
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO session_events(session_id, seq, created_at, event_type, payload_json)
+                SELECT ?, seq, created_at, event_type, payload_json
+                FROM session_events
+                WHERE session_id = ?
+                ORDER BY seq ASC
+                """,
+                (new_session_id, source_session_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO preview_blobs(session_id, key, created_at, content)
+                SELECT ?, key, created_at, content
+                FROM preview_blobs
+                WHERE session_id = ?
+                """,
+                (new_session_id, source_session_id),
+            )
+            conn.commit()
+        return new_session_id
+
+    def _lock_expiry(self, ttl_seconds: int) -> str:
+        return (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
+
+    @staticmethod
+    def default_lock_owner() -> str:
+        return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4()}"
+
+    def acquire_session_lock(self, session_id: str, owner: str, ttl_seconds: int = 3600) -> tuple[bool, dict | None]:
+        now = utc_now_iso()
+        expires_at = self._lock_expiry(ttl_seconds)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = conn.execute(
+                    "SELECT * FROM session_locks WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if existing is not None and existing["owner"] != owner:
+                    parsed_expiry = datetime.fromisoformat(existing["expires_at"])
+                    if parsed_expiry.tzinfo is None:
+                        parsed_expiry = parsed_expiry.replace(tzinfo=timezone.utc)
+                    if parsed_expiry > datetime.now(timezone.utc):
+                        conn.commit()
+                        return False, dict(existing)
+
+                conn.execute(
+                    """
+                    INSERT INTO session_locks(session_id, owner, pid, hostname, acquired_at, heartbeat_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id) DO UPDATE SET
+                        owner = excluded.owner,
+                        pid = excluded.pid,
+                        hostname = excluded.hostname,
+                        acquired_at = excluded.acquired_at,
+                        heartbeat_at = excluded.heartbeat_at,
+                        expires_at = excluded.expires_at
+                    """,
+                    (session_id, owner, os.getpid(), socket.gethostname(), now, now, expires_at),
+                )
+                conn.commit()
+                return True, None
+            except Exception:
+                conn.rollback()
+                raise
+
+    def heartbeat_session_lock(self, session_id: str, owner: str, ttl_seconds: int = 3600) -> bool:
+        now = utc_now_iso()
+        expires_at = self._lock_expiry(ttl_seconds)
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE session_locks
+                SET heartbeat_at = ?, expires_at = ?
+                WHERE session_id = ? AND owner = ?
+                """,
+                (now, expires_at, session_id, owner),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def release_session_lock(self, session_id: str, owner: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM session_locks WHERE session_id = ? AND owner = ?",
+                (session_id, owner),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def get_session_lock(self, session_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM session_locks WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        lock = dict(row)
+        parsed_expiry = datetime.fromisoformat(lock["expires_at"])
+        if parsed_expiry.tzinfo is None:
+            parsed_expiry = parsed_expiry.replace(tzinfo=timezone.utc)
+        if parsed_expiry <= datetime.now(timezone.utc):
+            return None
+        return lock
 
     def append_event(self, session_id: str, seq: int, event_type: str, payload: dict) -> int:
         now = utc_now_iso()
@@ -159,6 +306,7 @@ class SessionStore:
         with self._connect() as conn:
             rows = conn.execute(query, args).fetchall()
         return [dict(row) for row in rows]
+
     def save_preview_blob(self, session_id: str, key: str, content: str) -> None:
         now = utc_now_iso()
         with self._connect() as conn:

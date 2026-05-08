@@ -13,6 +13,8 @@ class SessionItem:
     created_at: str
     model: str | None
     last_user_text: str | None
+    locked: bool = False
+    lock_owner: str | None = None
 
 
 def _preview(text: str | None, max_chars: int = 70) -> str:
@@ -96,8 +98,9 @@ def _render(items, selected, scroll_offset, term_width, term_height, mode, curre
     out = ['\x1b[?25l', '\x1b[2J', '\x1b[H']
     title = f' /resume [{mode}] '
     out.append(f'\x1b[7m{title:<{term_width}}\x1b[0m\n')
-    subtitle = '  ↑/↓ navigate | Enter resume | Tab local/global | Esc cancel'
+    subtitle = '  ↑/↓ navigate | Enter resume | f fork | Tab local/global | Esc cancel'
     out.append(f'\x1b[2m{_fit(subtitle, term_width):<{term_width}}\x1b[0m\n\n')
+
     header_lines = 3
     footer_lines = 2
     available = term_height - header_lines - footer_lines
@@ -115,8 +118,10 @@ def _render(items, selected, scroll_offset, term_width, term_height, mode, curre
         when = _format_time(item.updated_at)
         cwd_text = _display_cwd(item.cwd, current_cwd)
         number = f'[{idx+1:>2}]'
-        line1 = f'  {marker} {number} {sid}  {cwd_text}  {model}  {when}'
+        lock_text = "  [locked]" if item.locked else ""
+        line1 = f'  {marker} {number} {sid}  {cwd_text}  {model}  {when}{lock_text}'
         line2 = f'      {_preview(item.last_user_text, max(20, term_width - 8))}'
+
         out.append(f'{rev}{line1[:term_width]:<{term_width}}{end}\n')
         out.append(f'{rev}{line2[:term_width]:<{term_width}}{end}\n\n')
     selected_item = items[selected]
@@ -142,20 +147,27 @@ def _render_empty(term_width, term_height, mode, current_cwd):
     return ''.join(out)
 
 
-def select_session_ui(altmode, store, cwd: str) -> str | None:
+def select_session_ui(altmode, store, cwd: str) -> dict | str | None:
     from .prompt import RawMode
     mode = "local"
 
     def load_items():
         rows = store.list_sessions(cwd=cwd if mode == "local" else None, limit=200)
-        return [SessionItem(**{
-            "session_id": row["session_id"],
-            "cwd": row["cwd"],
-            "updated_at": row["updated_at"],
-            "created_at": row["created_at"],
-            "model": row.get("model"),
-            "last_user_text": row.get("last_user_text"),
-        }) for row in rows]
+        result = []
+        for row in rows:
+            lock = store.get_session_lock(row["session_id"]) if hasattr(store, "get_session_lock") else None
+            result.append(SessionItem(**{
+                "session_id": row["session_id"],
+                "cwd": row["cwd"],
+                "updated_at": row["updated_at"],
+                "created_at": row["created_at"],
+                "model": row.get("model"),
+                "last_user_text": row.get("last_user_text"),
+                "locked": lock is not None,
+                "lock_owner": lock.get("owner") if lock else None,
+            }))
+        return result
+
 
     items = load_items()
     selected = 0
@@ -191,7 +203,9 @@ def select_session_ui(altmode, store, cwd: str) -> str | None:
                 if not items:
                     continue
                 if c in (10, 13):
-                    return items[selected].session_id
+                    return {"action": "resume", "session_id": items[selected].session_id}
+                if c in (102, 70):  # f/F
+                    return {"action": "fork", "session_id": items[selected].session_id}
                 if c == 27 and len(k) >= 3 and k[1] == 91:
                     if k[2] == 65:
                         selected = max(0, selected - 1)

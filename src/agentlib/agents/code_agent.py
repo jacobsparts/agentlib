@@ -139,10 +139,74 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             self._auto_context_attachment_names = set()
         self.llm_client.on_retry = self.on_retry
 
+    def _lock_status_text(self, lock: dict | None) -> str:
+        if not lock:
+            return "Session is locked by another process."
+        owner = lock.get("owner") or "unknown"
+        host = lock.get("hostname") or "unknown host"
+        pid = lock.get("pid") or "unknown pid"
+        expires = lock.get("expires_at") or "unknown"
+        return f"Session is currently open by {owner} (pid {pid} on {host}, expires {expires}). Fork it to work in parallel."
+
+    def _acquire_session_lock(self, session_id: str) -> bool:
+        owner = getattr(self, "_session_lock_owner", None)
+        if owner is None:
+            owner = self._session_store.default_lock_owner()
+            self._session_lock_owner = owner
+        ok, lock = self._session_store.acquire_session_lock(session_id, owner)
+        if not ok:
+            print(f"{DIM}{self._lock_status_text(lock)}{RESET}")
+            return False
+        return True
+
+    def _heartbeat_session_lock(self) -> bool:
+        session_id = getattr(self, "_session_id", None)
+        owner = getattr(self, "_session_lock_owner", None)
+        if not session_id or not owner:
+            return True
+        return self._session_store.heartbeat_session_lock(session_id, owner)
+
+    def _release_session_lock(self, session_id: str | None = None):
+        owner = getattr(self, "_session_lock_owner", None)
+        target = session_id or getattr(self, "_session_id", None)
+        if target and owner:
+            self._session_store.release_session_lock(target, owner)
+
+    def fork_session(self, session_id: str) -> str | None:
+        try:
+            new_session_id = self._session_store.fork_session(
+                session_id,
+                cwd=str(Path.cwd()),
+                model=getattr(self, "model", None),
+            )
+        except Exception as e:
+            print(f"{DIM}Error forking session: {type(e).__name__}: {e}{RESET}")
+            return None
+        print(f"{DIM}Forked session: {new_session_id}{RESET}")
+        return new_session_id
+
+    def _resolve_session_selection(self, selection) -> str | None:
+        if not selection:
+            return None
+        if isinstance(selection, str):
+            return selection
+        action = selection.get("action")
+        session_id = selection.get("session_id")
+        if not session_id:
+            return None
+        if action == "fork":
+            return self.fork_session(session_id)
+        return session_id
+
     def _ensure_live_session(self):
         if self._session_id is None:
             self._session_id = self._session_store.create_session(str(Path.cwd()), getattr(self, 'model', None))
             self._next_event_seq = 1
+            if not self._acquire_session_lock(self._session_id):
+                raise RuntimeError("Could not acquire session lock.")
+        elif not self._heartbeat_session_lock():
+            if not self._acquire_session_lock(self._session_id):
+                raise RuntimeError("Session lock was lost.")
 
     def _flush_pending_session_events(self):
         if not self._session_id:
@@ -1300,6 +1364,11 @@ If you don't know how to proceed:
         if not session:
             print(f"{DIM}Session not found: {session_id}{RESET}")
             return False
+        if not self._acquire_session_lock(session_id):
+            return False
+        old_session_id = getattr(self, "_session_id", None)
+        resumed = False
+
         if hasattr(self, '_conversation'):
             del self._conversation
         if hasattr(self, '_tool_repl'):
@@ -1324,8 +1393,14 @@ If you don't know how to proceed:
                 lines = ["[Resume warning: attachment file missing and detached]"]
                 lines.extend(f"- {name}: {path}" for name, path in missing)
                 self.usermsg("\n".join(lines))
+            resumed = True
         finally:
             self._suspend_persistence = False
+            if not resumed and old_session_id != session_id:
+                self._release_session_lock(session_id)
+        if old_session_id and old_session_id != session_id:
+            self._release_session_lock(old_session_id)
+
         print(f"{DIM}Session resumed: {session_id}{RESET}")
         return True
 
@@ -1418,17 +1493,19 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+O = transcript | Esc Esc = rewind | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
+        self.console.print("[dim]Commands: /repl, /rewind, /resume [session_id], /fork [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
 
         resumed_on_start = False
         if resume:
             if resume is True:
                 from agentlib.cli.sessions import select_session_ui
-                session_id = select_session_ui(altmode, self._session_store, str(Path.cwd()))
+                selection = select_session_ui(altmode, self._session_store, str(Path.cwd()))
+                session_id = self._resolve_session_selection(selection)
             else:
                 session_id = resume
             if session_id:
                 resumed_on_start = self.resume_session(session_id)
+
 
         if not resumed_on_start:
             if files := gather_auto_attach_files():
@@ -1518,14 +1595,31 @@ If you don't know how to proceed:
                     parts = user_input.strip().split(None, 1)
                     if len(parts) == 1:
                         from agentlib.cli.sessions import select_session_ui
-                        session_id = select_session_ui(altmode, self._session_store, str(Path.cwd()))
+                        selection = select_session_ui(altmode, self._session_store, str(Path.cwd()))
+                        session_id = self._resolve_session_selection(selection)
                         if session_id:
                             resumed = self.resume_session(session_id)
+
                     else:
                         resumed = self.resume_session(parts[1].strip())
                     if resumed:
                         synth = False
                     continue
+
+                if user_input.strip().startswith("/fork"):
+                    self._display_input_block(user_input)
+                    parts = user_input.strip().split(None, 1)
+                    source_id = parts[1].strip() if len(parts) > 1 else getattr(self, "_session_id", None)
+                    if not source_id:
+                        self._display_text(f"{DIM}No active session to fork{RESET}", kind="status")
+                        continue
+                    forked_id = self.fork_session(source_id)
+                    if forked_id:
+                        resumed = self.resume_session(forked_id)
+                        if resumed:
+                            synth = False
+                    continue
+
 
                 if user_input.strip().startswith("/skills"):
                     self._display_input_block(user_input)
@@ -1731,6 +1825,7 @@ If you don't know how to proceed:
             self.console.print("\n[dim]Session ended. Goodbye![/dim]")
             session_id = getattr(self, "_session_id", None)
             if session_id:
+                self._release_session_lock(session_id)
                 self.console.print(f"[dim]Resume session: code-agent --resume {session_id}[/dim]")
 
 
