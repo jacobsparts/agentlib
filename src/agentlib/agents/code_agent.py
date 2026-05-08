@@ -2060,11 +2060,9 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         """
         attachments = self.list_attachments(include_session_blobs=True)
         explicit_refs = getattr(self, '_explicit_attachment_refs', {})
-        if file_path not in attachments and file_path not in explicit_refs:
-            return f"File not currently in context: {file_path}"
         if file_path in explicit_refs:
             self.detach_file_ref(file_path)
-        else:
+        elif file_path in attachments:
             self.detach(file_path)
         globals().get("_line_patch_snapshots", {}).pop(file_path, None)
         self._pending_unviewed_files.add(file_path)

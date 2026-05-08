@@ -665,10 +665,13 @@ def {name}({sig}):
     _safe_args = {{k: _serialize(v) for k, v in _args.items()}}
 
     _tool_request_queue.put(_json.dumps({{"tool": "{name}", "args": _safe_args}}))
-    _response = _json.loads(_tool_response_queue.get())
+    while True:
+        _response = _json.loads(_tool_response_queue.get())
+        if _response.get("type") != "ack":
+            break
     if "error" in _response:
         raise Exception(_response["error"])
-    return _response["result"]
+    return _response.get("result")
 '''
 
 
