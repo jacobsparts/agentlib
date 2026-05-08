@@ -831,9 +831,8 @@ read("config.json")  # Contents appear in your next turn
 content = view("file.py")  # WRONG - view() is display-only
 print(view("file.py"))     # WRONG - use view("file.py") directly
 
-# GOOD: read() returns text, view() displays/attaches
+# GOOD: read() returns text for values; view() displays/attaches for inspection
 content = read("file.py")
-preview(read("file.py"))
 view("file.py")
 
 # BAD: Reading in small chunks unnecessarily
@@ -1765,6 +1764,9 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         if not isinstance(value, str):
             value = repr(value)
 
+        origin_path = getattr(value, "_agentlib_full_file_read_path", None)
+        value = str(value)
+
         lines = value.split('\n')
         nlines = len(lines)
         nchars = len(value)
@@ -1785,7 +1787,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             _req_id = _request_id
             _send_tool_request(_json.dumps({
                 "tool": "__preview_blob_save__",
-                "args": {"key": key, "content": value},
+                "args": {"key": key, "content": value, "origin_path": origin_path},
                 "request_id": _req_id,
             }))
             _wait_for_ack(_req_id)
@@ -1813,6 +1815,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             code,
             preview_targets=self._preview_targets,
             preview_counter=getattr(self, '_preview_counter', 0),
+            preview_origins=getattr(self, '_preview_full_file_origins', {}),
         )
         return code
 
@@ -1830,6 +1833,10 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                     self._ensure_live_session()
                     self._flush_pending_session_events()
                 if tool_name == '__preview_blob_save__':
+                    origin_path = args.get('origin_path')
+                    if origin_path is not None:
+                        self._preview_full_file_origins = getattr(self, '_preview_full_file_origins', {})
+                        self._preview_full_file_origins[args.get('key')] = origin_path
                     self._session_store.save_preview_blob(self._session_id, args.get('key'), args.get('content', ''))
                     repl.send_reply(request_id, result=True)
                 else:
@@ -1923,6 +1930,16 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         else:
             content = Path(file_path).expanduser().read_text()
         if offset is None and limit is None:
+            if not isinstance(file_path, str) or not file_path.startswith("session://"):
+                _FullFileRead = globals().get("_FullFileRead")
+                if _FullFileRead is None:
+                    class _FullFileRead(str):
+                        def __new__(cls, value, path):
+                            obj = str.__new__(cls, value)
+                            obj._agentlib_full_file_read_path = path
+                            return obj
+                    globals()["_FullFileRead"] = _FullFileRead
+                return _FullFileRead(content, file_path)
             return content
         all_lines = content.split('\n')
         start = (offset or 1) - 1

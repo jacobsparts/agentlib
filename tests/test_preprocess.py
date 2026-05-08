@@ -2,6 +2,7 @@
 
 import ast
 import json
+import re
 from pathlib import Path
 
 from agentlib.agents.code_agent import CodeAgent
@@ -784,6 +785,13 @@ class TestCodeAgentPreprocessCode:
         r = agent.preprocess_code('preview(read("file.py"))')
         assert same_ast(r, 'preview(read("file.py"))')
 
+    def test_preview_uri_view_with_known_origin_becomes_file_view(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        agent._preview_full_file_origins = {"abc123": "CONTINUATION.md"}
+        r = agent.preprocess_code('view("session://preview/abc123")')
+        assert same_ast(r, 'view("CONTINUATION.md")')
+
     def test_print_assigned_preview_uri_read_becomes_view(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
@@ -848,6 +856,68 @@ class TestCodeAgentPreprocessCode:
             r,
             'raise ValueError("view() is a display tool, not a value. Use read() for file contents as text.")',
         )
+
+    def test_preview_uri_from_full_file_read_preprocessed_to_original_file_across_turns(self, tmp_path):
+        target = tmp_path / "long.md"
+        target.write_text("\n".join(f"line {i}" for i in range(400)))
+        name = str(target)
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent.complete = False
+        repl = agent._get_tool_repl()
+        try:
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                f"content = read({name!r})\npreview(content)",
+            )
+            assert pure_syntax_error is False
+            match = re.search(r"session://preview/[0-9a-f]+", output)
+            assert match is not None
+            uri = match.group(0)
+
+            processed = agent.preprocess_code(f"view({uri!r})")
+            assert processed == f"view({name!r})"
+
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                f"view({uri!r})",
+            )
+            assert pure_syntax_error is False
+            assert f">>> view({name!r})" in output
+            assert uri not in output
+        finally:
+            repl.close()
+
+
+    def test_preview_uri_from_transformed_file_read_stays_preview_blob(self, tmp_path):
+        target = tmp_path / "long.md"
+        target.write_text("\n".join(f"line {i}" for i in range(400)))
+        name = str(target)
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent.complete = False
+        repl = agent._get_tool_repl()
+        try:
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                f"content = read({name!r})[:5000]\npreview(content)",
+            )
+            assert pure_syntax_error is False
+            match = re.search(r"session://preview/[0-9a-f]+", output)
+            assert match is not None
+            uri = match.group(0)
+
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                f"view({uri!r})",
+            )
+            assert pure_syntax_error is False
+            llm_output = agent.build_output_for_llm(output_chunks)
+
+            assert f"[Attachment: {uri}]" in llm_output
+            assert f"[Attachment: {name}]" not in llm_output
+        finally:
+            repl.close()
 
     def test_attached_file_matches_absolute_written_path(self, tmp_path):
         target = tmp_path / "file.py"

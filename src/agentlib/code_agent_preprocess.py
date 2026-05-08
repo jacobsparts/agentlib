@@ -11,6 +11,7 @@ def preprocess_code_agent(
     *,
     preview_targets: frozenset[str],
     preview_counter: int = 0,
+    preview_origins: dict[str, str] | None = None,
 ) -> tuple[str, int]:
     """Rewrite bare tool calls into assignment + preview and guard value-style view().
 
@@ -56,6 +57,21 @@ def preprocess_code_agent(
         ):
             return repr(arg.value)
         return None
+
+    def _preview_uri_view_origin(call):
+        if not _is_named_call(call, "view"):
+            return None
+        if call.keywords or len(call.args) != 1:
+            return None
+        arg = call.args[0]
+        if (
+            not isinstance(arg, ast.Constant)
+            or not isinstance(arg.value, str)
+            or not arg.value.startswith("session://preview/")
+        ):
+            return None
+        origin = (preview_origins or {}).get(arg.value[len("session://preview/"):])
+        return repr(origin) if origin is not None else None
 
     def _literal_path_expr(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -186,6 +202,11 @@ def preprocess_code_agent(
         indent = orig[0][: len(orig[0]) - len(orig[0].lstrip())]
 
         if isinstance(node, ast.Expr):
+            origin_arg = _preview_uri_view_origin(node.value)
+            if origin_arg is not None:
+                all_rewrites.append((start, end, [f"{indent}view({origin_arg})"]))
+                continue
+
             path_arg = _direct_read_path(node.value)
             if path_arg is not None:
                 all_rewrites.append((start, end, [f"{indent}view({path_arg})"]))
