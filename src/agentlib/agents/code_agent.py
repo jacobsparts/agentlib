@@ -2356,43 +2356,72 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
         Returns string output if successful within timeout.
         Returns BashProcess object if bg=True or if command times out.
-        
-        The BashProcess object allows interaction (read/write/kill) and 
-        is automatically registered in global `_bash_procs` for recovery.
         """
+
         import subprocess
         import os
         import fcntl
         import signal
         import time
 
-        # Initialize global registry and atexit handler if missing
-        if '_bash_procs' not in globals():
-            globals()['_bash_procs'] = {}
+        # Keep process registry private to the injected bash function. It is
+        # only used for cleanup, not for agent-facing process recovery.
+        registry = getattr(bash, '_procs', None)
+        if registry is None:
+            registry = {}
+            bash._procs = registry
 
-            # Register atexit handler to kill orphaned processes on Python exit
+        if not getattr(bash, '_cleanup_registered', False):
             import atexit
             def _cleanup_bash_procs():
-                for pid, bp in list(globals().get('_bash_procs', {}).items()):
+                for pid, bp in list(registry.items()):
                     if bp.returncode is None:
                         try:
                             os.killpg(pid, signal.SIGKILL)
                         except (ProcessLookupError, PermissionError):
                             pass
             atexit.register(_cleanup_bash_procs)
+            bash._cleanup_registered = True
+
 
         class BashProcess:
+            """Running bash command returned by bash(..., bg=True) or timeout.
+
+            Use the returned handle directly instead of polling with ps/kill:
+
+                proc.wait(timeout=1800)
+                preview(proc.output)
+
+            For incremental monitoring:
+
+                chunk = proc.read(timeout=30)
+                if chunk:
+                    preview(chunk)
+
+            Attributes:
+                pid: Process group id.
+                command: Original shell command.
+                returncode: None while running, otherwise the process exit code.
+                output: All stdout/stderr captured so far.
+
+            Methods:
+                read(timeout=...): Read newly available output and append it to
+                    .output. Blocks until the process exits or timeout expires.
+                wait(timeout=...): Wait for exit while draining output into
+                    .output. Returns True if the process exited.
+                write(text): Write text to stdin.
+                kill(): Kill the process group.
+            """
+
             def __init__(self, popen, command, timeout=None):
                 self.proc = popen
                 self.command = command
                 self.pid = popen.pid
                 self.timeout = timeout  # None or number
                 self._output = ""
-                self._register()
                 self._set_nonblocking(self.proc.stdout)
-            
-            def _register(self):
-                globals()['_bash_procs'][self.pid] = self
+                registry[self.pid] = self
+
 
             def _set_nonblocking(self, f):
                 if f:
@@ -2401,7 +2430,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                     fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
             def read(self, timeout=-1):
-                """Read output.
+                """Read newly available output and append it to .output.
 
                 Blocks until process completes or timeout expires.
                 Default: uses self.timeout if set, else 120s.
@@ -2410,8 +2439,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                     timeout = self.timeout if self.timeout is not None else 120
                 output = []
                 start = time.time()
-                
-                # Helper to read all available
+
                 def _read_chunk():
                     found_any = False
                     while True:
@@ -2425,30 +2453,24 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                             break
                     return found_any
 
-                if timeout is None:
+                while True:
                     _read_chunk()
-                else:
-                    # With timeout: loop until done or timeout
-                    while True:
-                        _read_chunk()
 
-                        if self.proc.poll() is not None:
-                            # Finished, ensure we get everything
-                            while _read_chunk(): pass
-                            break
+                    if self.proc.poll() is not None:
+                        while _read_chunk():
+                            pass
+                        break
 
-                        if time.time() - start > timeout:
-                            break
+                    if timeout is not None and time.time() - start > timeout:
+                        break
 
-                        time.sleep(0.01)
+                    time.sleep(0.01)
 
-                # Prepend any buffered output, then clear buffer
+
                 new_output = b"".join(output).decode('utf-8', errors='replace')
-                if self._output:
-                    result = self._output + new_output
-                    self._output = ""
-                    return result
+                self._output += new_output
                 return new_output
+
 
             def write(self, text):
                 """Write text to stdin."""
@@ -2465,22 +2487,20 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                 return f"Sent SIGKILL to process group {self.pid}"
 
             def wait(self, timeout=-1):
-                """Wait for process to exit, draining output to prevent deadlock.
+                """Wait for process to exit, draining output into .output.
 
-                Output is stored in .output property. Prints notice if output was captured.
                 Default: uses self.timeout if set, else waits forever.
+                Returns True if the process exited.
                 """
                 if timeout == -1:
                     timeout = self.timeout  # None means forever
 
-                # Loop with internal timeout to handle timeout=None (wait forever)
                 start = time.time()
                 while True:
-                    # Use 60s chunks to drain output while waiting
                     chunk_timeout = 60 if timeout is None else min(60, timeout - (time.time() - start))
                     if chunk_timeout <= 0:
                         break
-                    self._output += self.read(timeout=chunk_timeout)  # Buffer for later read()
+                    self.read(timeout=chunk_timeout)
                     if self.returncode is not None:
                         break
                     if timeout is not None and time.time() - start >= timeout:
@@ -2494,12 +2514,17 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
             @property
             def output(self):
-                """Output captured during wait(). Call read() for new output."""
+                """All stdout/stderr captured so far."""
                 return self._output
+
 
             @property
             def returncode(self):
-                return self.proc.poll()
+                code = self.proc.poll()
+                if code is not None:
+                    registry.pop(self.pid, None)
+                return code
+
 
             def __repr__(self):
                 status = "running" if self.returncode is None else f"exited code={self.returncode}"
@@ -2537,19 +2562,35 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
         # Immediate return if background requested
         if bg:
+            if not getattr(bash, '_shown_bashprocess_help', False):
+                print(
+                    "BashProcess returned. Use proc.wait(timeout=...), "
+                    "proc.read(timeout=...), proc.output, proc.returncode, "
+                    "or proc.kill()."
+                )
+                bash._shown_bashprocess_help = True
             return bp
+
 
         # Foreground: wait for completion (read uses configured/default timeout)
         output = bp.read()
         
         if bp.returncode is None:
-             # Timeout occurred
-             return bp
-        
+            # Timeout occurred
+            if not getattr(bash, '_shown_bashprocess_help', False):
+                print(
+                    "BashProcess returned. Use proc.wait(timeout=...), "
+                    "proc.read(timeout=...), proc.output, proc.returncode, "
+                    "or proc.kill()."
+                )
+                bash._shown_bashprocess_help = True
+            return bp
+
+        registry.pop(bp.pid, None)
         if bp.returncode != 0:
-            return f"[Exit code {bp.returncode}]\n{output}"
-        
-        return output.strip()
+            return f"[Exit code {bp.returncode}]\n{bp.output}"
+
+        return bp.output.strip()
 
 
 def main():
