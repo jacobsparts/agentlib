@@ -955,6 +955,8 @@ class LLMClient:
             _messages.append({"role": "user", "content": instructions})
         if _feedback:
             _messages.extend(_feedback)
+        if self.model_config['api_type'] == "gemini":
+            _messages = [self.prepare_message(msg) for msg in _messages]
         try:
             with self.concurrency_lock:
                 resp_msg = self._call(_messages)
@@ -1011,6 +1013,14 @@ class LLMClient:
         if tools is None:
             return self.text_call(messages)
         elif self.native:
+            if self.model_config['api_type'] == "gemini" and any(
+                msg.get("role") == "assistant" and any(
+                    not tc.get("thoughtSignature")
+                    for tc in msg.get("tool_calls", [])
+                )
+                for msg in messages
+            ):
+                return self.tool_call_shim(messages, tools)
             return self.tool_call_native(messages, tools)
         else:
             return self.tool_call_shim(messages, tools)
