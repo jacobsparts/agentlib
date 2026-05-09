@@ -6,7 +6,7 @@ import logging
 from typing import Literal
 
 import pydantic
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from .client import LLMClient
 
@@ -152,6 +152,7 @@ class BaseAgent(metaclass=AgentMeta):
             fn._tool_inject = inject
             def regen_toolspec(self, fn=fn, toolname=toolname, toolspec=toolspec):
                 model_name = ''.join(word.title() for word in toolname.split('_'))
+                strict_schema = toolspec is None
                 if toolspec is None: # function signature based schema
                     def parameter_field(p):
                         _type = p.annotation
@@ -170,6 +171,7 @@ class BaseAgent(metaclass=AgentMeta):
                     fields = {}
                     for p in list(inspect.signature(fn).parameters.values())[1:]:
                         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+                            strict_schema = False
                             continue
                         field_def = parameter_field(p)
                         if field_def is not None:
@@ -181,7 +183,8 @@ class BaseAgent(metaclass=AgentMeta):
                         name: (field.annotation, field)
                         for name, field in toolspec.model_fields.items()
                     }
-                toolspec = create_model(model_name, **fields)
+                create_kwargs = {"__config__": ConfigDict(extra="forbid")} if strict_schema else {}
+                toolspec = create_model(model_name, **create_kwargs, **fields)
                 toolspec.__doc__ = textwrap.dedent(fn.__doc__).strip()
                 return toolspec
             fn._tool_spec = regen_toolspec
