@@ -82,3 +82,57 @@ def test_extract_tool_calls_json_rejects_invalid_function_calls_type():
     content = '{"function_calls": {"name": "analyze", "arguments": {}}}'
     with pytest.raises(ValidationError, match="function_calls must be a list"):
         _extract_tool_calls_json(content)
+
+def test_native_tool_validation_retry_uses_temporary_feedback(monkeypatch):
+    from pydantic import ConfigDict, create_model
+
+    from agentlib.client import LLMClient
+
+    client = LLMClient("sonnet")
+    client.concurrency_lock = type("NoopLock", (), {
+        "__enter__": lambda self: None,
+        "__exit__": lambda self, exc_type, exc, tb: False,
+    })()
+
+    ToolSpec = create_model("Think", __config__=ConfigDict(extra="forbid"), notes=(str, ...))
+    ToolSpec.__doc__ = "Think tool."
+
+    calls = []
+
+    def fake_call(messages, tools):
+        calls.append(messages)
+        if len(calls) == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {
+                        "name": "think",
+                        "arguments": json.dumps({"notes": "ok", "reasoning": "extra"}),
+                    }
+                }],
+            }
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "function": {
+                    "name": "think",
+                    "arguments": json.dumps({"notes": "ok"}),
+                }
+            }],
+        }
+
+    monkeypatch.setattr(client, "_call", fake_call)
+
+    result = client.tool_call_native([{"role": "user", "content": "do it"}], {"think": ToolSpec}, retry=1)
+
+    assert json.loads(result["tool_calls"][0]["function"]["arguments"]) == {"notes": "ok"}
+    assert len(calls) == 2
+    assert calls[0] == [{"role": "user", "content": "do it"}]
+    assert calls[1][0] == {"role": "user", "content": "do it"}
+    assert calls[1][1]["role"] == "assistant"
+    assert '"reasoning": "extra"' in calls[1][1]["content"]
+    assert calls[1][2]["role"] == "user"
+    assert "ERROR: Invalid arguments for tool 'think'" in calls[1][2]["content"]
+    assert "valid tool call only" in calls[1][2]["content"]

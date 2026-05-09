@@ -839,10 +839,12 @@ class LLMClient:
                 }
             })
         
+        feedback = []
         for attempt in range(retry + 1):
             try:
+                resp_msg = {}
                 with self.concurrency_lock:
-                    resp_msg = self._call(messages, _tools)
+                    resp_msg = self._call(messages + feedback, _tools)
                 if transform := self.model_config.get('response_transform'):
                     resp_msg = transform(resp_msg, tools)
                 stop = resp_msg.get('_stop_reason')
@@ -885,6 +887,15 @@ class LLMClient:
             except ValidationError as e:
                 if attempt < retry:
                     logger.info(f"ValidationError: {e}, retry {attempt+1}/{retry}")
+                    failed_content = resp_msg.get('content') or ''
+                    if resp_msg.get('tool_calls'):
+                        failed_content = f"{failed_content}\n{json.dumps({ 'function_calls': [ { 'name': tc['function']['name'], 'arguments': json.loads(tc['function']['arguments']) } for tc in resp_msg['tool_calls'] ] }, indent=JSON_INDENT)}".strip()
+                    if failed_content:
+                        feedback.append({"role": "assistant", "content": failed_content})
+                    feedback.append({
+                        "role": "user",
+                        "content": f"ERROR: {e}. Your previous tool call did not match the tool schema. Reply again with a valid tool call only."
+                    })
                     continue
                 raise
                 
