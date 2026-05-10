@@ -1532,7 +1532,9 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+O = transcript | Esc Esc = rewind | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        self.console.print("[dim]Commands: /repl, /rewind, /condense, /resume [session_id], /fork [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens[/dim]")
+        startup_commands = "Commands: /repl, /rewind, /condense, /resume [session_id], /fork [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens"
+        startup_help = f"[dim]{startup_commands}[/dim]"
+        self.console.print(startup_help)
 
         resumed_on_start = False
         if resume:
@@ -1822,6 +1824,12 @@ If you don't know how to proceed:
                             self._display_text(f"{DIM}Subagent module loaded into REPL (model: {subagent_model}){RESET}", kind="status")
                     except Exception as e:
                         print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
+                    continue
+
+                if user_input.lstrip().startswith("/"):
+                    self._display_input_block(user_input)
+                    self.console.print(startup_help)
+                    self._record_display_event("status", startup_commands + "\n")
                     continue
 
                 self._display_input_block(user_input)
