@@ -48,6 +48,11 @@ logger = logging.getLogger('agentlib')
 class ValidationError(Exception): pass
 class BadRequestError(Exception): pass
 class MaxTokensError(Exception): pass
+class ContextOverflowError(Exception): pass
+
+CONTEXT_INPUT_BUFFER = 4_000
+CONTEXT_OUTPUT_HEADROOM = 16_000
+
 
 
 def _parse_completions_response(response_json):
@@ -337,6 +342,38 @@ class LLMClient:
         self.native = self.model_config.get('tools') if native is None else native
         self.on_retry = None
 
+
+    def _estimate_next_input_tokens(self):
+        for model_name, usage in reversed(self.usage_tracker.history):
+            if model_name != self.model_name:
+                continue
+            normalized = self.usage_tracker._normalize(model_name, usage)
+            return (
+                normalized.get('prompt_tokens', 0)
+                + normalized.get('cached_tokens', 0)
+                + normalized.get('completion_tokens', 0)
+                + normalized.get('reasoning_tokens', 0)
+                + CONTEXT_INPUT_BUFFER
+            )
+        return None
+
+    def _validate_context_budget(self):
+        estimated_input = self._estimate_next_input_tokens()
+        if estimated_input is None:
+            return
+        max_input_tokens = self.model_config.get('max_input_tokens')
+        if max_input_tokens is not None and estimated_input > max_input_tokens:
+            raise ContextOverflowError(
+                f"estimated input {estimated_input:,} tokens exceeds max_input_tokens "
+                f"{max_input_tokens:,} for {self.model_name}"
+            )
+        context_window = self.model_config.get('context_window')
+        if context_window is not None and estimated_input + CONTEXT_OUTPUT_HEADROOM > context_window:
+            raise ContextOverflowError(
+                f"estimated input {estimated_input:,} tokens + output headroom "
+                f"{CONTEXT_OUTPUT_HEADROOM:,} exceeds context_window "
+                f"{context_window:,} for {self.model_name}"
+            )
     def _call_completions(self, messages, tools):
         """
         Call OpenAI Completions API.
@@ -790,6 +827,7 @@ class LLMClient:
         messages = [{k: v for k, v in m.items() if not k.startswith('_')} for m in messages]
         # Drop orphaned tool_use blocks (from interrupted tool-call loops)
         messages = self._strip_orphaned_tool_use(messages)
+        self._validate_context_budget()
         if self.model_config['api_type'] == "completions":
             return self._call_completions(messages, tools)
         elif self.model_config['api_type'] == "messages":
@@ -810,6 +848,8 @@ class LLMClient:
         try:
             with self.concurrency_lock:
                 return self._call(messages)
+        except ContextOverflowError:
+            raise
         except Exception as e:
             err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
             logger.error(f"text_call {type(e).__name__}: {err}", exc_info=True)
@@ -899,7 +939,7 @@ class LLMClient:
                     continue
                 raise
                 
-            except (BadRequestError, MaxTokensError):
+            except (BadRequestError, MaxTokensError, ContextOverflowError):
                 raise
             except Exception as e:
                 err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
@@ -960,6 +1000,8 @@ class LLMClient:
         try:
             with self.concurrency_lock:
                 resp_msg = self._call(_messages)
+        except ContextOverflowError:
+            raise
         except Exception as e:
             err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
             logger.error(f"tool_call_shim {type(e).__name__}: {err}")

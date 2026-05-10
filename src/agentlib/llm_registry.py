@@ -31,6 +31,7 @@ class ModelConfig:
     path: str = None
     config: dict = field(default_factory=dict)
     context_window: int = None
+    max_input_tokens: int = None
     input_cost: float = None
     output_cost: float = None
     cached_cost: float = None

@@ -24,6 +24,7 @@ from agentlib import REPLAgent, SandboxMixin, REPLAttachmentMixin, MCPMixin
 from agentlib.cli import CLIMixin
 from agentlib.jina_mixin import JinaMixin
 from agentlib.llm_registry import ModelNotFoundError
+from agentlib.client import ContextOverflowError
 from agentlib.cli.terminal import DIM, RESET, Panel, strip_ansi
 from agentlib.session_store import SessionStore
 from agentlib.session_replay import replay_session_into_agent, replay_display_text
@@ -1850,6 +1851,10 @@ If you don't know how to proceed:
                 except KeyboardInterrupt:
                     self.console.clear_line()
                     print()
+                    continue
+                except ContextOverflowError as e:
+                    self.console.clear_line()
+                    print(f"\n{DIM}Warning: {e}{RESET}", file=sys.stderr)
                     continue
                 except Exception as e:
                     self.console.clear_line()
