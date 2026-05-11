@@ -42,9 +42,10 @@ def test_preview_uri_attachments_appear_in_context_notice():
     agent = make_agent()
     notice = agent._file_context_ephemeral(["session://preview/abc"])
 
-    assert "Attachments currently in context:" in notice
+    assert "Context currently expanded:" in notice
     assert "session://preview/abc" in notice
-    assert "unview(path)" in notice
+    assert "unview(path_or_uri)" in notice
+
 
 
 def test_current_context_names_include_preview_uris():
@@ -58,16 +59,12 @@ def test_current_context_names_include_preview_uris():
     assert "session://preview/abc" in agent._current_file_context_names()
 
 
-def test_unview_detaches_preview_uri():
+def test_unview_collapses_preview_uri():
     agent = make_agent()
-    agent.conversation.usermsg(
-        "[Attachment: session://preview/abc]",
-        _attachments={"session://preview/abc": "    1→preview content"},
-        _attachment_refs={"session://preview/abc": "session://preview/abc"},
-    )
+    agent._expanded_preview_refs = {"session://preview/abc": {"numbered": False}}
 
     result = agent.unview("session://preview/abc")
 
-    assert result == "Removed from future context: session://preview/abc"
-    assert "session://preview/abc" not in agent.list_attachments()
+    assert result == "Collapsed preview: session://preview/abc"
+    assert "session://preview/abc" not in agent._expanded_preview_refs
     assert "session://preview/abc" in agent._pending_unviewed_files

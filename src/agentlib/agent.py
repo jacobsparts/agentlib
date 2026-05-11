@@ -235,6 +235,8 @@ class BaseAgent(metaclass=AgentMeta):
             system = self._build_system_prompt()
             assert system, "system must be defined"
             self._conversation = self.llm_client.conversation(system)
+            if hasattr(self, "_configure_conversation"):
+                self._configure_conversation(self._conversation)
             return self._conversation
 
     def llm(self):

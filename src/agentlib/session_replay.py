@@ -86,6 +86,10 @@ def replay_session_into_agent(agent, session_id: str, store):
     events = store.get_events(session_id)
     snapshots = {}
     messages = [copy.deepcopy(agent.conversation.messages[0])]
+    agent._expanded_preview_refs = {}
+    if hasattr(agent, "_configure_conversation"):
+        agent._configure_conversation(agent.conversation)
+
     missing_seen = set()
 
     def snapshot(seq):
@@ -124,6 +128,14 @@ def replay_session_into_agent(agent, session_id: str, store):
                     del attachments[name]
                     if not attachments:
                         del msg["_attachments"]
+        elif event_type == "preview_expanded":
+            uri = payload.get("uri")
+            if uri:
+                agent._expanded_preview_refs[uri] = {"numbered": bool(payload.get("numbered", False))}
+        elif event_type == "preview_collapsed":
+            uri = payload.get("uri")
+            if uri:
+                agent._expanded_preview_refs.pop(uri, None)
         elif event_type == "rewind":
             target_seq = payload["target_seq"]
             messages = copy.deepcopy(snapshots.get(target_seq, snapshots[0]))

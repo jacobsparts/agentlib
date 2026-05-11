@@ -1282,8 +1282,9 @@ Call help(function_name) for parameter descriptions.
                             while True:
                                 try:
                                     msg_type, msg_data = repl._output_queue.get(timeout=0.1)
-                                    if msg_type in ("output", "print", "preview", "emit", "read", "progress",
+                                    if msg_type in ("output", "print", "preview", "preview_expand", "emit", "read", "progress",
                                                     "read_attach", "read_partial", "file_written", "file_diff"):
+
                                         stream(msg_data, msg_type)
                                     elif msg_type == "done":
                                         seq_id, _ = msg_data
@@ -1299,7 +1300,7 @@ Call help(function_name) for parameter descriptions.
                     # Check for output
                     try:
                         msg_type, msg_data = repl._output_queue.get(timeout=0.05)
-                        if msg_type in ("output", "print", "preview", "emit", "read", "progress",
+                        if msg_type in ("output", "print", "preview", "preview_expand", "emit", "read", "progress",
                                         "read_attach", "read_partial", "file_written", "file_diff"):
                             stream(msg_data, msg_type)
                         elif msg_type == "done":

@@ -28,6 +28,8 @@ from agentlib.client import ContextOverflowError
 from agentlib.cli.terminal import DIM, RESET, Panel, strip_ansi
 from agentlib.session_store import SessionStore
 from agentlib.session_replay import replay_session_into_agent, replay_display_text
+from agentlib.preview_refs import is_preview_uri, preview_key, numbered_content
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -138,6 +140,11 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             self._display_capture = []
             self._pending_unviewed_files = set()
             self._auto_context_attachment_names = set()
+            self._expanded_preview_refs = {}
+
+        if hasattr(self, "_conversation"):
+            self._configure_conversation(self._conversation)
+
         self.llm_client.on_retry = self.on_retry
 
     def _lock_status_text(self, lock: dict | None) -> str:
@@ -470,6 +477,27 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 if not self._is_auto_context_file(name)
             }
         return attachments
+    def _configure_conversation(self, conversation):
+        conversation.expanded_preview_refs = self._expanded_preview_refs
+        conversation.preview_loader = self._preview_blob_content
+
+    def _preview_blob_content(self, uri: str) -> str:
+        if getattr(self, '_session_store', None) is None or getattr(self, '_session_id', None) is None:
+            return None
+        return self._session_store.get_preview_blob(self._session_id, preview_key(uri))
+
+    def _expanded_preview_context(self) -> dict[str, str]:
+        out = {}
+        for uri, options in getattr(self, '_expanded_preview_refs', {}).items():
+            if getattr(self, '_session_id', None) is None:
+                continue
+            content = self._preview_blob_content(uri)
+            if content is None:
+                continue
+            rendered = numbered_content(content) if options.get("numbered") else content
+            out[uri] = rendered
+        return out
+
 
 
     def list_skills(self) -> list[dict]:
@@ -560,6 +588,9 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 continue
             if msg_type == "file_unviewed":
                 unviewed_files.add(chunk.strip())
+                continue
+            if msg_type == "preview_expand":
+                result.append(chunk)
                 continue
             if msg_type == "read_attach":
                 attach_path = chunk.strip()
@@ -673,19 +704,25 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     def _file_context_ephemeral(self, names: list[str]) -> str:
         if not names:
             return ""
-        lines = ["Attachments currently in context:"]
+        lines = ["Context currently expanded:"]
         lines.extend(f"- {name}" for name in names)
-        lines.extend(["", "Remove attachments that are irrelevant to recent conversation state with unview(path)."])
+        lines.extend(["", "Use unview(path_or_uri) to remove/collapse context."])
         return "\n".join(lines)
+
+
+
 
     def _current_file_context_names(self, extra=None) -> list[str]:
         names = {}
         for name in self.list_attachments(include_auto_context=False):
             names[name] = None
+        for uri in getattr(self, '_expanded_preview_refs', {}):
+            names[uri] = None
         for name in (extra or {}):
-            if not self._is_auto_context_file(name):
+            if not self._is_auto_context_file(name) and not is_preview_uri(name):
                 names[name] = None
         return list(names)
+
 
     def usermsg(self, content, **kwargs):
         """Override to attach pending images and read-attachments."""
@@ -1280,8 +1317,6 @@ If you don't know how to proceed:
 
     def on_retry(self, kind: str, retry_num: int) -> None:
         if kind == "syntax":
-            status = f"Syntax Retry #{retry_num}... (turn {getattr(self, '_turn_number', 1)})"
-        elif kind == "max_tokens":
             status = f"Max Tokens Retry #{retry_num}... (turn {getattr(self, '_turn_number', 1)})"
         else:
             return
@@ -1724,20 +1759,33 @@ If you don't know how to proceed:
                     self._display_input_block(user_input)
                     filename = user_input.strip()[8:].strip()
                     if filename:
-                        self.detach_file_ref(filename)
-                        self._display_text(f"{DIM}Detached {filename}{RESET}", kind="status")
+                        if is_preview_uri(filename):
+                            self._expanded_preview_refs.pop(filename, None)
+                            self._append_session_event("preview_collapsed", {"uri": filename})
+                            if filename in self.list_attachments():
+                                self.detach(filename)
+                            self._display_text(f"{DIM}Collapsed preview: {filename}{RESET}", kind="status")
+                        else:
+                            self.detach_file_ref(filename)
+                            self._display_text(f"{DIM}Detached {filename}{RESET}", kind="status")
                     continue
+
 
                 if user_input.strip() == "/attachments":
                     self._display_input_block(user_input)
                     attachments = self.list_attachments()
-                    if not attachments:
-                        self._display_text(f"{DIM}No attachments{RESET}", kind="status")
+                    expanded = self._expanded_preview_context()
+                    if not attachments and not expanded:
+                        self._display_text(f"{DIM}No attachments/context{RESET}", kind="status")
                     else:
-                        self._display_text(f"{DIM}Current attachments:{RESET}", kind="status")
+                        self._display_text(f"{DIM}Attachments/context:{RESET}", kind="status")
                         for name, content in attachments.items():
                             size_kb = len(content) / 1000
                             self._display_text(f"{DIM}  {name} ({size_kb:.1f}KB){RESET}", kind="status")
+                        for name, content in expanded.items():
+                            size_kb = len(content) / 1000
+                            line_count = len(content.split("\n"))
+                            self._display_text(f"{DIM}  {name} (expanded preview, {size_kb:.1f}KB, {line_count} lines){RESET}", kind="status")
                     continue
 
                 if user_input.strip().startswith("/model"):
@@ -1928,11 +1976,13 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
     @REPLAgent.tool(inject=True)
     def preview(self, value: object = "Value to preview"):
-        """Print a value with head/tail summary for long values.
+        """Print a value, using an expandable PreviewRef only for long values.
 
-        Non-strings are previewed via repr(value). Short values are printed in
-        full. Long values print first and last few lines with omitted counts.
+        Non-strings are previewed via repr(value). Short values are emitted
+        directly. Long values print a collapsed PreviewRef block that can be
+        expanded with view(session_uri).
         """
+
         if not isinstance(value, str):
             value = repr(value)
 
@@ -1942,45 +1992,44 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         lines = value.split('\n')
         nlines = len(lines)
         nchars = len(value)
-        uri = None
-
-        # Short enough to show in full
         if nlines <= 20 and nchars <= 2000:
-            rendered = value
-        else:
-            HEAD = 8
-            TAIL = 4
-            key = __import__("hashlib").sha256(value.encode("utf-8")).hexdigest()[:16]
-            uri = f"session://preview/{key}"
-            import json as _json
-            global _request_id
-            _request_id += 1
-            _req_id = _request_id
-            _send_tool_request(_json.dumps({
-                "tool": "__preview_blob_save__",
-                "args": {"key": key, "content": value, "origin_path": origin_path},
-                "request_id": _req_id,
-            }))
-            _wait_for_ack(_req_id)
+            _send_output("preview", value.rstrip('\n') + "\n")
+            return
 
-            def _render_preview_line(line):
-                MAX_PREVIEW_LINE = 500
-                if len(line) <= MAX_PREVIEW_LINE:
-                    return line
-                return f"{line[:MAX_PREVIEW_LINE]}... [line truncated, {len(line)} chars total]"
+        key = __import__("hashlib").sha256(value.encode("utf-8")).hexdigest()[:16]
+        uri = f"session://preview/{key}"
+        import json as _json
+        global _request_id
+        _request_id += 1
+        _req_id = _request_id
+        _send_tool_request(_json.dumps({
+            "tool": "__preview_blob_save__",
+            "args": {"key": key, "content": value, "origin_path": origin_path},
+            "request_id": _req_id,
+        }))
+        _wait_for_ack(_req_id)
 
-            head_indexes = list(range(min(HEAD, nlines)))
-            tail_start = max(len(head_indexes), nlines - TAIL)
-            indexes = head_indexes + list(range(tail_start, nlines))
-            omitted = nlines - len(indexes)
 
-            parts = [f"({nlines} lines, {nchars} chars)"]
-            parts.extend(_render_preview_line(lines[i]) for i in head_indexes)
-            if omitted:
-                parts.append(f"  ... ({omitted} lines omitted)")
-            parts.extend(_render_preview_line(lines[i]) for i in indexes[len(head_indexes):])
-            parts.append(f"[full output saved to {uri}]")
-            rendered = "\n".join(parts)
+        def _render_preview_line(line):
+            MAX_PREVIEW_LINE = 500
+            if len(line) <= MAX_PREVIEW_LINE:
+                return line
+            return f"{line[:MAX_PREVIEW_LINE]}... [line truncated, {len(line)} chars total]"
+
+        HEAD = 8
+        TAIL = 4
+        head_indexes = list(range(min(HEAD, nlines)))
+        tail_start = max(len(head_indexes), nlines - TAIL)
+        omitted = nlines - len(head_indexes) - (nlines - tail_start)
+
+        parts = [f"({nlines} lines, {nchars} chars)"]
+        parts.extend(_render_preview_line(lines[i]) for i in head_indexes)
+        if omitted:
+            parts.append(f"  ... ({omitted} lines omitted)")
+        parts.extend(_render_preview_line(lines[i]) for i in range(tail_start, nlines))
+        body = "\n".join(parts)
+        rendered = f"[PreviewRef: {uri}]\n{body}\n[/PreviewRef]"
+
 
         _send_output("preview", rendered.rstrip('\n') + "\n")
 
@@ -2005,10 +2054,27 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
     def _handle_tool_request(self, repl, req: dict) -> None:
         tool_name = req.get('tool')
-        if tool_name in {'__preview_blob_save__', '__preview_blob_read__', '__line_patch_is_attached__'}:
+        if tool_name in {'__preview_blob_save__', '__preview_blob_read__', '__line_patch_is_attached__', '__preview_ref_expand__', '__preview_ref_collapse__'}:
+
             request_id = req.get('request_id')
             args = req.get('args', {})
             try:
+                if tool_name == '__preview_ref_expand__':
+                    uri = args.get('uri')
+                    if uri:
+                        self._expanded_preview_refs[uri] = {"numbered": bool(args.get("numbered", False))}
+                        self._append_session_event("preview_expanded", {"uri": uri, "numbered": bool(args.get("numbered", False))})
+                    repl.send_reply(request_id, result=True)
+                    repl.send_ack(request_id)
+                    return
+                if tool_name == '__preview_ref_collapse__':
+                    uri = args.get('uri')
+                    if uri:
+                        self._expanded_preview_refs.pop(uri, None)
+                        self._append_session_event("preview_collapsed", {"uri": uri})
+                    repl.send_reply(request_id, result=True)
+                    repl.send_ack(request_id)
+                    return
                 if tool_name == '__line_patch_is_attached__':
                     repl.send_reply(request_id, result=self._is_attached(args.get('path')))
                     repl.send_ack(request_id)
@@ -2135,8 +2201,10 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             file_path: str = "Path to the file",
             offset: Optional[int] = "Line number to start from (1-indexed)",
             limit: Optional[int] = "Number of lines to read (default: 5000)",
+            numbered: Optional[bool] = "Number output lines. Defaults true for files, false for full preview URIs.",
             **kwargs
         ):
+
         """Display a file or session://preview/... URI with line numbers.
 
         Use view() for inspection with numbered lines:
@@ -2164,6 +2232,8 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
         prefix = "session://preview/"
         is_preview_uri = isinstance(file_path, str) and file_path.startswith(prefix)
+        if numbered is None:
+            numbered = not is_preview_uri
         path = Path(file_path).expanduser()
         if is_preview_uri:
             key = file_path[len(prefix):]
@@ -2179,8 +2249,20 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             content = _wait_for_ack(_req_id)
             if content is None:
                 raise FileNotFoundError(file_path)
+            if offset is None and limit is None:
+                _request_id += 1
+                _expand_req_id = _request_id
+                _send_tool_request(_json.dumps({
+                    "tool": "__preview_ref_expand__",
+                    "args": {"uri": file_path, "numbered": bool(numbered)},
+                    "request_id": _expand_req_id,
+                }))
+                _wait_for_ack(_expand_req_id)
+                _send_output("preview_expand", f"Expanded preview: {file_path}\n")
+                return
         else:
             content = path.read_text()
+
         all_lines = content.split('\n')
         total_lines = len(all_lines)
         is_partial = offset is not None or limit is not None
@@ -2225,8 +2307,12 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         lines = all_lines[start:end]
         start_line = start + 1
 
-        formatted = [f"{start_line + i:>5}→{line}" for i, line in enumerate(lines)]
-        output = '\n'.join(formatted)
+        if numbered:
+            formatted = [f"{start_line + i:>5}→{line}" for i, line in enumerate(lines)]
+            output = '\n'.join(formatted)
+        else:
+            output = '\n'.join(lines)
+
 
         remaining = total_lines - end
         if remaining > 0 and limit is None:
@@ -2254,11 +2340,20 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
     def unview(self,
             file_path: str = "Path to a file or session://preview/... URI previously viewed with view()"
         ):
+
         """Remove a previously viewed attachment from future context.
 
         Use this if you viewed the wrong file or preview URI with view(), or no
         longer need it in context. This only affects future turns.
         """
+        if is_preview_uri(file_path):
+            self._expanded_preview_refs.pop(file_path, None)
+            self._append_session_event("preview_collapsed", {"uri": file_path})
+            if file_path in self.list_attachments():
+                self.detach(file_path)
+            self._pending_unviewed_files.add(file_path)
+            return f"Collapsed preview: {file_path}"
+
         attachments = self.list_attachments()
         explicit_refs = getattr(self, '_explicit_attachment_refs', {})
         if file_path in explicit_refs:
@@ -2268,6 +2363,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         globals().get("_line_patch_snapshots", {}).pop(file_path, None)
         self._pending_unviewed_files.add(file_path)
         return f"Removed from future context: {file_path}"
+
 
     @REPLAgent.tool(inject=True)
     def edit(self,

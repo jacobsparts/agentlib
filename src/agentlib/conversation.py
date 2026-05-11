@@ -1,6 +1,9 @@
 import json
 from .utils import JSON_INDENT
 
+from .preview_refs import render_preview_refs
+
+
 class Conversation:
     def __init__(self, llm_client, system_prompt):
         self.llm_client = llm_client
@@ -9,15 +12,18 @@ class Conversation:
 
     def _messages(self):
         result = []
+        expanded_preview_refs = getattr(self, "expanded_preview_refs", {})
+        preview_loader = getattr(self, "preview_loader", None)
+
         for msg in self.messages:
-            attachments = msg.get('_attachments')
+            out = dict(msg)
+            attachments = out.pop('_attachments', None)
             if attachments:
-                out = {k: v for k, v in msg.items() if k != '_attachments'}
                 for name, content in attachments.items():
                     out['content'] = out['content'].replace(f'[Attachment: {name}]', content)
-                result.append(out)
-            else:
-                result.append(msg)
+            if preview_loader is not None:
+                out['content'] = render_preview_refs(out.get('content', ''), expanded_preview_refs, preview_loader)
+            result.append(out)
 
         if self.ephemeral:
             for i in range(len(result) - 1, -1, -1):

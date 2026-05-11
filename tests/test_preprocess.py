@@ -843,13 +843,31 @@ class TestCodeAgentPreprocessCode:
 
     def test_preview_accepts_non_string_values(self, monkeypatch):
         sent = []
+        requests = []
         import agentlib.agents.code_agent as code_agent
         monkeypatch.setattr(code_agent, "_send_output", lambda msg_type, chunk: sent.append((msg_type, chunk)), raising=False)
+        monkeypatch.setattr(code_agent, "_send_tool_request", lambda msg: requests.append(json.loads(msg)), raising=False)
 
         agent = CodeAgent()
         agent.preview({"pid": 123})
 
         assert sent == [("preview", "{'pid': 123}\n")]
+        assert requests == []
+
+    def test_preview_small_value_outputs_direct_context(self, monkeypatch):
+        sent = []
+        requests = []
+        import agentlib.agents.code_agent as code_agent
+        monkeypatch.setattr(code_agent, "_send_output", lambda msg_type, chunk: sent.append((msg_type, chunk)), raising=False)
+        monkeypatch.setattr(code_agent, "_send_tool_request", lambda msg: requests.append(json.loads(msg)), raising=False)
+
+        agent = CodeAgent()
+        agent.preview("small value")
+
+        assert sent == [("preview", "small value\n")]
+        assert requests == []
+
+
 
     def test_preview_caps_long_lines(self, monkeypatch):
         sent = []
@@ -867,7 +885,9 @@ class TestCodeAgentPreprocessCode:
         assert msg_type == "preview"
         assert "x" * 501 not in output
         assert "... [line truncated, 2500 chars total]" in output
-        assert "[full output saved to session://preview/" in output
+        assert "[PreviewRef: session://preview/" in output
+        assert "[/PreviewRef]" in output
+
 
     def test_preview_deduplicates_overlapping_head_tail_lines(self, monkeypatch):
         sent = []
@@ -962,8 +982,11 @@ class TestCodeAgentPreprocessCode:
             assert pure_syntax_error is False
             llm_output = agent.build_output_for_llm(output_chunks)
 
-            assert f"[Attachment: {uri}]" in llm_output
+            assert f"Expanded preview: {uri}" in llm_output
+            assert f"[Attachment: {uri}]" not in llm_output
             assert f"[Attachment: {name}]" not in llm_output
+            assert agent._expanded_preview_refs == {uri: {"numbered": False}}
+
         finally:
             repl.close()
 
@@ -1176,11 +1199,12 @@ TWO\""")""",
         agent.usermsg("next question")
 
         assert agent.ephemeral == (
-            "Attachments currently in context:\n"
+            "Context currently expanded:\n"
             "- file.py\n"
             "\n"
-            "Remove attachments that are irrelevant to recent conversation state with unview(path)."
+            "Use unview(path_or_uri) to remove/collapse context."
         )
+
 
     def test_usermsg_file_context_ephemeral_includes_new_read_context(self):
         agent = CodeAgent()
@@ -1191,14 +1215,15 @@ TWO\""")""",
 
         assert "new.py" in agent.ephemeral
 
-    def test_usermsg_file_context_ephemeral_includes_session_blobs(self):
+    def test_usermsg_file_context_ephemeral_includes_expanded_preview_refs(self):
         agent = CodeAgent()
         agent._ensure_setup()
-        agent._read_attachments = {"session://preview/abc123": "    1→blob\n"}
+        agent._expanded_preview_refs = {"session://preview/abc123": {"numbered": False}}
 
-        agent.usermsg("[Attachment: session://preview/abc123]\n\nnext question")
+        agent.usermsg("next question")
 
         assert "session://preview/abc123" in agent.ephemeral
+
 
     def test_usermsg_file_context_ephemeral_excludes_auto_context_files(self):
         agent = CodeAgent()
@@ -1219,20 +1244,17 @@ TWO\""")""",
         assert "docs/imported.md" not in agent.ephemeral
         assert "file.py" in agent.ephemeral
 
-    def test_unview_session_uri_attachment(self):
+    def test_unview_session_uri_collapses_preview_ref(self):
         agent = CodeAgent()
         agent._ensure_setup()
         preview_name = "session://preview/abc123"
-
-        agent.conversation.usermsg(
-            f"[Attachment: {preview_name}]",
-            _attachments={preview_name: "    1→blob\n"},
-        )
+        agent._expanded_preview_refs = {preview_name: {"numbered": False}}
 
         result = agent.unview(preview_name)
 
-        assert result == f"Removed from future context: {preview_name}"
-        assert preview_name not in agent.list_attachments(include_session_blobs=True)
+        assert result == f"Collapsed preview: {preview_name}"
+        assert preview_name not in agent._expanded_preview_refs
+        assert preview_name in agent._pending_unviewed_files
 
     def test_unview_pending_prevents_same_turn_reattach(self, tmp_path):
         target = tmp_path / "file.py"

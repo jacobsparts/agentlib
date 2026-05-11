@@ -978,7 +978,7 @@ class SandboxMixin:
 
                     msg_type, msg_data = msg
 
-                    if msg_type in ("output", "print", "preview", "emit", "read", "progress",
+                    if msg_type in ("output", "print", "preview", "preview_expand", "emit", "read", "progress",
                                     "read_attach", "read_partial", "file_written", "file_diff"):
                         stream(msg_data, msg_type)
 
