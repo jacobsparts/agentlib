@@ -1188,6 +1188,8 @@ If you don't know how to proceed:
         elif msg_type == "emit":
             return
         elif msg_type in ("output", "print"):
+            if msg_type == "output" and getattr(self, '_edit_echo_buffer', []) and chunk.lstrip().startswith("Traceback"):
+                self._flush_edit_echo_buffer()
             if msg_type == "output" and getattr(self, '_suppress_next_edit_result', False):
                 stripped = chunk.strip()
                 if (
@@ -1351,6 +1353,7 @@ If you don't know how to proceed:
 
         # Display error output
         if error_display.strip():
+            self._flush_edit_echo_buffer()
             for line in error_display.rstrip('\n').split('\n'):
                 print(f"\x1b[91m{line}\x1b[0m", flush=True)  # Red for errors
                 self._capture_display_line(line)
@@ -2448,6 +2451,17 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
         new_content = content.replace(old_string, new_string, -1 if replace_all else 1)
         path.write_text(new_content)
+        import hashlib
+        snapshots = globals().get("_line_patch_snapshots", {})
+        resolved_path = str(path.resolve())
+        for key, snapshot in list(snapshots.items()):
+            if key == file_path or snapshot.get("resolved_path") == resolved_path:
+                snapshot.update({
+                    "content": new_content,
+                    "sha256": hashlib.sha256(new_content.encode()).hexdigest(),
+                    "line_count": len(new_content.split('\n')),
+                    "line_patch_stale": False,
+                })
         import difflib
         diff = ''.join(difflib.unified_diff(
             content.splitlines(keepends=True),
