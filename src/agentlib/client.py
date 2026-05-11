@@ -52,6 +52,7 @@ class ContextOverflowError(Exception): pass
 
 CONTEXT_INPUT_BUFFER = 4_000
 CONTEXT_OUTPUT_HEADROOM = 16_000
+TOKEN_RATIO_EMA_ALPHA = 0.2
 
 
 
@@ -341,24 +342,50 @@ class LLMClient:
         self.concurrency_lock = threading.BoundedSemaphore(self.model_config.get('concurrency',10))
         self.native = self.model_config.get('tools') if native is None else native
         self.on_retry = None
+        self._current_input_bytes = None
 
 
-    def _estimate_next_input_tokens(self):
-        for model_name, usage in reversed(self.usage_tracker.history):
-            if model_name != self.model_name:
-                continue
-            normalized = self.usage_tracker._normalize(model_name, usage)
-            return (
-                normalized.get('prompt_tokens', 0)
-                + normalized.get('cached_tokens', 0)
-                + normalized.get('completion_tokens', 0)
-                + normalized.get('reasoning_tokens', 0)
-                + CONTEXT_INPUT_BUFFER
-            )
-        return None
+    def _input_bytes(self, messages, tools=None):
+        payload = {"messages": messages}
+        if tools:
+            payload["tools"] = tools
+        return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=self._json_size_default).encode("utf-8"))
 
-    def _validate_context_budget(self):
-        estimated_input = self._estimate_next_input_tokens()
+    @staticmethod
+    def _json_size_default(value):
+        if isinstance(value, bytes):
+            return f"<{len(value)} bytes>"
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+    def _input_tokens_per_byte(self):
+        return getattr(self.usage_tracker, "input_tokens_per_byte", {}).get(self.model_name)
+
+    def _update_input_tokens_per_byte(self, input_bytes, usage):
+        if not usage or not input_bytes:
+            return
+        normalized = self.usage_tracker._normalize(self.model_name, usage)
+        input_tokens = normalized.get('prompt_tokens', 0) + normalized.get('cached_tokens', 0)
+        if input_tokens <= 0:
+            return
+        ratios = getattr(self.usage_tracker, "input_tokens_per_byte", None)
+        if ratios is None:
+            ratios = {}
+            self.usage_tracker.input_tokens_per_byte = ratios
+        observed = input_tokens / input_bytes
+        old = ratios.get(self.model_name)
+        ratios[self.model_name] = observed if old is None else (
+            old * (1 - TOKEN_RATIO_EMA_ALPHA) + observed * TOKEN_RATIO_EMA_ALPHA
+        )
+
+    def _estimate_input_tokens(self, input_bytes):
+        ratio = self._input_tokens_per_byte()
+        if ratio is None:
+            return None
+        return int(input_bytes * ratio) + CONTEXT_INPUT_BUFFER
+
+    def _validate_context_budget(self, input_bytes):
+        self._current_input_bytes = input_bytes
+        estimated_input = self._estimate_input_tokens(input_bytes)
         if estimated_input is None:
             return
         max_input_tokens = self.model_config.get('max_input_tokens')
@@ -464,6 +491,7 @@ class LLMClient:
                 message, stop_reason, usage = parser(response_json)
                 if usage:
                     self.usage_tracker.log(self.model_name, usage)
+                    self._update_input_tokens_per_byte(self._current_input_bytes, usage)
                 message['_stop_reason'] = stop_reason
 
                 # Truncated response: feed it back and retry with doubled max_tokens.
@@ -597,6 +625,7 @@ class LLMClient:
             response_json = json.loads(response_data)
             if usage := response_json.get('usage'):
                 self.usage_tracker.log(self.model_name, usage)
+                self._update_input_tokens_per_byte(self._current_input_bytes, usage)
             content = ""
             tool_calls = []
             for content_block in response_json.get('content', []):
@@ -751,6 +780,7 @@ class LLMClient:
             response_json = json.loads(response_data)
             if usage := response_json.get('usageMetadata'):
                 self.usage_tracker.log(self.model_name, usage)
+                self._update_input_tokens_per_byte(self._current_input_bytes, usage)
             if not response_json.get('candidates'):
                 raise Exception(f"candidates missing from response: {response_json}")
             candidate = response_json['candidates'][0]
@@ -827,7 +857,7 @@ class LLMClient:
         messages = [{k: v for k, v in m.items() if not k.startswith('_')} for m in messages]
         # Drop orphaned tool_use blocks (from interrupted tool-call loops)
         messages = self._strip_orphaned_tool_use(messages)
-        self._validate_context_budget()
+        self._validate_context_budget(self._input_bytes(messages, tools))
         if self.model_config['api_type'] == "completions":
             return self._call_completions(messages, tools)
         elif self.model_config['api_type'] == "messages":
