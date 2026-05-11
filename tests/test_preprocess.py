@@ -851,6 +851,42 @@ class TestCodeAgentPreprocessCode:
 
         assert sent == [("preview", "{'pid': 123}\n")]
 
+    def test_preview_caps_long_lines(self, monkeypatch):
+        sent = []
+        import agentlib.agents.code_agent as code_agent
+        monkeypatch.setattr(code_agent, "_send_output", lambda msg_type, chunk: sent.append((msg_type, chunk)), raising=False)
+        monkeypatch.setattr(code_agent, "_send_tool_request", lambda msg: None, raising=False)
+        monkeypatch.setattr(code_agent, "_wait_for_ack", lambda req_id: True, raising=False)
+        monkeypatch.setattr(code_agent, "_request_id", 0, raising=False)
+
+        agent = CodeAgent()
+        agent.preview("x" * 2500)
+
+        assert len(sent) == 1
+        msg_type, output = sent[0]
+        assert msg_type == "preview"
+        assert "x" * 501 not in output
+        assert "... [line truncated, 2500 chars total]" in output
+        assert "[full output saved to session://preview/" in output
+
+    def test_preview_deduplicates_overlapping_head_tail_lines(self, monkeypatch):
+        sent = []
+        import agentlib.agents.code_agent as code_agent
+        monkeypatch.setattr(code_agent, "_send_output", lambda msg_type, chunk: sent.append((msg_type, chunk)), raising=False)
+        monkeypatch.setattr(code_agent, "_send_tool_request", lambda msg: None, raising=False)
+        monkeypatch.setattr(code_agent, "_wait_for_ack", lambda req_id: True, raising=False)
+        monkeypatch.setattr(code_agent, "_request_id", 0, raising=False)
+
+        agent = CodeAgent()
+        value = "\n".join([f"line {i}" for i in range(10)]) + ("x" * 2000)
+        agent.preview(value)
+
+        output = sent[0][1]
+        assert output.count("line 6") == 1
+        assert output.count("line 7") == 1
+        assert output.count("line 8") == 1
+        assert "... (0 lines omitted)" not in output
+
     def test_view_assignment_rejected(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()

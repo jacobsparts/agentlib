@@ -1950,7 +1950,6 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         else:
             HEAD = 8
             TAIL = 4
-            omitted = nlines - HEAD - TAIL
             key = __import__("hashlib").sha256(value.encode("utf-8")).hexdigest()[:16]
             uri = f"session://preview/{key}"
             import json as _json
@@ -1963,12 +1962,25 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                 "request_id": _req_id,
             }))
             _wait_for_ack(_req_id)
+
+            def _render_preview_line(line):
+                MAX_PREVIEW_LINE = 500
+                if len(line) <= MAX_PREVIEW_LINE:
+                    return line
+                return f"{line[:MAX_PREVIEW_LINE]}... [line truncated, {len(line)} chars total]"
+
+            head_indexes = list(range(min(HEAD, nlines)))
+            tail_start = max(len(head_indexes), nlines - TAIL)
+            indexes = head_indexes + list(range(tail_start, nlines))
+            omitted = nlines - len(indexes)
+
             parts = [f"({nlines} lines, {nchars} chars)"]
-            parts.extend(lines[:HEAD])
-            parts.append(f"  ... ({omitted} lines omitted)")
-            parts.extend(lines[-TAIL:])
+            parts.extend(_render_preview_line(lines[i]) for i in head_indexes)
+            if omitted:
+                parts.append(f"  ... ({omitted} lines omitted)")
+            parts.extend(_render_preview_line(lines[i]) for i in indexes[len(head_indexes):])
             parts.append(f"[full output saved to {uri}]")
-            rendered = '\n'.join(parts)
+            rendered = "\n".join(parts)
 
         _send_output("preview", rendered.rstrip('\n') + "\n")
 
