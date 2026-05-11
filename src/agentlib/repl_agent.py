@@ -1106,7 +1106,9 @@ Call help(function_name) for parameter descriptions.
             # Feed output back to LLM as the REPL response
             # build_output_for_llm lets subclasses filter chunk types (e.g., exclude emit)
             output_for_llm = self.build_output_for_llm(output_chunks)
-            if hasattr(self, 'process_repl_output'):
+            if hasattr(self, 'process_output_for_llm'):
+                output_for_llm = self.process_output_for_llm(output_for_llm)
+            elif hasattr(self, 'process_repl_output'):
                 output_for_llm = self.process_repl_output(output_for_llm)
 
             # Store full output as _stdout when it differs from filtered content

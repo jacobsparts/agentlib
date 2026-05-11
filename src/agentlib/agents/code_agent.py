@@ -12,6 +12,7 @@ Dependencies:
 
 from agentlib.code_agent_preprocess import preprocess_code_agent
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -1015,6 +1016,59 @@ If you don't know how to proceed:
 2. Use think() to reason through the problem
 3. Only release with emit(..., release=True) if you truly need user input
 """
+
+    auto_preview_turn_chars = _get_config_value("code_agent_auto_preview_turn_chars", 5000)
+
+    @staticmethod
+    def _render_preview_ref(content: str) -> tuple[str, str]:
+        key = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+        uri = f"session://preview/{key}"
+        lines = content.split("\n")
+        nlines = len(lines)
+        nchars = len(content)
+
+        def render_preview_line(line):
+            max_preview_line = 500
+            if len(line) <= max_preview_line:
+                return line
+            return f"{line[:max_preview_line]}... [line truncated, {len(line)} chars total]"
+
+        head = 8
+        tail = 4
+        head_indexes = list(range(min(head, nlines)))
+        tail_start = max(len(head_indexes), nlines - tail)
+        omitted = nlines - len(head_indexes) - (nlines - tail_start)
+
+        parts = [f"({nlines} lines, {nchars} chars)"]
+        parts.extend(render_preview_line(lines[i]) for i in head_indexes)
+        if omitted:
+            parts.append(f"  ... ({omitted} lines omitted)")
+        parts.extend(render_preview_line(lines[i]) for i in range(tail_start, nlines))
+        body = "\n".join(parts)
+        return uri, f"[PreviewRef: {uri}]\n{body}\n[/PreviewRef]"
+
+    def _save_preview_blob(self, key: str, content: str, origin_path=None):
+        if getattr(self, '_session_id', None) is None:
+            self._ensure_live_session()
+            self._flush_pending_session_events()
+        self._session_store.save_preview_blob(self._session_id, key, content)
+
+    def _auto_preview_turn_output(self, output: str) -> str:
+        if not output or output == "# [no output]":
+            return output
+        threshold = getattr(self, "auto_preview_turn_chars", _get_config_value("code_agent_auto_preview_turn_chars", 5000))
+        if threshold is None:
+            return output
+        threshold = int(threshold)
+        if threshold <= 0 or len(output) <= threshold:
+            return output
+        uri, rendered = self._render_preview_ref(output)
+        self._save_preview_blob(preview_key(uri), output)
+        return rendered
+
+    def process_output_for_llm(self, output: str) -> str:
+        output = self._auto_preview_turn_output(output)
+        return self.process_repl_output(output)
 
     max_output_kb = _get_config_value("code_agent_max_output_kb", 50)  # Large output protection
 
