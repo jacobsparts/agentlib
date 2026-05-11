@@ -1307,6 +1307,21 @@ TWO\""")""",
             agent._cleanup()
 
 
+
+def test_code_agent_retry_status_labels_syntax_and_max_tokens(capsys):
+    agent = CodeAgent()
+    agent._ensure_setup()
+    agent._turn_number = 9
+
+    agent.on_retry("syntax", 3)
+    syntax_out = capsys.readouterr().out
+
+    agent.on_retry("max_tokens", 2)
+    max_tokens_out = capsys.readouterr().out
+
+    assert "Syntax Retry #3... (turn 9)" in syntax_out
+    assert "Max Tokens Retry #2... (turn 9)" in max_tokens_out
+
 class TestGeminiSchemaTransform:
     def test_removes_additional_properties_from_dict_field(self):
         schema = {

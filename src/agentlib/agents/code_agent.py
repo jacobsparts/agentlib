@@ -1317,6 +1317,8 @@ If you don't know how to proceed:
 
     def on_retry(self, kind: str, retry_num: int) -> None:
         if kind == "syntax":
+            status = f"Syntax Retry #{retry_num}... (turn {getattr(self, '_turn_number', 1)})"
+        elif kind == "max_tokens":
             status = f"Max Tokens Retry #{retry_num}... (turn {getattr(self, '_turn_number', 1)})"
         else:
             return
