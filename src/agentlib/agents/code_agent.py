@@ -883,8 +883,10 @@ Re-view a file only when you need to inspect it again.
 
 preview(value) prints a potentially long value. Non-strings are previewed via
 repr(value). Short values print in full; long values show a head/tail summary
-and save the full content to a session://preview/... URI. Pass that URI to
-read() to get the full text or view() to inspect it with line numbers.
+and save the full content to a session://preview/... URI. Use view(uri) to
+inspect or expand a collapsed preview. Pass numbered=True if line numbers are
+useful. Use read(uri) only when you need the preview contents as a Python string
+for programmatic processing.
 
 >>> tone_and_style()
 
