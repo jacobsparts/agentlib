@@ -1115,7 +1115,7 @@ TWO\""")""",
         finally:
             repl.close()
 
-    def test_session_uri_attachments_excluded_from_default_attachment_list(self):
+    def test_session_uri_attachments_are_first_class_by_default(self):
         agent = CodeAgent()
         agent._ensure_setup()
         file_name = "file.py"
@@ -1132,10 +1132,10 @@ TWO\""")""",
         )
 
         assert file_name in agent.list_attachments()
-        assert preview_name not in agent.list_attachments()
-        assert other_session_name not in agent.list_attachments()
-        assert preview_name in agent.list_attachments(include_session_blobs=True)
-        assert other_session_name in agent.list_attachments(include_session_blobs=True)
+        assert preview_name in agent.list_attachments()
+        assert other_session_name in agent.list_attachments()
+        assert preview_name not in agent.list_attachments(include_session_blobs=False)
+        assert other_session_name not in agent.list_attachments(include_session_blobs=False)
 
     def test_auto_context_files_can_be_excluded_from_attachment_list(self):
         agent = CodeAgent()
@@ -1176,12 +1176,11 @@ TWO\""")""",
         agent.usermsg("next question")
 
         assert agent.ephemeral == (
-            "Files currently in context:\n"
+            "Attachments currently in context:\n"
             "- file.py\n"
             "\n"
-            "Remove files that are irrelevant to recent conversation state with unview(path)."
+            "Remove attachments that are irrelevant to recent conversation state with unview(path)."
         )
-        assert "attachment" not in agent.ephemeral.lower()
 
     def test_usermsg_file_context_ephemeral_includes_new_read_context(self):
         agent = CodeAgent()
@@ -1192,14 +1191,14 @@ TWO\""")""",
 
         assert "new.py" in agent.ephemeral
 
-    def test_usermsg_file_context_ephemeral_excludes_session_blobs(self):
+    def test_usermsg_file_context_ephemeral_includes_session_blobs(self):
         agent = CodeAgent()
         agent._ensure_setup()
-        agent._read_attachments = {"session://preview/abc123": "    1→blob\\n"}
+        agent._read_attachments = {"session://preview/abc123": "    1→blob\n"}
 
-        agent.usermsg("[Attachment: session://preview/abc123]\\n\\nnext question")
+        agent.usermsg("[Attachment: session://preview/abc123]\n\nnext question")
 
-        assert agent.ephemeral == ""
+        assert "session://preview/abc123" in agent.ephemeral
 
     def test_usermsg_file_context_ephemeral_excludes_auto_context_files(self):
         agent = CodeAgent()

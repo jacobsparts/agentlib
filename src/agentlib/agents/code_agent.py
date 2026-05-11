@@ -455,7 +455,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             )
         )
 
-    def list_attachments(self, include_session_blobs: bool = False, include_auto_context: bool = True) -> dict[str, str]:
+    def list_attachments(self, include_session_blobs: bool = True, include_auto_context: bool = True) -> dict[str, str]:
         attachments = super().list_attachments()
         if not include_session_blobs:
             attachments = {
@@ -673,9 +673,9 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     def _file_context_ephemeral(self, names: list[str]) -> str:
         if not names:
             return ""
-        lines = ["Files currently in context:"]
+        lines = ["Attachments currently in context:"]
         lines.extend(f"- {name}" for name in names)
-        lines.extend(["", "Remove files that are irrelevant to recent conversation state with unview(path)."])
+        lines.extend(["", "Remove attachments that are irrelevant to recent conversation state with unview(path)."])
         return "\n".join(lines)
 
     def _current_file_context_names(self, extra=None) -> list[str]:
@@ -683,7 +683,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         for name in self.list_attachments(include_auto_context=False):
             names[name] = None
         for name in (extra or {}):
-            if not self._is_session_uri(name) and not self._is_auto_context_file(name):
+            if not self._is_auto_context_file(name):
                 names[name] = None
         return list(names)
 
@@ -2252,14 +2252,14 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
     @REPLAgent.tool
     def unview(self,
-            file_path: str = "Path to a file previously viewed with view()"
+            file_path: str = "Path to a file or session://preview/... URI previously viewed with view()"
         ):
-        """Remove a previously viewed file from future context.
+        """Remove a previously viewed attachment from future context.
 
-        Use this if you viewed the wrong file with view() or no longer
-        need it in context. This only affects future turns.
+        Use this if you viewed the wrong file or preview URI with view(), or no
+        longer need it in context. This only affects future turns.
         """
-        attachments = self.list_attachments(include_session_blobs=True)
+        attachments = self.list_attachments()
         explicit_refs = getattr(self, '_explicit_attachment_refs', {})
         if file_path in explicit_refs:
             self.detach_file_ref(file_path)
