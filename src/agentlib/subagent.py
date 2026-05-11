@@ -8,21 +8,25 @@ Reuses the socket protocol pattern from SandboxMixin.
 
     from agentlib.subagent import Subagent
 
-    # Create and send a task
+    # Normal: foreground, quiet, waits until done
     agent = Subagent(cwd="/path/to/project")
     response = agent.send("Fix the bug in main.py line 42")
     print(response.result)
 
+    # Follow-up in same session
+    response = agent.send("Now add tests")
+
+## Long-running Tasks
+
+    # Default timeout is None: wait indefinitely.
+    response = agent.send("Investigate the report warnings")
+    print(response.result)
+
 ## Background Execution
 
-    # Start task in background
+    # Use bg=True only for real parallelism. Do not poll with noisy
+    # "waiting..." loops; call wait() when you need the result.
     response = agent.send("Refactor the database module", bg=True)
-
-    # Check progress
-    for update in response.progress:
-        print(update)
-
-    # Wait for completion
     response.wait()
     print(response.result)
 
@@ -30,11 +34,7 @@ Reuses the socket protocol pattern from SandboxMixin.
 
     agents = [Subagent() for _ in range(3)]
     tasks = ["Fix bug in a.py", "Fix bug in b.py", "Fix bug in c.py"]
-
-    # Start all in background
     responses = [a.send(t, bg=True) for a, t in zip(agents, tasks)]
-
-    # Wait for all
     for r in responses:
         r.wait()
         print(r.result)
@@ -47,30 +47,13 @@ Reuses the socket protocol pattern from SandboxMixin.
 
 ## Model Configuration
 
-    # Subagents inherit the parent's model by default
     agent = Subagent()  # Uses parent's model
-
-    # Or specify a different model
     agent = Subagent(model="opus")
 
 ## Attributes
 
-    Subagent:
-        .id         - Unique identifier
-        .cwd        - Working directory
-        .model      - LLM model being used
-        .done       - Whether last task is complete
-        .result     - Result from last task
-        .send()     - Send a task
-        .wait()     - Wait for last task
-        .kill()     - Kill the subprocess
-
-    SubagentResponse:
-        .done       - Whether task is complete
-        .result     - Result text
-        .progress   - List of progress updates (emit with release=False)
-        .is_error   - Whether an error occurred
-        .wait()     - Block until complete
+    Subagent: .id, .cwd, .model, .done, .result, .send(), .wait(), .kill()
+    SubagentResponse: .done, .result, .progress, .is_error, .wait()
 """
 
 import fcntl
@@ -600,7 +583,7 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}), {repr(self.model)}, {s
         *,
         bg: bool = False,
         max_turns: Optional[int] = None,
-        timeout: float = 1800
+        timeout: Optional[float] = None
     ) -> SubagentResponse:
         """Send a task to the subagent.
 
@@ -608,7 +591,7 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}), {repr(self.model)}, {s
             prompt: The task or message to send.
             bg: If True, return immediately without waiting.
             max_turns: Override max turns for this task.
-            timeout: Seconds to wait before returning (ignored if bg=True).
+            timeout: Seconds to wait; None waits indefinitely (ignored if bg=True).
 
         Returns:
             SubagentResponse object with the result.
@@ -629,12 +612,7 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}), {repr(self.model)}, {s
         if bg:
             return response
 
-        # Wait with timeout
-        start = time.time()
-        while not response.done:
-            if (time.time() - start) > timeout:
-                break
-            time.sleep(0.1)
+        response.wait(timeout)
 
         if response.done and response.is_error:
             raise SubagentError(response._error, response)
