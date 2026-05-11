@@ -884,9 +884,10 @@ Re-view a file only when you need to inspect it again.
 preview(value) prints a potentially long value. Non-strings are previewed via
 repr(value). Short values print in full; long values show a head/tail summary
 and save the full content to a session://preview/... URI. Use view(uri) to
-inspect or expand a collapsed preview. Pass numbered=True if line numbers are
-useful. Use read(uri) only when you need the preview contents as a Python string
-for programmatic processing.
+expand a collapsed preview into current context. Pass numbered=True if line
+numbers are useful. Do not use read(uri); print(...) just to inspect preview
+output; use view(uri). Use read(uri) only when you need the preview contents as
+a Python string for programmatic processing.
 
 >>> tone_and_style()
 
@@ -2316,7 +2317,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                     "request_id": _expand_req_id,
                 }))
                 _wait_for_ack(_expand_req_id)
-                _send_output("preview_expand", f"Expanded preview: {file_path}\n")
+                _send_output("preview_expand", f"Expanded preview: {file_path} (full content is now available in current context)\n")
                 return
         else:
             content = path.read_text()
