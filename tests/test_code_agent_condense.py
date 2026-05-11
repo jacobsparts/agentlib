@@ -104,3 +104,40 @@ def test_no_truncation():
     transcript, _, _ = build_repl_transcript(messages)
 
     assert "x" * 30000 in transcript
+
+
+def test_condense_keeps_attachment_placeholder_instead_of_stdout_blob():
+    big = ">>> view('large.py')\n" + "\n".join(f"{i:>5}→line {i}" for i in range(1000)) + "\n"
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "assistant", "content": "view('large.py')"},
+        {
+            "role": "user",
+            "content": ">>> view('large.py')\n[Attachment: large.py]\n",
+            "_stdout": big,
+            "_attachments": {"large.py": "    1→line 1"},
+            "_attachment_refs": {"large.py": "large.py"},
+        },
+    ]
+
+    transcript, attachments, refs = build_repl_transcript(messages)
+
+    assert "[Attachment: large.py]" in transcript
+    assert "line 999" not in transcript
+    assert attachments == {"large.py": "    1→line 1"}
+    assert refs == {"large.py": "large.py"}
+
+
+def test_condense_keeps_preview_ref_instead_of_stdout_blob():
+    big = ">>> preview(value)\n" + ("x" * 30000) + "\n"
+    content = ">>> preview(value)\n[PreviewRef: session://preview/key]\n(1 lines, 30000 chars)\n[/PreviewRef]\n"
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "assistant", "content": "preview(value)"},
+        {"role": "user", "content": content, "_stdout": big},
+    ]
+
+    transcript, _, _ = build_repl_transcript(messages)
+
+    assert "[PreviewRef: session://preview/key]" in transcript
+    assert "x" * 1000 not in transcript

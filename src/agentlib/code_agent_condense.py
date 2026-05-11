@@ -4,8 +4,19 @@ import copy
 OMITTED_ECHO_MARKER = "[content omitted from echo]"
 
 
+def _content_preserves_context_refs(content: str) -> bool:
+    return (
+        "[Attachment:" in content
+        or "[PreviewRef:" in content
+        or "[ExpandedPreviewRef:" in content
+    )
+
+
 def message_stdout(msg: dict) -> str:
-    return msg.get("_stdout") or msg.get("content") or ""
+    content = msg.get("content") or ""
+    if _content_preserves_context_refs(content):
+        return content
+    return msg.get("_stdout") or content
 
 
 def is_repl_output_message(msg: dict) -> bool:
