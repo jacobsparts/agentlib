@@ -62,6 +62,60 @@ def test_current_context_names_include_preview_uris():
     assert "session://preview/abc" in agent._current_file_context_names()
 
 
+
+def test_current_context_names_only_include_preview_uris_that_can_render():
+    agent = make_agent()
+    agent._session_id = "session"
+    agent._expanded_preview_refs = {
+        "session://preview/outer": {"numbered": False},
+        "session://preview/inner": {"numbered": False},
+    }
+    blobs = {
+        "session://preview/outer": (
+            "outer before\n"
+            "[PreviewRef: session://preview/inner]\ninner summary\n[/PreviewRef]\n"
+            "outer after"
+        ),
+        "session://preview/inner": "INNER FULL",
+    }
+    agent._preview_blob_content = blobs.get
+
+    assert "session://preview/inner" not in agent._current_file_context_names()
+
+    agent.conversation.usermsg("[PreviewRef: session://preview/outer]\nouter summary\n[/PreviewRef]")
+
+    assert agent._current_file_context_names() == [
+        "session://preview/outer",
+        "session://preview/inner",
+    ]
+
+
+def test_expanded_preview_context_hides_nested_preview_when_parent_not_in_context():
+    agent = make_agent()
+    agent._session_id = "session"
+    agent._expanded_preview_refs = {
+        "session://preview/outer": {"numbered": False},
+        "session://preview/inner": {"numbered": False},
+    }
+    blobs = {
+        "session://preview/outer": (
+            "outer before\n"
+            "[PreviewRef: session://preview/inner]\ninner summary\n[/PreviewRef]\n"
+            "outer after"
+        ),
+        "session://preview/inner": "INNER FULL",
+    }
+    agent._preview_blob_content = blobs.get
+
+    assert agent._expanded_preview_context() == {}
+
+    agent.conversation.usermsg("[PreviewRef: session://preview/outer]\nouter summary\n[/PreviewRef]")
+
+    assert set(agent._expanded_preview_context()) == {
+        "session://preview/outer",
+        "session://preview/inner",
+    }
+
 def test_unview_collapses_preview_uri():
     agent = make_agent()
     agent._expanded_preview_refs = {"session://preview/abc": {"numbered": False}}

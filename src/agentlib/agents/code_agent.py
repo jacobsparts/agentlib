@@ -29,7 +29,7 @@ from agentlib.client import ContextOverflowError
 from agentlib.cli.terminal import DIM, RESET, Panel, strip_ansi
 from agentlib.session_store import SessionStore
 from agentlib.session_replay import replay_session_into_agent, replay_display_text
-from agentlib.preview_refs import is_preview_uri, preview_key, numbered_content
+from agentlib.preview_refs import is_preview_uri, preview_key, numbered_content, render_preview_refs
 
 from dotenv import load_dotenv
 
@@ -487,9 +487,24 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             return None
         return self._session_store.get_preview_blob(self._session_id, preview_key(uri))
 
+    def _actual_expanded_preview_refs(self) -> list[str]:
+        expanded = getattr(self, '_expanded_preview_refs', {})
+        if not expanded:
+            return []
+
+        rendered = []
+        for msg in getattr(self.conversation, "messages", []):
+            content = msg.get("content", "")
+            for name, attachment in (msg.get("_attachments") or {}).items():
+                content = content.replace(f"[Attachment: {name}]", attachment)
+            render_preview_refs(content, expanded, self._preview_blob_content, rendered)
+        return rendered
+
     def _expanded_preview_context(self) -> dict[str, str]:
         out = {}
-        for uri, options in getattr(self, '_expanded_preview_refs', {}).items():
+        actual = self._actual_expanded_preview_refs()
+        for uri in actual:
+            options = getattr(self, '_expanded_preview_refs', {}).get(uri, {})
             if getattr(self, '_session_id', None) is None:
                 continue
             content = self._preview_blob_content(uri)
@@ -717,7 +732,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         names = {}
         for name in self.list_attachments(include_auto_context=False):
             names[name] = None
-        for uri in getattr(self, '_expanded_preview_refs', {}):
+        for uri in self._actual_expanded_preview_refs():
             names[uri] = None
         for name in (extra or {}):
             if not self._is_auto_context_file(name) and not is_preview_uri(name):

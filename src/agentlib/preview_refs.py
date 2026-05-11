@@ -27,18 +27,38 @@ def numbered_content(content: str) -> str:
     return "\n".join(f"{i+1:>5}→{line}" for i, line in enumerate(content.split("\n")))
 
 
-def render_preview_refs(content: str, expanded_refs: dict, load_preview) -> str:
+def render_preview_refs(content: str, expanded_refs: dict, load_preview, rendered_refs=None) -> str:
     if not content or not expanded_refs:
         return content
 
-    def replace(match):
-        uri = match.group("uri")
-        options = expanded_refs.get(uri)
-        if not options:
-            return match.group(0)
-        full = load_preview(uri)
-        if options.get("numbered"):
-            full = numbered_content(full)
-        return f"[ExpandedPreviewRef: {uri}]\n{full}\n[/ExpandedPreviewRef]"
+    remaining = {uri for uri, options in expanded_refs.items() if options}
 
-    return _PREVIEW_REF_RE.sub(replace, content)
+    while remaining:
+        changed = False
+
+        def replace(match):
+            nonlocal changed
+            uri = match.group("uri")
+            if uri not in remaining:
+                return match.group(0)
+            options = expanded_refs.get(uri)
+            full = load_preview(uri)
+            if full is None:
+                return match.group(0)
+
+            remaining.remove(uri)
+            changed = True
+            if rendered_refs is not None and uri not in rendered_refs:
+                if hasattr(rendered_refs, "append"):
+                    rendered_refs.append(uri)
+                else:
+                    rendered_refs.add(uri)
+            if options.get("numbered"):
+                full = numbered_content(full)
+            return f"[ExpandedPreviewRef: {uri}]\n{full}\n[/ExpandedPreviewRef]"
+
+        content = _PREVIEW_REF_RE.sub(replace, content)
+        if not changed:
+            break
+
+    return content

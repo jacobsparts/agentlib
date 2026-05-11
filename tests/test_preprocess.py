@@ -1215,14 +1215,14 @@ TWO\""")""",
 
         assert "new.py" in agent.ephemeral
 
-    def test_usermsg_file_context_ephemeral_includes_expanded_preview_refs(self):
+    def test_usermsg_file_context_ephemeral_hides_preview_refs_that_do_not_render(self):
         agent = CodeAgent()
         agent._ensure_setup()
         agent._expanded_preview_refs = {"session://preview/abc123": {"numbered": False}}
 
         agent.usermsg("next question")
 
-        assert "session://preview/abc123" in agent.ephemeral
+        assert "session://preview/abc123" not in agent.ephemeral
 
 
     def test_usermsg_file_context_ephemeral_excludes_auto_context_files(self):

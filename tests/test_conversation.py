@@ -10,6 +10,50 @@ class DummyClient:
         return {"role": "assistant", "content": "ok", "tool_calls": []}
 
 
+def test_preview_refs_expand_nested_refs_regardless_of_order():
+    client = DummyClient()
+    conv = Conversation(client, "system")
+    conv.expanded_preview_refs = {
+        "session://preview/inner": {"numbered": False},
+        "session://preview/outer": {"numbered": False},
+    }
+    blobs = {
+        "session://preview/outer": (
+            "outer before\n"
+            "[PreviewRef: session://preview/inner]\ninner summary\n[/PreviewRef]\n"
+            "outer after"
+        ),
+        "session://preview/inner": "INNER FULL",
+    }
+    conv.preview_loader = blobs.get
+    conv.usermsg("[PreviewRef: session://preview/outer]\nouter summary\n[/PreviewRef]")
+
+    content = conv._messages()[-1]["content"]
+
+    assert "[ExpandedPreviewRef: session://preview/outer]" in content
+    assert "[ExpandedPreviewRef: session://preview/inner]" in content
+    assert "INNER FULL" in content
+    assert conv.rendered_preview_refs == ["session://preview/outer", "session://preview/inner"]
+
+
+def test_preview_refs_do_not_expand_same_uri_twice_in_one_render():
+    client = DummyClient()
+    conv = Conversation(client, "system")
+    conv.expanded_preview_refs = {"session://preview/self": {"numbered": False}}
+    conv.preview_loader = lambda uri: (
+        "self before\n"
+        "[PreviewRef: session://preview/self]\nself summary\n[/PreviewRef]\n"
+        "self after"
+    )
+    conv.usermsg("[PreviewRef: session://preview/self]\nself summary\n[/PreviewRef]")
+
+    content = conv._messages()[-1]["content"]
+
+    assert content.count("[ExpandedPreviewRef: session://preview/self]") == 1
+    assert content.count("[PreviewRef: session://preview/self]") == 1
+    assert conv.rendered_preview_refs == ["session://preview/self"]
+
+
 def test_ephemeral_injected_at_top_of_last_user_message():
     client = DummyClient()
     conv = Conversation(client, "system")

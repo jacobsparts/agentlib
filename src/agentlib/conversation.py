@@ -15,6 +15,8 @@ class Conversation:
         expanded_preview_refs = getattr(self, "expanded_preview_refs", {})
         preview_loader = getattr(self, "preview_loader", None)
 
+        rendered_preview_refs = []
+
         for msg in self.messages:
             out = dict(msg)
             attachments = out.pop('_attachments', None)
@@ -22,8 +24,14 @@ class Conversation:
                 for name, content in attachments.items():
                     out['content'] = out['content'].replace(f'[Attachment: {name}]', content)
             if preview_loader is not None:
-                out['content'] = render_preview_refs(out.get('content', ''), expanded_preview_refs, preview_loader)
+                out['content'] = render_preview_refs(
+                    out.get('content', ''),
+                    expanded_preview_refs,
+                    preview_loader,
+                    rendered_preview_refs,
+                )
             result.append(out)
+        self.rendered_preview_refs = rendered_preview_refs
 
         if self.ephemeral:
             for i in range(len(result) - 1, -1, -1):
