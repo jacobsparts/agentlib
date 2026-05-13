@@ -29,6 +29,81 @@ def make_agent():
     return agent
 
 
+def test_pin_marks_previous_assistant_turn():
+    agent = make_agent()
+    assistant = {"role": "assistant", "content": "print('important')"}
+    agent.conversation.messages.append({"role": "user", "content": "Task", "_user_content": "Task"})
+    agent.conversation.messages.append(assistant)
+
+    result = agent.pin()
+
+    assert result == "Pinned previous turn for coalescing."
+    assert assistant["_pinned_coalesce"] == {"label": "Pinned previous turn"}
+
+
+def test_pin_no_previous_turn_is_noop():
+    agent = make_agent()
+
+    result = agent.pin()
+
+    assert result == "No previous turn to pin."
+
+
+def test_pin_can_target_previous_interaction_release_turn():
+    agent = make_agent()
+    old_assistant = {"role": "assistant", "content": "print('old')"}
+    release_assistant = {"role": "assistant", "content": "emit('old done', release=True)"}
+    agent.conversation.messages.extend([
+        {"role": "user", "content": "Old task", "_user_content": "Old task"},
+        old_assistant,
+        {"role": "user", "content": ">>> print('old')\nold\n"},
+        release_assistant,
+        {"role": "user", "content": ">>> emit('old done', release=True)\nold done\nNew task", "_user_content": "New task"},
+    ])
+
+    result = agent.pin()
+
+    assert result == "Pinned previous turn for coalescing."
+    assert "_pinned_coalesce" not in old_assistant
+    assert release_assistant["_pinned_coalesce"] == {"label": "Pinned previous turn"}
+
+
+def test_pin_persists_metadata_event_for_existing_persisted_message(tmp_path):
+    from agentlib.session_replay import replay_session_into_agent
+
+    agent = make_persistent_agent(tmp_path)
+    agent.conversation.messages.extend([
+        {"role": "user", "content": "Task", "_user_content": "Task"},
+        {"role": "assistant", "content": "print('important')"},
+    ])
+    assistant = agent.conversation.messages[-1]
+    agent._persist_message(agent.conversation.messages[-2])
+    agent._persist_message(assistant)
+
+    result = agent.pin()
+
+    assert result == "Pinned previous turn for coalescing."
+    events = agent._session_store.get_events(agent._session_id)
+    assert events[-1]["event_type"] == "message_pinned"
+    assert events[-1]["payload"]["message_event_seq"] == assistant["_event_seq"]
+
+    class ReplayAgent:
+        def __init__(self):
+            self.conversation = Conversation(DummyClient(), "system")
+            self._expanded_preview_refs = {}
+
+        def _configure_conversation(self, conversation):
+            pass
+
+    replayed = ReplayAgent()
+    replay_session_into_agent(replayed, agent._session_id, agent._session_store)
+    replayed_assistant = next(
+        msg for msg in replayed.conversation.messages
+        if msg.get("role") == "assistant" and msg.get("content") == "print('important')"
+    )
+    assert replayed_assistant["_pinned_coalesce"] == {"label": "Pinned previous turn"}
+
+
 def test_preview_uri_attachments_are_listed_by_default():
     agent = make_agent()
     agent.conversation.usermsg(
@@ -48,6 +123,42 @@ def test_preview_uri_attachments_appear_in_context_notice():
     assert "Context currently expanded:" in notice
     assert "session://preview/abc" in notice
     assert "unview(path_or_uri)" in notice
+
+
+def test_context_pressure_notice_when_near_limit():
+    agent = make_agent()
+    agent.llm_client.model_config["context_window"] = 100
+    agent.llm_client.usage_tracker.input_tokens_per_byte = {agent.llm_client.model_name: 1.0}
+    agent.conversation.usermsg("x" * 200)
+
+    notice = agent._file_context_ephemeral([])
+
+    assert "Context window is near capacity." in notice
+    assert "unview(path_or_uri)" in notice
+
+
+def test_context_pressure_notice_combines_with_expanded_context():
+    agent = make_agent()
+    agent.llm_client.model_config["context_window"] = 100
+    agent.llm_client.usage_tracker.input_tokens_per_byte = {agent.llm_client.model_name: 1.0}
+    agent.conversation.usermsg("x" * 200)
+
+    notice = agent._file_context_ephemeral(["session://preview/abc"])
+
+    assert "Context currently expanded:" in notice
+    assert "session://preview/abc" in notice
+    assert "Context window is near capacity." in notice
+
+
+def test_system_prompt_mentions_pin_and_context_pressure():
+    agent = make_agent()
+    prompt = agent._build_system_prompt()
+
+    assert "REPL output may become a preview after three user interactions" in prompt
+    assert "If the most\nrecent completed turn should remain in context long-term, call pin()" in prompt
+    assert "pin() is\nonly for the previous turn" in prompt
+    assert "cannot pin the current turn or other historical\nturns" in prompt
+    assert "Context window is near capacity" in prompt
 
 
 
@@ -136,6 +247,34 @@ def make_persistent_agent(tmp_path):
     return agent
 
 
+def test_view_full_file_already_in_context_emits_notice(tmp_path):
+    path = tmp_path / "already.py"
+    path.write_text("print('already')\n")
+    file_path = str(path)
+    agent = make_persistent_agent(tmp_path)
+    agent.complete = False
+    agent.conversation.usermsg(
+        f"[Attachment: {file_path}]",
+        _attachments={file_path: "    1→print('already')\n"},
+        _attachment_refs={file_path: file_path},
+    )
+    repl = agent._get_tool_repl()
+    try:
+        output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+            repl,
+            f"view({file_path!r})",
+        )
+    finally:
+        repl.close()
+
+    assert pure_syntax_error is False
+    assert "Notice: file was already in context." in output
+    assert any(
+        msg_type == "output" and "Calling view() on files that are already in context is wasteful." in chunk
+        for msg_type, chunk in output_chunks
+    )
+
+
 def test_auto_preview_long_complete_turn_output(tmp_path):
     agent = make_persistent_agent(tmp_path)
     original = "x" * 6000
@@ -170,7 +309,7 @@ def test_auto_preview_after_attachment_conversion_does_not_expand_attachment_bod
     ])
     result = agent.process_output_for_llm(output)
 
-    assert result == f"[Attachment: {path}]\n"
+    assert result == f"[Attachment: {path}]"
     assert "[PreviewRef:" not in result
 
 

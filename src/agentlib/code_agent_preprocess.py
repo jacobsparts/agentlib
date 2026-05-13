@@ -1,4 +1,5 @@
-"""CodeAgent-specific preprocessing: rewrite bare tool calls to assignment + preview."""
+"""CodeAgent-specific preprocessing for file/context safety rewrites."""
+
 
 import ast
 
@@ -9,14 +10,10 @@ _DIRECT_READ_WARNING = "Direct file reads bypass code_agent context tools; prefe
 def preprocess_code_agent(
     code: str,
     *,
-    preview_targets: frozenset[str],
     preview_counter: int = 0,
     preview_origins: dict[str, str] | None = None,
 ) -> tuple[str, int]:
-    """Rewrite bare tool calls into assignment + preview and guard value-style view().
-
-    Returns the processed code and the updated preview counter.
-    """
+    """Guard value-style view() and rewrite file reads to read()/view()."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -36,27 +33,7 @@ def preprocess_code_agent(
             and node.func.id in names
         )
 
-    def _has_literal_bg_true(call):
-        return any(
-            kw.arg == "bg"
-            and isinstance(kw.value, ast.Constant)
-            and kw.value.value is True
-            for kw in call.keywords
-        )
 
-    def _preview_uri_read_arg(call):
-        if not _is_named_call(call, "read"):
-            return None
-        if call.keywords or len(call.args) != 1:
-            return None
-        arg = call.args[0]
-        if (
-            isinstance(arg, ast.Constant)
-            and isinstance(arg.value, str)
-            and arg.value.startswith("session://preview/")
-        ):
-            return repr(arg.value)
-        return None
 
     def _preview_uri_view_origin(call):
         if not _is_named_call(call, "view"):
@@ -149,10 +126,7 @@ def preprocess_code_agent(
     def _warning_line(indent):
         return f"{indent}print({_DIRECT_READ_WARNING!r})"
 
-    def _next_bash_var():
-        nonlocal counter
-        counter += 1
-        return f"_bash{counter}"
+
 
     all_rewrites = []
 
@@ -250,7 +224,7 @@ def preprocess_code_agent(
                 all_rewrites.append((start, start - 1, [_warning_line(indent)]))
                 continue
 
-    # Pattern 2: bare target call or print(target(...))
+    # Pattern 2: bare read(...) or print(read(...)) becomes view(...)
     for node in body:
         if not isinstance(node, ast.Expr):
             continue
@@ -264,45 +238,11 @@ def preprocess_code_agent(
         orig = lines[start : end + 1]
         indent = orig[0][: len(orig[0]) - len(orig[0].lstrip())]
 
-        if isinstance(func, ast.Name) and func.id in preview_targets:
+        if isinstance(func, ast.Name) and func.id == "read":
             call_source = "\n".join(orig).strip()
-            if func.id == "read":
-                all_rewrites.append(
-                    (start, end, [f"{indent}view{call_source[len('read'):]}"])
-                )
-            elif func.id == "bash":
-                var_name = _next_bash_var()
-                if _has_literal_bg_true(call):
-                    all_rewrites.append(
-                        (start, end, [f"{indent}{var_name} = {call_source}"])
-                    )
-                else:
-                    all_rewrites.append(
-                        (start, end, [f"{indent}preview({var_name} := {call_source})"])
-                    )
-            else:
-                all_rewrites.append(
-                    (start, end, [f"{indent}preview({call_source})"])
-                )
-        elif (
-            isinstance(func, ast.Name)
-            and func.id == "preview"
-            and len(call.args) == 1
-            and not call.keywords
-            and _is_named_call(call.args[0], "bash")
-        ):
-            inner = call.args[0]
-            inner_source = _source(inner)
-            if inner_source:
-                var_name = _next_bash_var()
-                if _has_literal_bg_true(inner):
-                    all_rewrites.append(
-                        (start, end, [f"{indent}{var_name} = {inner_source}"])
-                    )
-                else:
-                    all_rewrites.append(
-                        (start, end, [f"{indent}preview({var_name} := {inner_source})"])
-                    )
+            all_rewrites.append(
+                (start, end, [f"{indent}view{call_source[len('read'):]}"])
+            )
         elif (
             isinstance(func, ast.Name)
             and func.id == "print"
@@ -316,64 +256,6 @@ def preprocess_code_agent(
                     all_rewrites.append(
                         (start, end, [f"{indent}view{inner_source[len('read'):]}"])
                     )
-                continue
-            if _is_named_call(inner, *preview_targets):
-                inner_source = _source(inner)
-                if inner_source:
-                    if _is_named_call(inner, "bash"):
-                        var_name = _next_bash_var()
-                        if _has_literal_bg_true(inner):
-                            all_rewrites.append(
-                                (start, end, [f"{indent}{var_name} = {inner_source}"])
-                            )
-                        else:
-                            all_rewrites.append(
-                                (start, end, [f"{indent}preview({var_name} := {inner_source})"])
-                            )
-                    else:
-                        all_rewrites.append(
-                            (start, end, [f"{indent}preview({inner_source})"])
-                        )
-
-    # Pattern 3: var = target(...) immediately followed by print(var)
-    for i in range(len(body) - 1):
-        assign = body[i]
-        nxt = body[i + 1]
-
-        if not isinstance(assign, ast.Assign):
-            continue
-        if len(assign.targets) != 1 or not isinstance(assign.targets[0], ast.Name):
-            continue
-        if not isinstance(assign.value, ast.Call):
-            continue
-        afunc = assign.value.func
-        if not (isinstance(afunc, ast.Name) and afunc.id in preview_targets):
-            continue
-
-        var_name = assign.targets[0].id
-
-        if not isinstance(nxt, ast.Expr) or not isinstance(nxt.value, ast.Call):
-            continue
-        pcall = nxt.value
-        if not (isinstance(pcall.func, ast.Name) and pcall.func.id == "print"):
-            continue
-        if len(pcall.args) != 1 or pcall.keywords:
-            continue
-        if not (isinstance(pcall.args[0], ast.Name) and pcall.args[0].id == var_name):
-            continue
-
-        pstart = nxt.lineno - 1
-        pend = nxt.end_lineno - 1
-        pindent = lines[pstart][: len(lines[pstart]) - len(lines[pstart].lstrip())]
-        preview_uri_arg = _preview_uri_read_arg(assign.value)
-        if preview_uri_arg is not None:
-            all_rewrites.append(
-                (pstart, pend, [f"{pindent}view({preview_uri_arg})"])
-            )
-        else:
-            all_rewrites.append(
-                (pstart, pend, [f"{pindent}preview({var_name})"])
-            )
 
     if not all_rewrites:
         return code, counter

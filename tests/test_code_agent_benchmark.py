@@ -105,7 +105,8 @@ def test_code_agent_benchmark_repo_scan_session_db_var(tmp_path):
         tmp_path,
         task,
         [
-            'preview(grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)',
+            'print(grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)',
+
         ],
     )
     assert result.passed, (result.output, _codes(result), [(v.code, v.message) for v in result.violations])
@@ -122,7 +123,8 @@ def test_code_agent_benchmark_counts_syntax_retry(tmp_path):
         task,
         [
             "not valid python !!!",
-            'preview(grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)',
+            'print(grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)',
+
         ],
     )
     assert result.returncode == 0
@@ -138,7 +140,8 @@ def test_code_agent_benchmark_accepts_quoted_final_line(tmp_path):
         tmp_path,
         task,
         [
-            'preview(grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("`AGENTLIB_SESSION_DB`", release=True)',
+            'print(grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("`AGENTLIB_SESSION_DB`", release=True)',
+
         ],
     )
     assert result.passed, (result.output, _codes(result), [(v.code, v.message) for v in result.violations])
@@ -152,7 +155,8 @@ def test_code_agent_benchmark_repo_scan_cli_history_var(tmp_path):
         tmp_path,
         task,
         [
-            'preview(grep("AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_CLI_HISTORY_DB", release=True)',
+            'print(grep("AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_CLI_HISTORY_DB", release=True)',
+
         ],
     )
     assert result.passed, (result.output, _codes(result), [(v.code, v.message) for v in result.violations])
@@ -168,7 +172,8 @@ def test_code_agent_benchmark_multi_turn_repo_task(tmp_path):
         tmp_path,
         task,
         [
-            '_code = read("src/agentlib/agents/code_agent.py")\npreview(_code)',
+            '_code = read("src/agentlib/agents/code_agent.py")\nprint(_code)',
+
             'emit("Checking today\'s date...", release=True)',
         ],
     )
@@ -180,7 +185,7 @@ def test_code_agent_benchmark_multi_turn_repo_task(tmp_path):
 
 
 def test_code_agent_benchmark_flags_bash_python_misuse(tmp_path):
-    task = next(task for task in CODE_AGENT_TASKS if task.id == "code-agent/tool-discipline-preview-target-count")
+    task = next(task for task in CODE_AGENT_TASKS if task.id == "code-agent/tool-discipline-grep-session-var-count")
     result, env, server = _run_task(
         tmp_path,
         task,
@@ -203,7 +208,8 @@ def test_code_agent_benchmark_sqlite_isolation_explanation(tmp_path):
         tmp_path,
         task,
         [
-            'preview(grep("AGENTLIB_SESSION_DB|AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))',
+            'print(grep("AGENTLIB_SESSION_DB|AGENTLIB_CLI_HISTORY_DB", "src", None, None, False, 2, False, False))',
+
             'import json\n_s = read("src/agentlib/session_store.py")\n_h = read("src/agentlib/cli/mixin.py")\nemit(json.dumps({"session_db_source":"AGENTLIB_SESSION_DB in session_store.resolve_db_path","history_db_source":"AGENTLIB_CLI_HISTORY_DB in SQLiteHistory.__init__","reason":"Environment variable overrides force each sqlite path to a temp test db, so benchmark state stays isolated."}), release=True)',
         ],
     )
@@ -220,7 +226,8 @@ def test_code_agent_benchmark_resume_flow_summary(tmp_path):
         tmp_path,
         task,
         [
-            '_a = read("src/agentlib/agents/code_agent.py")\n_b = read("src/agentlib/session_replay.py")\npreview(_a)',
+            '_a = read("src/agentlib/agents/code_agent.py")\n_b = read("src/agentlib/session_replay.py")\nprint(_a)',
+
             'emit("resume_session -> replay_session_into_agent -> _replay_display_output; then usermsg adds system_reset / REPL session has been reset", release=True)',
         ],
     )
@@ -237,7 +244,8 @@ def test_code_agent_benchmark_read_vs_view_semantics(tmp_path):
         tmp_path,
         task,
         [
-            '_code = read("src/agentlib/agents/code_agent.py")\npreview(_code)',
+            '_code = read("src/agentlib/agents/code_agent.py")\nprint(_code)',
+
             'import json\nemit(json.dumps({"read":"returns file contents as text for use as a Python value","view":"shows numbered lines and attachment behavior for conversation context"}), release=True)',
         ],
     )
@@ -252,7 +260,7 @@ def test_code_agent_benchmark_runner_can_stream_output(tmp_path):
     task = next(task for task in CODE_AGENT_TASKS if task.id == "code-agent/repo-session-db-var")
     stream = io.StringIO()
     with _ScriptedModelServer([
-        'preview(grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)',
+        'print(grep("AGENTLIB_SESSION_DB", "src", None, None, False, 2, False, False))\nemit("AGENTLIB_SESSION_DB", release=True)',
     ]) as server:
         env = build_code_agent_test_env(tmp_path, port=server.port)
         result = CodeAgentBenchmarkRunner(

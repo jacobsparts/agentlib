@@ -193,43 +193,29 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             return None
         print(f"{DIM}Forked session: {new_session_id}{RESET}")
         return new_session_id
-    def condense_session(self):
-        from agentlib.code_agent_condense import condense_code_agent_messages
+    code_agent_coalesce_min_chars = _get_config_value("code_agent_coalesce_min_chars", 2000)
+    code_agent_coalesce_min_savings_chars = _get_config_value("code_agent_coalesce_min_savings_chars", 1000)
+    code_agent_coalesce_keep_last_execution_interactions = _get_config_value("code_agent_coalesce_keep_last_execution_interactions", 1)
 
-        self._ensure_live_session()
-        self._flush_pending_session_events()
+    def _coalesce_context(self):
+        from agentlib.code_agent_coalesce import coalesce_repl_messages
 
-        old_session_id = self._session_id
-        condensed = condense_code_agent_messages(self.conversation.messages)
-
-        persisted_messages = [condensed[0]]
-        for msg in condensed[1:]:
-            persisted_messages.append(self._sanitize_message_for_persistence(msg))
-
-        new_session_id = self._session_store.create_session_from_messages(
-            persisted_messages,
-            cwd=str(Path.cwd()),
-            model=getattr(self, "model", None),
-            preview_blobs_from=old_session_id,
+        if not self._session_id:
+            return
+        auto_expand_preview_refs = []
+        self.conversation.messages = coalesce_repl_messages(
+            self.conversation.messages,
+            keep_last_interactions=3,
+            keep_last_execution_interactions=self.code_agent_coalesce_keep_last_execution_interactions,
+            min_chars=self.code_agent_coalesce_min_chars,
+            min_savings_chars=self.code_agent_coalesce_min_savings_chars,
+            save_preview_blob=lambda key, content: self._session_store.save_preview_blob(self._session_id, key, content),
+            auto_expand_preview_refs=auto_expand_preview_refs,
         )
+        for uri in auto_expand_preview_refs:
+            self._expanded_preview_refs[uri] = {"numbered": False}
+            self._append_session_event("preview_expanded", {"uri": uri, "numbered": False}, create_session=False)
 
-        if not self._acquire_session_lock(new_session_id):
-            return None
-
-        self._release_session_lock(old_session_id)
-
-        self.conversation.messages = condensed
-        self._session_id = new_session_id
-        self._next_event_seq = self._session_store.get_next_seq(new_session_id)
-        self._last_was_repl_output = False
-        self._explicit_attachment_refs = {}
-        self._pending_explicit_attachment_refs = {}
-
-        for msg in self.conversation.messages:
-            for name, path in (msg.get("_attachment_refs") or {}).items():
-                self._explicit_attachment_refs[name] = path
-
-        return new_session_id
 
 
     def _resolve_session_selection(self, selection) -> str | None:
@@ -374,11 +360,9 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
         msg = {}
         for key, value in message.items():
-            if key == '_attachments':
-                continue
             if key in {'images', 'audio'}:
                 msg[key] = encode_media(value)
-            elif key in {'role', 'content', '_stdout', '_user_content', 'name', 'tool_call_id', '_synthetic', '_render_segments', '_final_result', '_emit_value'}:
+            elif key in {'role', 'content', '_stdout', '_user_content', 'name', 'tool_call_id', '_synthetic', '_render_segments', '_final_result', '_emit_value', '_pinned_coalesce'}:
                 msg[key] = copy.deepcopy(value)
         refs = message.get('_attachment_refs')
         if refs:
@@ -392,7 +376,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 break
 
     def _persist_message(self, message: dict):
-        if message.get('_synthetic'):
+        if message.get('_synthetic') or message.get("_event_seq") is not None:
             return
         if self._session_id is None:
             self._bootstrap_persisted_conversation()
@@ -591,21 +575,33 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         self._persist_message(message)
 
     def build_output_for_llm(self, output_chunks):
-        """Build LLM output, converting complete reads to attachments."""
+        """Build LLM output, converting complete reads to attachments and large statement output to previews."""
         self._read_attachments = {}
         result = []
+        statement = []
         attach_path = None
         partial_read_path = None
         written_files = []
         unviewed_files = set(getattr(self, '_pending_unviewed_files', set()))
         self._pending_unviewed_files = set()
+
+        def flush_statement():
+            if statement:
+                result.append(self._auto_preview_output("".join(statement)))
+                statement.clear()
+
         for msg_type, chunk in output_chunks:
             if msg_type == "emit":
                 continue
             if msg_type == "file_unviewed":
                 unviewed_files.add(chunk.strip())
                 continue
+            if msg_type == "echo":
+                flush_statement()
+                result.append(chunk)
+                continue
             if msg_type == "preview_expand":
+                flush_statement()
                 result.append(chunk)
                 continue
             if msg_type == "read_attach":
@@ -615,10 +611,11 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 partial_read_path = chunk.strip()
                 continue
             if msg_type == "read" and attach_path:
+                flush_statement()
                 path = attach_path
                 attach_path = None
                 if path in unviewed_files:
-                    result.append(chunk)
+                    result.append(self._auto_preview_output(chunk))
                     continue
                 self._invalidate_attachment(path)
                 self._read_attachments[path] = chunk.rstrip('\n')
@@ -628,9 +625,9 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 path = partial_read_path
                 partial_read_path = None
                 if self._is_attached(path):
-                    result.append(f"ValueError: Partial view denied for file already in context. Call view() without offset or limit to reload the file, or call unview({path!r}) to remove it from future context and enable partial views.\n")
+                    statement.append(f"ValueError: Partial view denied for file already in context. Call view() without offset or limit to reload the file, or call unview({path!r}) to remove it from future context and enable partial views.\n")
                     continue
-                result.append(chunk)
+                statement.append(chunk)
                 continue
             if msg_type == "file_written":
                 written_files.append(chunk.strip())
@@ -640,7 +637,9 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
             attach_path = None
             partial_read_path = None
-            result.append(chunk)
+            statement.append(chunk)
+
+        flush_statement()
 
         # Auto-refresh: re-read attached files that were written but not re-read by agent
         for path in written_files:
@@ -660,6 +659,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 pass
 
         return "".join(result)
+
 
     def _same_file(self, left: str, right: str) -> bool:
         try:
@@ -717,13 +717,52 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
     view_images._tool_files_param = "files"
 
-    def _file_context_ephemeral(self, names: list[str]) -> str:
-        if not names:
+    def _context_pressure_ephemeral(self) -> str:
+        client = getattr(self, "llm_client", None)
+        model_config = getattr(client, "model_config", {}) or {}
+        limits = [
+            value for value in (
+                model_config.get("context_window"),
+                model_config.get("max_input_tokens"),
+            )
+            if value
+        ]
+        if not limits:
             return ""
-        lines = ["Context currently expanded:"]
-        lines.extend(f"- {name}" for name in names)
-        lines.extend(["", "Use unview(path_or_uri) to remove/collapse context."])
-        return "\n".join(lines)
+        limit = min(limits)
+        old_ephemeral = self.ephemeral
+        try:
+            self.ephemeral = ""
+            messages = [
+                {k: v for k, v in msg.items() if not k.startswith("_")}
+                for msg in self.conversation._messages()
+            ]
+        finally:
+            self.ephemeral = old_ephemeral
+        try:
+            estimated = client._estimate_input_tokens(client._input_bytes(messages))
+        except Exception:
+            estimated = None
+        if estimated is None:
+            return ""
+        threshold = int(limit * 0.85)
+        if estimated < threshold:
+            return ""
+        return (
+            "Context window is near capacity.\n"
+            "Use unview(path_or_uri) to remove files or expanded previews that are no longer needed."
+        )
+
+    def _file_context_ephemeral(self, names: list[str]) -> str:
+        sections = []
+        if names:
+            lines = ["Context currently expanded:"]
+            lines.extend(f"- {name}" for name in names)
+            lines.extend(["", "Use unview(path_or_uri) to remove/collapse context."])
+            sections.append("\n".join(lines))
+        if notice := self._context_pressure_ephemeral():
+            sections.append(notice)
+        return "\n\n".join(sections)
 
 
 
@@ -759,11 +798,11 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         if pending := getattr(self, '_pending_images', None):
             kwargs['images'] = kwargs.get('images', []) + pending
             self._pending_images = []
+        before_len = len(self.conversation.messages)
+        result = super().usermsg(content, **kwargs)
         self.ephemeral = self._file_context_ephemeral(
             self._current_file_context_names(kwargs.get('_attachments'))
         )
-        before_len = len(self.conversation.messages)
-        result = super().usermsg(content, **kwargs)
         if len(self.conversation.messages) > before_len:
             self._persist_message(self.conversation.messages[-1])
         return result
@@ -896,13 +935,22 @@ remove it from future context.
 When files change, previous full views stay up to date automatically.
 Re-view a file only when you need to inspect it again.
 
-preview(value) prints a potentially long value. Non-strings are previewed via
-repr(value). Short values print in full; long values show a head/tail summary
-and save the full content to a session://preview/... URI. Use view(uri) to
-expand a collapsed preview into current context. Pass numbered=True if line
-numbers are useful. Do not use read(uri); print(...) just to inspect preview
-output; use view(uri). Use read(uri) only when you need the preview contents as
-a Python string for programmatic processing.
+Large output is automatically collapsed to a session://preview/... URI. Use
+print(...) to inspect command output or computed text. For PreviewRefs, if the
+preview is small or moderate and semantic inspection is needed, prefer
+view(session://preview/...) so the content is tracked in context and can later
+be removed with unview(). Avoid ad-hoc read(uri) + string searching as a
+substitute for inspection unless you specifically need programmatic processing
+or the preview is too large to safely expand.
+
+REPL output may become a preview after three user interactions. If the most
+recent completed turn should remain in context long-term, call pin(). pin() is
+only for the previous turn; it cannot pin the current turn or other historical
+turns.
+
+If you see "Context window is near capacity", reduce active context by calling
+unview(path_or_uri) on no-longer-needed files or expanded previews.
+
 
 >>> tone_and_style()
 
@@ -931,7 +979,12 @@ XSS, SQL injection, OWASP top 10). Fix insecure code immediately.
 
 >>> file_editing()
 
-Two methods for editing files:
+Mandatory methods for editing source code:
+
+Use edit(...) or line_patch(...) for all source-code edits. Do not use direct
+file writes (Path.write_text(), open(..., "w"), shell redirects, perl -pi,
+sed -i, etc.) to edit source code. If a direct write is truly required, explain
+why edit()/line_patch() cannot work and ask the user for permission first.
 
 edit(file_path, old_string, new_string, replace_all=False)
     Replace exact string matches.
@@ -1071,7 +1124,7 @@ If you don't know how to proceed:
             self._flush_pending_session_events()
         self._session_store.save_preview_blob(self._session_id, key, content)
 
-    def _auto_preview_turn_output(self, output: str) -> str:
+    def _auto_preview_output(self, output: str) -> str:
         if not output or output == "# [no output]":
             return output
         threshold = getattr(self, "auto_preview_turn_chars", _get_config_value("code_agent_auto_preview_turn_chars", 5000))
@@ -1082,11 +1135,11 @@ If you don't know how to proceed:
             return output
         uri, rendered = self._render_preview_ref(output)
         self._save_preview_blob(preview_key(uri), output)
-        return rendered
+        return rendered + "\n"
 
     def process_output_for_llm(self, output: str) -> str:
-        output = self._auto_preview_turn_output(output)
-        return self.process_repl_output(output)
+        return self.process_repl_output(self._auto_preview_output(output).rstrip("\n"))
+
 
     max_output_kb = _get_config_value("code_agent_max_output_kb", 50)  # Large output protection
 
@@ -1227,8 +1280,9 @@ If you don't know how to proceed:
                         text = value.rstrip('\n')
                 except (ValueError, SyntaxError):
                     pass
-            # Truncate to 3 lines or 240 chars, unless this already looks like
-            # preview() output with its own summary header.
+            # Truncate to 5 lines or 240 chars, unless this already looks like
+            # a PreviewRef summary header.
+
             lines = text.split('\n')
             total_lines = len(lines)
             truncated_at_lines = False
@@ -1540,6 +1594,7 @@ If you don't know how to proceed:
                     self._explicit_attachment_refs[name] = path
             self._replay_display_output()
             self.usermsg(">>> system_reset()\nREPL session has been reset\n")
+            self._coalesce_context()
             if missing:
                 lines = ["[Resume warning: attachment file missing and detached]"]
                 lines.extend(f"- {name}: {path}" for name, path in missing)
@@ -1571,6 +1626,7 @@ If you don't know how to proceed:
             for msg in self.conversation.messages:
                 for name, path in (msg.get('_attachment_refs') or {}).items():
                     self._explicit_attachment_refs[name] = path
+            self._coalesce_context()
         finally:
             self._suspend_persistence = False
 
@@ -1644,7 +1700,7 @@ If you don't know how to proceed:
         thinking = getattr(self, 'thinking_message', 'Thinking...')
 
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+O = transcript | Esc Esc = rewind | Ctrl+C = interrupt | Ctrl+D = quit[/dim]")
-        startup_commands = "Commands: /repl, /rewind, /condense, /resume [session_id], /fork [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens"
+        startup_commands = "Commands: /repl, /rewind, /resume [session_id], /fork [session_id], /skills [name], /subagents [model], /attach <file>, /detach <file>, /attachments, /model [name], /tokens"
         startup_help = f"[dim]{startup_commands}[/dim]"
         self.console.print(startup_help)
 
@@ -1711,7 +1767,8 @@ If you don't know how to proceed:
                 if user_input.strip() == "/repl":
                     self._display_input_block(user_input)
                     try:
-                        self.user_repl_session(history)
+                        if self.user_repl_session(history):
+                            self._coalesce_context()
                     except Exception as e:
                         print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
                     continue
@@ -1740,32 +1797,6 @@ If you don't know how to proceed:
                     elif rewind_shortcut:
                         sys.stdout.write("\x1b[1A\r\x1b[K")
                         sys.stdout.flush()
-                    continue
-
-                if user_input.strip() == "/condense":
-                    self._display_input_block(user_input)
-                    before_messages = len(self.conversation.messages)
-                    before_chars = sum(len(m.get("content") or "") for m in self.conversation.messages)
-                    old_session_id = self._session_id
-
-                    try:
-                        new_session_id = self.condense_session()
-                    except Exception as e:
-                        self._display_text(f"{DIM}Condense failed: {type(e).__name__}: {e}{RESET}", kind="status")
-                        continue
-
-                    if new_session_id:
-                        after_messages = len(self.conversation.messages)
-                        after_chars = sum(len(m.get("content") or "") for m in self.conversation.messages)
-                        self._display_text(
-                            f"{DIM}Condensed session: {before_messages}  {after_messages} messages, "
-                            f"{before_chars/1000:.1f}K  {after_chars/1000:.1f}K chars{RESET}",
-                            kind="status",
-                        )
-                        self._display_text(f"{DIM}New session: {new_session_id}{RESET}", kind="status")
-                        self._display_text(f"{DIM}Previous session: {old_session_id}{RESET}", kind="status")
-                    else:
-                        self._display_text(f"{DIM}Condense failed.{RESET}", kind="status")
                     continue
 
                 if user_input.strip().startswith("/resume"):
@@ -1994,6 +2025,8 @@ If you don't know how to proceed:
                     print(f"\n{DIM}Error: {type(e).__name__}: {e}{RESET}", file=sys.stderr)
                     continue
 
+                self._coalesce_context()
+
                 self.console.clear_line()  # Clear thinking message
 
                 # Close Python block if we had output
@@ -2037,9 +2070,41 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
     Inherits web_fetch and web_search from JinaMixin.
     """
 
+    def _last_pinnable_turn(self):
+        for msg in reversed(self.conversation.messages):
+            if msg.get("role") != "assistant" or msg.get("_synthetic"):
+                continue
+            return msg
+        return None
+
+    @REPLAgent.tool
+    def pin(self):
+        """Pin the immediately previous completed assistant turn for preview expansion after coalescing."""
+        turn = self._last_pinnable_turn()
+        if turn is None:
+            return "No previous turn to pin."
+        turn["_pinned_coalesce"] = {"label": "Pinned previous turn"}
+        event_seq = turn.get("_event_seq")
+        if event_seq is not None:
+            old_suspend = getattr(self, "_suspend_persistence", False)
+            try:
+                self._suspend_persistence = True
+                self._ensure_live_session()
+            finally:
+                self._suspend_persistence = old_suspend
+            self._append_session_event(
+                "message_pinned",
+                {"message_event_seq": event_seq, "label": "Pinned previous turn"},
+            )
+        else:
+            self._persist_message(turn)
+        return "Pinned previous turn for coalescing."
+
+
     mcp_servers = []
 
-    _preview_counter = 0  # Shared counter for _vN variable names
+    _preview_counter = 0  # Kept for backwards-compatible instance state.
+
 
     @REPLAgent.tool(inject=True)
     def think(self, content: str = "All relevant observations and reasoning"):
@@ -2051,71 +2116,13 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         """
         return "[Continuing...]"
 
-    @REPLAgent.tool(inject=True)
-    def preview(self, value: object = "Value to preview"):
-        """Print a value, using an expandable PreviewRef only for long values.
-
-        Non-strings are previewed via repr(value). Short values are emitted
-        directly. Long values print a collapsed PreviewRef block that can be
-        expanded with view(session_uri).
-        """
-
-        if not isinstance(value, str):
-            value = repr(value)
-
-        origin_path = getattr(value, "_agentlib_full_file_read_path", None)
-        value = str(value)
-
-        lines = value.split('\n')
-        nlines = len(lines)
-        nchars = len(value)
-        if nlines <= 20 and nchars <= 2000:
-            _send_output("preview", value.rstrip('\n') + "\n")
-            return
-
-        key = __import__("hashlib").sha256(value.encode("utf-8")).hexdigest()[:16]
-        uri = f"session://preview/{key}"
-        import json as _json
-        global _request_id
-        _request_id += 1
-        _req_id = _request_id
-        _send_tool_request(_json.dumps({
-            "tool": "__preview_blob_save__",
-            "args": {"key": key, "content": value, "origin_path": origin_path},
-            "request_id": _req_id,
-        }))
-        _wait_for_ack(_req_id)
+    # preview() is intentionally not exposed: large output is auto-previewed.
 
 
-        def _render_preview_line(line):
-            MAX_PREVIEW_LINE = 500
-            if len(line) <= MAX_PREVIEW_LINE:
-                return line
-            return f"{line[:MAX_PREVIEW_LINE]}... [line truncated, {len(line)} chars total]"
-
-        HEAD = 8
-        TAIL = 4
-        head_indexes = list(range(min(HEAD, nlines)))
-        tail_start = max(len(head_indexes), nlines - TAIL)
-        omitted = nlines - len(head_indexes) - (nlines - tail_start)
-
-        parts = [f"({nlines} lines, {nchars} chars)"]
-        parts.extend(_render_preview_line(lines[i]) for i in head_indexes)
-        if omitted:
-            parts.append(f"  ... ({omitted} lines omitted)")
-        parts.extend(_render_preview_line(lines[i]) for i in range(tail_start, nlines))
-        body = "\n".join(parts)
-        rendered = f"[PreviewRef: {uri}]\n{body}\n[/PreviewRef]"
-
-
-        _send_output("preview", rendered.rstrip('\n') + "\n")
-
-
-    # Target tool names whose bare expressions get rewritten to assignment + preview
-    _preview_targets = frozenset({'grep', 'bash', 'read'})
 
     def preprocess_code(self, code: str) -> str:
-        """Apply base preprocessing then rewrite bare tool calls to assignment + preview."""
+        """Apply base preprocessing and CodeAgent-specific file/context rewrites."""
+
         if getattr(self, '_in_user_repl', False):
             return code
 
@@ -2123,7 +2130,6 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
 
         code, self._preview_counter = preprocess_code_agent(
             code,
-            preview_targets=self._preview_targets,
             preview_counter=getattr(self, '_preview_counter', 0),
             preview_origins=getattr(self, '_preview_full_file_origins', {}),
         )
@@ -2312,10 +2318,24 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         if numbered is None:
             numbered = not is_preview_uri
         path = Path(file_path).expanduser()
+        if not is_preview_uri and offset is None and limit is None:
+            import json as _json
+            global _request_id
+            _request_id += 1
+            _context_req_id = _request_id
+            _send_tool_request(_json.dumps({
+                "tool": "__line_patch_is_attached__",
+                "args": {"path": file_path},
+                "request_id": _context_req_id,
+            }))
+            if _wait_for_ack(_context_req_id):
+                _send_output(
+                    "output",
+                    "\nNotice: file was already in context. Calling view() on files that are already in context is wasteful.\n\n",
+                )
         if is_preview_uri:
             key = file_path[len(prefix):]
             import json as _json
-            global _request_id
             _request_id += 1
             _req_id = _request_id
             _send_tool_request(_json.dumps({
@@ -2775,13 +2795,13 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             Use the returned handle directly instead of polling with ps/kill:
 
                 proc.wait(timeout=1800)
-                preview(proc.output)
+                print(proc.output)
 
             For incremental monitoring:
 
                 chunk = proc.read(timeout=30)
                 if chunk:
-                    preview(chunk)
+                    print(chunk)
 
             Attributes:
                 pid: Process group id.

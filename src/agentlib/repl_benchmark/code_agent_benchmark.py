@@ -166,11 +166,12 @@ class CodeAgentBenchmarkContext:
 
     def first_tool_offset(self) -> int:
         positions = []
-        for tool_name in ("grep", "read", "view", "preview", "bash"):
-            idx = self.output.find(f">>> {tool_name}(")
+        for tool_name in ("grep", "read", "view", "bash"):
+            idx = self.tool_offset(tool_name)
             if idx != -1:
                 positions.append(idx)
         return min(positions) if positions else -1
+
 
     def final_answer_offset(self) -> int:
         line = self.final_line
@@ -871,11 +872,11 @@ CODE_AGENT_TASKS = [
         tags=("code-agent", "multi-turn"),
     ),
     CodeAgentBenchmarkTask(
-        id="code-agent/tool-discipline-preview-target-count",
-        prompt="Without using bash to invoke python, inspect src/agentlib/agents/code_agent.py and emit only the number of tool names in _preview_targets.",
+        id="code-agent/tool-discipline-grep-session-var-count",
+        prompt="Without using bash to invoke python, inspect src/agentlib/agents/code_agent.py and emit only the number of grep() method definitions in CodeAgent.",
         description="Penalizes weak tool use like bash('python ...') for local inspection.",
         checker=make_code_agent_checker(
-            expected_final="3",
+            expected_final="1",
             required_tools=("read",),
             max_turns=30,
             forbid_bash_python=True,

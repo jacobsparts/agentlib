@@ -128,6 +128,14 @@ def replay_session_into_agent(agent, session_id: str, store):
                     del attachments[name]
                     if not attachments:
                         del msg["_attachments"]
+        elif event_type == "message_pinned":
+            target_seq = payload.get("message_event_seq")
+            for msg in reversed(messages):
+                if msg.get("_event_seq") == target_seq:
+                    msg["_pinned_coalesce"] = {
+                        "label": payload.get("label") or "Pinned previous turn"
+                    }
+                    break
         elif event_type == "preview_expanded":
             uri = payload.get("uri")
             if uri:

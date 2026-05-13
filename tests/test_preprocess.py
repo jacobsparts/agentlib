@@ -6,7 +6,9 @@ import re
 from pathlib import Path
 
 from agentlib.agents.code_agent import CodeAgent
+from agentlib.session_store import SessionStore
 from agentlib import SandboxMixin
+
 from agentlib.preprocess import (
     _close_unclosed_string,
     _comment_leading_non_code_prefix,
@@ -802,38 +804,27 @@ class TestCodeAgentPreprocessCode:
         assert same_ast(
             r,
             'fail = read("session://preview/abc123")\n'
-            'view("session://preview/abc123")',
+            'print(fail)',
         )
 
-    def test_bare_bash_gets_assigned_and_previewed(self):
+
+    def test_bare_bash_left_alone(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
         r = agent.preprocess_code('bash("echo hi")')
-        assert same_ast(r, 'preview(_bash1 := bash("echo hi"))')
+        assert same_ast(r, 'bash("echo hi")')
 
-    def test_bare_background_bash_gets_assigned_only(self):
+    def test_bare_background_bash_left_alone(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
         r = agent.preprocess_code('bash("sleep 10", bg=True)')
-        assert same_ast(r, '_bash1 = bash("sleep 10", bg=True)')
+        assert same_ast(r, 'bash("sleep 10", bg=True)')
 
-    def test_print_bash_gets_assigned_and_previewed(self):
+    def test_print_bash_left_alone(self):
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
         r = agent.preprocess_code('print(bash("echo hi"))')
-        assert same_ast(r, 'preview(_bash1 := bash("echo hi"))')
-
-    def test_preview_bash_gets_assigned_and_previewed(self):
-        CodeAgent._preview_counter = 0
-        agent = CodeAgent()
-        r = agent.preprocess_code('preview(bash("echo hi"))')
-        assert same_ast(r, 'preview(_bash1 := bash("echo hi"))')
-
-    def test_preview_background_bash_gets_assigned_only(self):
-        CodeAgent._preview_counter = 0
-        agent = CodeAgent()
-        r = agent.preprocess_code('preview(bash("sleep 10", bg=True))')
-        assert same_ast(r, '_bash1 = bash("sleep 10", bg=True)')
+        assert same_ast(r, 'print(bash("echo hi"))')
 
     def test_assigned_bash_left_alone(self):
         CodeAgent._preview_counter = 0
@@ -841,71 +832,48 @@ class TestCodeAgentPreprocessCode:
         r = agent.preprocess_code('proc = bash("sleep 10", bg=True)')
         assert same_ast(r, 'proc = bash("sleep 10", bg=True)')
 
-    def test_preview_accepts_non_string_values(self, monkeypatch):
-        sent = []
-        requests = []
-        import agentlib.agents.code_agent as code_agent
-        monkeypatch.setattr(code_agent, "_send_output", lambda msg_type, chunk: sent.append((msg_type, chunk)), raising=False)
-        monkeypatch.setattr(code_agent, "_send_tool_request", lambda msg: requests.append(json.loads(msg)), raising=False)
 
+    def test_auto_preview_small_value_outputs_direct_context(self, tmp_path):
         agent = CodeAgent()
-        agent.preview({"pid": 123})
+        agent._ensure_setup()
+        agent._session_store = SessionStore(str(tmp_path / "sessions.db"))
+        agent._session_id = None
+        agent.auto_preview_turn_chars = 1000
 
-        assert sent == [("preview", "{'pid': 123}\n")]
-        assert requests == []
 
-    def test_preview_small_value_outputs_direct_context(self, monkeypatch):
-        sent = []
-        requests = []
-        import agentlib.agents.code_agent as code_agent
-        monkeypatch.setattr(code_agent, "_send_output", lambda msg_type, chunk: sent.append((msg_type, chunk)), raising=False)
-        monkeypatch.setattr(code_agent, "_send_tool_request", lambda msg: requests.append(json.loads(msg)), raising=False)
+        assert agent._auto_preview_output("small value\n") == "small value\n"
 
+    def test_auto_preview_caps_long_lines(self, tmp_path):
         agent = CodeAgent()
-        agent.preview("small value")
+        agent._ensure_setup()
+        agent._session_store = SessionStore(str(tmp_path / "sessions.db"))
+        agent._session_id = None
 
-        assert sent == [("preview", "small value\n")]
-        assert requests == []
+        agent.auto_preview_turn_chars = 1000
 
+        output = agent._auto_preview_output("x" * 2500,)
 
-
-    def test_preview_caps_long_lines(self, monkeypatch):
-        sent = []
-        import agentlib.agents.code_agent as code_agent
-        monkeypatch.setattr(code_agent, "_send_output", lambda msg_type, chunk: sent.append((msg_type, chunk)), raising=False)
-        monkeypatch.setattr(code_agent, "_send_tool_request", lambda msg: None, raising=False)
-        monkeypatch.setattr(code_agent, "_wait_for_ack", lambda req_id: True, raising=False)
-        monkeypatch.setattr(code_agent, "_request_id", 0, raising=False)
-
-        agent = CodeAgent()
-        agent.preview("x" * 2500)
-
-        assert len(sent) == 1
-        msg_type, output = sent[0]
-        assert msg_type == "preview"
         assert "x" * 501 not in output
         assert "... [line truncated, 2500 chars total]" in output
         assert "[PreviewRef: session://preview/" in output
         assert "[/PreviewRef]" in output
 
-
-    def test_preview_deduplicates_overlapping_head_tail_lines(self, monkeypatch):
-        sent = []
-        import agentlib.agents.code_agent as code_agent
-        monkeypatch.setattr(code_agent, "_send_output", lambda msg_type, chunk: sent.append((msg_type, chunk)), raising=False)
-        monkeypatch.setattr(code_agent, "_send_tool_request", lambda msg: None, raising=False)
-        monkeypatch.setattr(code_agent, "_wait_for_ack", lambda req_id: True, raising=False)
-        monkeypatch.setattr(code_agent, "_request_id", 0, raising=False)
-
+    def test_auto_preview_deduplicates_overlapping_head_tail_lines(self, tmp_path):
         agent = CodeAgent()
-        value = "\n".join([f"line {i}" for i in range(10)]) + ("x" * 2000)
-        agent.preview(value)
+        agent._ensure_setup()
+        agent._session_store = SessionStore(str(tmp_path / "sessions.db"))
+        agent._session_id = None
 
-        output = sent[0][1]
+        agent.auto_preview_turn_chars = 1000
+
+        value = "\n".join([f"line {i}" for i in range(10)]) + ("x" * 2000)
+        output = agent._auto_preview_output(value)
+
         assert output.count("line 6") == 1
         assert output.count("line 7") == 1
         assert output.count("line 8") == 1
         assert "... (0 lines omitted)" not in output
+
 
     def test_view_assignment_rejected(self):
         CodeAgent._preview_counter = 0
@@ -925,53 +893,60 @@ class TestCodeAgentPreprocessCode:
             'raise ValueError("view() is a display tool, not a value. Use read() for file contents as text.")',
         )
 
-    def test_preview_uri_from_full_file_read_preprocessed_to_original_file_across_turns(self, tmp_path):
+    def test_auto_preview_from_full_file_read_stays_preview_blob(self, tmp_path):
         target = tmp_path / "long.md"
         target.write_text("\n".join(f"line {i}" for i in range(400)))
         name = str(target)
         agent = CodeAgent()
         agent._ensure_setup()
         agent.complete = False
+        agent.auto_preview_turn_chars = 1000
+
         repl = agent._get_tool_repl()
         try:
             output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
                 repl,
-                f"content = read({name!r})\npreview(content)",
+                f"content = read({name!r})\nprint(content)",
             )
             assert pure_syntax_error is False
-            match = re.search(r"session://preview/[0-9a-f]+", output)
+            llm_output = agent.build_output_for_llm(output_chunks)
+            match = re.search(r"session://preview/[0-9a-f]+", llm_output)
             assert match is not None
             uri = match.group(0)
 
             processed = agent.preprocess_code(f"view({uri!r})")
-            assert processed == f"view({name!r})"
+            assert processed == f"view({uri!r})"
 
             output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
                 repl,
                 f"view({uri!r})",
             )
             assert pure_syntax_error is False
-            assert f">>> view({name!r})" in output
-            assert uri not in output
+            llm_output = agent.build_output_for_llm(output_chunks)
+
+            assert f"Expanded preview: {uri}" in llm_output
+            assert agent._expanded_preview_refs == {uri: {"numbered": False}}
+
         finally:
             repl.close()
 
-
-    def test_preview_uri_from_transformed_file_read_stays_preview_blob(self, tmp_path):
+    def test_auto_preview_from_transformed_file_read_stays_preview_blob(self, tmp_path):
         target = tmp_path / "long.md"
         target.write_text("\n".join(f"line {i}" for i in range(400)))
         name = str(target)
         agent = CodeAgent()
         agent._ensure_setup()
         agent.complete = False
+        agent.auto_preview_turn_chars = 1000
         repl = agent._get_tool_repl()
         try:
             output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
                 repl,
-                f"content = read({name!r})[:5000]\npreview(content)",
+                f"content = read({name!r})[:5000]\nprint(content)",
             )
             assert pure_syntax_error is False
-            match = re.search(r"session://preview/[0-9a-f]+", output)
+            llm_output = agent.build_output_for_llm(output_chunks)
+            match = re.search(r"session://preview/[0-9a-f]+", llm_output)
             assert match is not None
             uri = match.group(0)
 
@@ -989,6 +964,7 @@ class TestCodeAgentPreprocessCode:
 
         finally:
             repl.close()
+
 
     def test_attached_file_matches_absolute_written_path(self, tmp_path):
         target = tmp_path / "file.py"
