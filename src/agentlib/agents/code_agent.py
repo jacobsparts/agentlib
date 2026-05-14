@@ -933,7 +933,9 @@ If you accidentally view an irrelevant file, call unview(file_path) to
 remove it from future context.
 
 When files change, previous full views stay up to date automatically.
-Re-view a file only when you need to inspect it again.
+Re-view a file only when you need to inspect it again. A collapsed display of a
+past view() command does not remove the viewed file from context; only
+unview(path_or_uri) does that.
 
 Large output is automatically collapsed to a session://preview/... URI. Use
 print(...) to inspect command output or computed text. For PreviewRefs, if the
@@ -945,8 +947,8 @@ or the preview is too large to safely expand.
 
 REPL output may become a preview after three user interactions. If the most
 recent completed turn should remain in context long-term, call pin(). pin() is
-only for the previous turn; it cannot pin the current turn or other historical
-turns.
+only for the previous turn; it cannot pin the current turn, other historical
+turns, viewed files, or expanded previews.
 
 If you see "Context window is near capacity", reduce active context by calling
 unview(path_or_uri) on no-longer-needed files or expanded previews.
