@@ -4,7 +4,8 @@
 import ast
 
 _INVALID_VIEW_MESSAGE = "view() is a display tool, not a value. Use read() for file contents as text."
-_DIRECT_READ_WARNING = "Direct file reads bypass code_agent context tools; prefer read() for file contents or view() for inspection."
+_DIRECT_READ_WARNING = "Direct or partial file reads bypass file inspection tools. Prefer full view(file_path) for inspection; use read(file_path) only when you need a Python string value."
+
 
 
 def preprocess_code_agent(
@@ -31,6 +32,15 @@ def preprocess_code_agent(
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id in names
+        )
+
+    def _is_read_text_call(node):
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "read_text"
+            and not node.args
+            and not node.keywords
         )
 
 
@@ -90,6 +100,7 @@ def preprocess_code_agent(
         if func.attr == "read_text" and not node.args:
             return _path_constructor_arg(func.value)
 
+
         if func.attr != "read" or node.args:
             return None
 
@@ -110,9 +121,11 @@ def preprocess_code_agent(
         if isinstance(node, ast.Call):
             if _direct_read_path(node) is not None:
                 return True
+            if _is_read_text_call(node):
+                return True
             if (
                 isinstance(node.func, ast.Attribute)
-                and node.func.attr in {"read_text", "read_bytes", "open"}
+                and node.func.attr in {"read_bytes", "open"}
                 and _is_any_path_constructor_call(node.func.value)
             ):
                 return True
@@ -188,13 +201,7 @@ def preprocess_code_agent(
 
             if _is_named_call(node.value, "print") and len(node.value.args) == 1 and not node.value.keywords:
                 inner = node.value.args[0]
-                if (
-                    isinstance(inner, ast.Call)
-                    and isinstance(inner.func, ast.Attribute)
-                    and inner.func.attr == "read_text"
-                    and not inner.args
-                    and not inner.keywords
-                ):
+                if _is_read_text_call(inner):
                     receiver = _source(inner.func.value)
                     if receiver is not None:
                         all_rewrites.append((start, end, [f"{indent}view({receiver})"]))

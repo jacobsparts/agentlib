@@ -758,9 +758,34 @@ class TestCodeAgentPreprocessCode:
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
         r = agent.preprocess_code('print(Path("README.md").read_text()[:4000])')
-        assert 'Direct file reads bypass code_agent context tools' in r
+        assert 'Direct or partial file reads bypass file inspection tools' in r
+
         assert 'print(Path("README.md").read_text()[:4000])' in r
         assert compiles(r)
+    def test_print_sliced_dynamic_path_read_text_gets_warning(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('print((dest_dir / "README.md").read_text()[:1200])')
+        assert 'Direct or partial file reads bypass file inspection tools' in r
+        assert 'print((dest_dir / "README.md").read_text()[:1200])' in r
+        assert compiles(r)
+
+    def test_print_sliced_variable_path_read_text_gets_warning(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('print(filename.read_text()[:1200])')
+        assert 'Direct or partial file reads bypass file inspection tools' in r
+        assert 'print(filename.read_text()[:1200])' in r
+        assert compiles(r)
+
+    def test_assignment_variable_path_read_text_gets_warning(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('content = filename.read_text()')
+        assert 'Direct or partial file reads bypass file inspection tools' in r
+        assert 'content = filename.read_text()' in r
+        assert compiles(r)
+
 
     def test_bare_path_read_text_becomes_view(self):
         CodeAgent._preview_counter = 0
@@ -790,7 +815,8 @@ class TestCodeAgentPreprocessCode:
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
         r = agent.preprocess_code('content = Path(filename).read_text()')
-        assert 'Direct file reads bypass code_agent context tools' in r
+        assert 'Direct or partial file reads bypass file inspection tools' in r
+
         assert 'content = Path(filename).read_text()' in r
         assert compiles(r)
 

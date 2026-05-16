@@ -2395,7 +2395,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
         if not is_preview_uri and is_partial and (path.suffix in source_extensions or path.name in source_names):
             _send_output(
                 "output",
-                "\nNotice: partial view of source/documentation file. Prefer full view(file_path) for source inspection. If the file is too large or not relevant, call unview(path_or_uri) on a later turn to remove it from future context.\n\n",
+                "\nNotice: Direct or partial file reads bypass file inspection tools. Prefer full view(file_path) for inspection; use read(file_path) only when you need a Python string value.\n\n",
             )
 
         start = (offset or 1) - 1
