@@ -624,11 +624,9 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             if msg_type == "read" and partial_read_path:
                 path = partial_read_path
                 partial_read_path = None
-                if self._is_attached(path):
-                    statement.append(f"ValueError: Partial view denied for file already in context. Call view() without offset or limit to reload the file, or call unview({path!r}) to remove it from future context and enable partial views.\n")
-                    continue
                 statement.append(chunk)
                 continue
+
             if msg_type == "file_written":
                 written_files.append(chunk.strip())
                 continue
@@ -923,11 +921,12 @@ view("file.py") is for inspecting code with line numbers:
 - Do not repeatedly call partial view(..., offset=..., limit=...) on the
   same normal-sized file.
 
-Use partial view(..., offset=..., limit=...) only when:
-- the file is genuinely huge, minified, generated, or vendored, or
-- you already have the full file in context and need a very narrow line-number
-  check, or
-- the user explicitly asks for a small line range.
+Partial views of source files emit a warning because full view(file_path) is
+usually better for source inspection. If the file is too large or not relevant,
+call unview(path_or_uri) on a later turn to remove it from future context.
+
+
+
 
 If you accidentally view an irrelevant file, call unview(file_path) to
 remove it from future context.
@@ -947,7 +946,7 @@ or the preview is too large to safely expand.
 
 REPL output may become a preview after three user interactions. If the most
 recent completed turn should remain in context long-term, call pin(). pin() is
-only for the previous turn; it cannot pin the current turn, other historical
+only for the previous turn; it cannot pin the current turn or other historical
 turns, viewed files, or expanded previews.
 
 If you see "Context window is near capacity", reduce active context by calling
@@ -2239,6 +2238,9 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             lines = read("file.py").splitlines()
             snippet = read("file.py", offset=100, limit=20)
 
+        Path-like objects are accepted for filesystem paths:
+            content = read(Path("file.py"))
+
         Long preview() output is saved to a session://preview/... URI:
             full_output = read("session://preview/abc123")
 
@@ -2247,7 +2249,11 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             view("file.py", offset=100, limit=20)
             view("session://preview/abc123", offset=100, limit=20)
         """
+        import os
+        if not isinstance(file_path, str):
+            file_path = os.fspath(file_path)
         prefix = "session://preview/"
+
         if isinstance(file_path, str) and file_path.startswith(prefix):
             key = file_path[len(prefix):]
             import json as _json
@@ -2286,8 +2292,7 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             file_path: str = "Path to the file",
             offset: Optional[int] = "Line number to start from (1-indexed)",
             limit: Optional[int] = "Number of lines to read (default: 5000)",
-            numbered: Optional[bool] = "Number output lines. Defaults true for files, false for full preview URIs.",
-            **kwargs
+            numbered: Optional[bool] = "Number output lines. Defaults true for files, false for full preview URIs."
         ):
 
         """Display a file or session://preview/... URI with line numbers.
@@ -2309,11 +2314,6 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             content = read("file.py")
             full_output = read("session://preview/abc123")
         """
-        unexpected_kwargs = set(kwargs) - {"_force_partial"}
-        if unexpected_kwargs:
-            unexpected = ", ".join(sorted(unexpected_kwargs))
-            raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
-        force_partial = bool(kwargs.get("_force_partial", False))
         import os
         if not isinstance(file_path, str):
             file_path = os.fspath(file_path)
@@ -2392,16 +2392,10 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             "Podfile", "Brewfile", "Justfile", "Taskfile", "Jenkinsfile",
             "BUILD", "WORKSPACE", "CMakeLists.txt",
         }
-        if not is_preview_uri and is_partial and not force_partial and (path.suffix in source_extensions or path.name in source_names):
-            raise ValueError(
-                "Partial view denied for source file. Prefer one full "
-                "view(file_path) when inspecting normal source files you may "
-                "need to reason about or edit across turns; use partial views only "
-                "for genuinely huge, generated, vendored, or minified files, or "
-                "for narrow line-number checks after the full file is already in "
-                "context. To override this denial when a partial view is truly "
-                "appropriate, call view(file_path, offset=..., limit=..., "
-                "_force_partial=True)."
+        if not is_preview_uri and is_partial and (path.suffix in source_extensions or path.name in source_names):
+            _send_output(
+                "output",
+                "\nNotice: partial view of source/documentation file. Prefer full view(file_path) for source inspection. If the file is too large or not relevant, call unview(path_or_uri) on a later turn to remove it from future context.\n\n",
             )
 
         start = (offset or 1) - 1
