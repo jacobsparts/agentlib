@@ -7,7 +7,6 @@ from pathlib import Path
 
 from agentlib.agents.code_agent import CodeAgent
 from agentlib.session_store import SessionStore
-from agentlib import SandboxMixin
 
 from agentlib.preprocess import (
     _close_unclosed_string,
@@ -1518,35 +1517,6 @@ TWO\""")""",
 
         assert output == "    1→content\n    2→\n"
         assert agent._read_attachments == {}
-
-    def test_sandboxed_unview_via_repl_does_not_raise_send_output(self, tmp_path):
-        target = tmp_path / "file.py"
-        target.write_text("content\n")
-        name = str(target)
-
-        class SandboxedCodeAgent(SandboxMixin, CodeAgent):
-            sandbox_target = str(tmp_path)
-
-        agent = SandboxedCodeAgent()
-        try:
-            agent._ensure_setup()
-            agent.complete = False
-            agent.conversation.usermsg(
-                f"[Attachment: {name}]",
-                _attachments={name: "    1→content\n    2→"},
-            )
-            repl = agent._get_tool_repl()
-            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
-                repl,
-                f"unview({name!r})",
-            )
-
-            assert pure_syntax_error is False
-            assert "_send_output" not in output
-            assert any("Removed from future context" in chunk for _, chunk in output_chunks)
-            assert name not in agent.list_attachments()
-        finally:
-            agent._cleanup()
 
 
 

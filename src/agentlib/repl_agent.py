@@ -119,10 +119,9 @@ def _is_optional_annotation(annotation: Any) -> bool:
 
 
 # =============================================================================
-# Shared REPL builtins code (used by both ToolREPL and SandboxedToolREPL)
+# Shared REPL builtins code
 # =============================================================================
-# These functions are injected into the subprocess. They rely on transport-specific
-# implementations of _send_output() being injected first.
+
 
 BUILTINS_CODE = '''
 # Request ID counter for matching requests with responses
@@ -208,12 +207,6 @@ def _recv_tool_response():
     return _tool_response_queue.get()
 '''
 
-# Socket-based transport for SandboxedToolREPL (adds _send_output only;
-# _send_tool_request and _recv_tool_response are defined separately due to complexity)
-SOCKET_SEND_OUTPUT_CODE = '''
-def _send_output(msg_type, data):
-    _send_msg(_sock, (msg_type, data))
-'''
 
 
 class _StreamingWriter:
@@ -675,53 +668,6 @@ def {name}({sig}):
 '''
 
 
-def _generate_socket_relay_stub(name: str, impl: Optional[Callable], spec: Any) -> str:
-    """Generate relay stub using socket transport (for SandboxedToolREPL)."""
-    sig, doc, args = _extract_stub_signature(name, impl, spec)
-
-    # Check for files_param marker - adds path-to-bytes conversion
-    files_param = getattr(impl, '_tool_files_param', None) if impl else None
-    preprocess = ""
-    if files_param:
-        preprocess = f'''
-    # Convert file paths to bytes
-    def _read_file(f):
-        if isinstance(f, bytes):
-            return f
-        p = Path(f).expanduser()
-        if not p.exists():
-            raise FileNotFoundError(f"File not found: {{f}}")
-        return p.read_bytes()
-    if isinstance({files_param}, list):
-        {files_param} = [_read_file(f) for f in {files_param}]
-    elif isinstance({files_param}, str):
-        {files_param} = [_read_file({files_param})]
-'''
-
-    return f'''
-def {name}({sig}):
-    """{doc}"""
-    {preprocess}
-    global _request_id
-    _request_id += 1
-    _req_id = _request_id
-
-    def _serialize(x):
-        if isinstance(x, bytes):
-            import base64
-            return {{"__b64__": base64.b64encode(x).decode()}}
-        if isinstance(x, (list, tuple)):
-            return [_serialize(i) for i in x]
-        if isinstance(x, dict):
-            return {{k: _serialize(v) for k, v in x.items()}}
-        return x
-
-    _args = {args}
-    _safe_args = {{k: _serialize(v) for k, v in _args.items()}}
-
-    _send_tool_request(_json.dumps({{"tool": "{name}", "args": _safe_args, "request_id": _req_id}}))
-    return _wait_for_ack(_req_id)
-'''
 
 
 def _type_to_str(type_hint: Any) -> str:
@@ -1012,13 +958,7 @@ Call help(function_name) for parameter descriptions.
                     except KeyboardInterrupt:
                         # User interrupted LLM call - subprocess may also have received SIGINT
                         # Wait briefly for subprocess to handle signal, then drain
-                        # Use poll_output if available (SandboxedToolREPL), else _output_queue (ToolREPL)
-                        if hasattr(repl, 'poll_output'):
-                            while True:
-                                msg = repl.poll_output(timeout=0.1)
-                                if msg is None or msg[0] == "done":
-                                    break
-                        elif hasattr(repl, '_output_queue'):
+                        if hasattr(repl, '_output_queue'):
                             while True:
                                 try:
                                     msg_type, _ = repl._output_queue.get(timeout=0.1)

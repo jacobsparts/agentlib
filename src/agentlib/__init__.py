@@ -17,7 +17,6 @@ from .jina_mixin import JinaMixin
 from .tavily_mixin import TavilyMixin
 from .attachment_mixin import AttachmentMixin
 from .repl_attachment_mixin import REPLAttachmentMixin
-from .sandbox import SandboxMixin, SandboxedToolREPL
 from .subagent import Subagent, SubagentError, SubagentResponse
 from .tools.subshell import SubShell, STILL_RUNNING
 from .tools.subrepl import SubREPL
@@ -46,8 +45,6 @@ __all__ = [
     "TavilyMixin",
     "AttachmentMixin",
     "REPLAttachmentMixin",
-    "SandboxMixin",
-    "SandboxedToolREPL",
     "Subagent",
     "SubagentError",
     "SubagentResponse",

@@ -21,7 +21,8 @@ import copy
 import re
 from typing import Optional
 from pathlib import Path
-from agentlib import REPLAgent, SandboxMixin, REPLAttachmentMixin, MCPMixin
+from agentlib import REPLAgent, REPLAttachmentMixin, MCPMixin
+
 from agentlib.cli import CLIMixin
 from agentlib.jina_mixin import JinaMixin
 from agentlib.llm_registry import ModelNotFoundError
@@ -1779,17 +1780,15 @@ If you don't know how to proceed:
         history = SQLiteHistory(history_path)
         session = InputSession(history, altmode=altmode)
 
-        # Display welcome banner with model and sandbox info
+        # Display welcome banner with model info
         welcome = getattr(self, 'welcome_message', '')
         if welcome:
-            # Add model and sandbox status
-            # Resolve alias to full name for display
             from agentlib.llm_registry import resolve_model_name
             full_model_name = resolve_model_name(self.model)
             model_name = full_model_name.split('/')[-1] if '/' in full_model_name else full_model_name
-            sandbox_status = "[green]sandbox[/green]" if SandboxMixin in type(self).__mro__ else "[dim]no sandbox[/dim]"
-            banner = f"{welcome}\n[dim]{model_name}[/dim] · {sandbox_status}"
+            banner = f"{welcome}\n[dim]{model_name}[/dim]"
             self.console.print(Panel.fit(banner, border_style="cyan"))
+
 
         prompt_str = getattr(self, 'cli_prompt', '> ')
         thinking = getattr(self, 'thinking_message', 'Thinking...')
@@ -3122,16 +3121,6 @@ Examples:
         help="Maximum turns per interaction (default from config or 100)"
     )
     parser.add_argument(
-        "--sandbox", "-s",
-        action="store_true",
-        help="Execute agent in a sandboxed filesystem and review changes or save diff"
-    )
-    parser.add_argument(
-        "--no-sandbox",
-        action="store_true",
-        help="Disable sandbox mode (overrides config default)"
-    )
-    parser.add_argument(
         "--resume", "-r",
         nargs="?",
         const=True,
@@ -3148,21 +3137,9 @@ Examples:
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    # Determine sandbox mode: flags override config default
-    use_sandbox = _get_config_value("code_agent_sandbox", False)
-    if args.sandbox:
-        use_sandbox = True
-    if args.no_sandbox:
-        use_sandbox = False
-
-    if use_sandbox:
-        class ConfiguredAgent(SandboxMixin, CodeAgent):
-            model = args.model
-            max_turns = args.max_turns
-    else:
-        class ConfiguredAgent(CodeAgent):
-            model = args.model
-            max_turns = args.max_turns
+    class ConfiguredAgent(CodeAgent):
+        model = args.model
+        max_turns = args.max_turns
 
     try:
         with ConfiguredAgent() as agent:

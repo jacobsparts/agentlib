@@ -2,7 +2,7 @@
 Subagent spawning for Code Agent.
 
 Spawn isolated Code Agent instances as subprocesses with socket communication.
-Reuses the socket protocol pattern from SandboxMixin.
+
 
 ## Quick Start
 
@@ -74,7 +74,7 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Socket protocol (shared with sandbox)
+# Socket protocol
 # ---------------------------------------------------------------------------
 
 def _send_msg(sock: socket.socket, data: Any):

@@ -136,8 +136,6 @@ class CodeAgentBenchmarkContext:
                 continue
             if any(line.startswith(prefix) for prefix in ignored_prefixes):
                 continue
-            if re.fullmatch(r".*· (?:sandbox|no sandbox)", line):
-                continue
             if re.match(r"^[\w/.-]+: In=\d+", line):
                 continue
             candidates.append(line)

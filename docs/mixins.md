@@ -525,35 +525,6 @@ class MyAgent(TavilyMixin, BaseAgent):
 - `include_domains` / `exclude_domains` - Domain filtering
 - `country` - Boost results from country (two-letter code)
 
-## SandboxMixin (Filesystem Isolation)
-
-Runs agent code in an isolated overlay filesystem. All writes go to a temporary layer; real filesystem unchanged until explicitly applied.
-
-**Linux only.** Requires user namespaces and gcc. See [sandbox.md](sandbox.md) for full documentation.
-
-```python
-from agentlib import SandboxMixin, CodeAgent
-
-class SandboxedAgent(SandboxMixin, CodeAgent):
-    sandbox_target = "/home/user"  # Optional, defaults to $HOME
-
-with SandboxedAgent() as agent:
-    agent.run("Create ~/test.txt")
-
-# Review changes
-print(agent.get_changed_files())
-
-# Apply to real filesystem
-agent.apply_changes()
-```
-
-**Methods:**
-- `get_tarball()` - Raw tarball bytes of all changes
-- `get_changed_files()` - Dict of `{path: content}`
-- `get_deleted_files()` - List of deleted paths
-- `apply_changes(target_dir=None)` - Apply to real filesystem
-- `discard_changes()` - No-op (changes already isolated)
-
 ## User Mixins (~/.agentlib/mixins/)
 
 Place personal mixins in `~/.agentlib/mixins/` to make them importable from any project. This directory is added to `sys.path` when agentlib is imported.

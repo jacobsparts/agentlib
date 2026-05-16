@@ -30,13 +30,6 @@
 | `attachment_mixin.py` | `AttachmentMixin` - persistent context files |
 | `repl_attachment_mixin.py` | `REPLAttachmentMixin` - attachments as REPL output |
 
-## Isolation
-
-| Module | Description |
-|--------|-------------|
-| `sandbox/__init__.py` | Sandbox utilities, helper compilation |
-| `sandbox/mixin.py` | `SandboxMixin`, `SandboxedToolREPL` - overlay filesystem isolation |
-
 ## CLI
 
 | Module | Description |
@@ -80,7 +73,6 @@ def mcp_tool(self, arg): ...
 | `_extract_tool_source()` | AST transform for `inject=True` tools |
 | `_extract_stub_signature()` | Shared signature extraction |
 | `_generate_tool_stub()` | Queue-based relay stub (ToolREPL) |
-| `_generate_socket_relay_stub()` | Socket-based relay stub (SandboxedToolREPL) |
 
 **Injection primitives:**
 
@@ -88,7 +80,6 @@ def mcp_tool(self, arg): ...
 |-------|------------------|-----------|
 | `SubREPL` | Base implementation | execute() with echo disabled |
 | `ToolREPL` | Override | Queue (direct to worker) |
-| `SandboxedToolREPL` | Override | Socket |
 
 `inject_startup(code_list)` calls `_inject_code()` for each item.
 
@@ -125,6 +116,5 @@ class DynamicAgent(REPLAgent):
 Supported by:
 - `REPLAgent` / `REPLMixin` (via ToolREPL)
 - `PythonToolMixin` (via SubREPL)
-- `SandboxMixin` (via SandboxedToolREPL)
 
 The startup code is injected silently (no output shown to agent).
