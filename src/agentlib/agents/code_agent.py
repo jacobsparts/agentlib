@@ -2314,6 +2314,9 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
             unexpected = ", ".join(sorted(unexpected_kwargs))
             raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
         force_partial = bool(kwargs.get("_force_partial", False))
+        import os
+        if not isinstance(file_path, str):
+            file_path = os.fspath(file_path)
 
         prefix = "session://preview/"
         is_preview_uri = isinstance(file_path, str) and file_path.startswith(prefix)

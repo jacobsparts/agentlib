@@ -1232,6 +1232,28 @@ TWO\""")""",
         assert preview_name not in agent._expanded_preview_refs
         assert preview_name in agent._pending_unviewed_files
 
+    def test_view_accepts_pathlike_file_path(self, tmp_path):
+        target = tmp_path / "file.py"
+        target.write_text("content\n")
+
+        agent = CodeAgent()
+        agent._ensure_setup()
+        agent.complete = False
+        repl = agent._get_tool_repl()
+        try:
+            output, pure_syntax_error, output_chunks, _ = agent._execute_with_tool_handling(
+                repl,
+                "from pathlib import Path\n"
+                f"view(Path({str(target)!r}))",
+            )
+
+            assert pure_syntax_error is False
+            llm_output = agent.build_output_for_llm(output_chunks)
+            assert f"[Attachment: {target}]" in llm_output
+            assert str(target) in agent._read_attachments
+        finally:
+            repl.close()
+
     def test_unview_pending_prevents_same_turn_reattach(self, tmp_path):
         target = tmp_path / "file.py"
         target.write_text("content\n")
