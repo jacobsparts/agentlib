@@ -607,12 +607,57 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         if estimated <= threshold:
             return None
         chars = len(content)
-        bytes_len = len(content.encode("utf-8"))
         return (
             f"ValueError: view({path!r}) denied because the file would exceed 90% "
-            f"of the model context window ({chars} chars, {bytes_len} bytes, "
+            f"of the model context window ({chars} chars, "
             f"projected {estimated:,}/{limit:,} tokens).\n"
         )
+
+    def _expanded_preview_context_error(self, uri: str, content: str, numbered: bool = False) -> str | None:
+        client = getattr(self, "llm_client", None)
+        model_config = getattr(client, "model_config", {}) or {}
+        limits = [
+            value for value in (
+                model_config.get("context_window"),
+                model_config.get("max_input_tokens"),
+            )
+            if value
+        ]
+        if not limits:
+            return None
+        limit = min(limits)
+        conversation = getattr(self, "_conversation", None)
+        if conversation is None:
+            return None
+        expanded = getattr(self, "_expanded_preview_refs", {})
+        old_options = expanded.get(uri)
+        rendered_content = numbered_content(content) if numbered else content
+        try:
+            expanded[uri] = {"numbered": bool(numbered)}
+            messages = [
+                {k: v for k, v in msg.items() if not k.startswith("_")}
+                for msg in conversation._messages()
+            ]
+            estimated = client._estimate_input_tokens(client._input_bytes(messages))
+        except Exception:
+            return None
+        finally:
+            if old_options is None:
+                expanded.pop(uri, None)
+            else:
+                expanded[uri] = old_options
+        if estimated is None:
+            return None
+        threshold = int(limit * 0.9)
+        if estimated <= threshold:
+            return None
+        chars = len(rendered_content)
+        return (
+            f"ValueError: view({uri!r}) denied because the preview would exceed 90% "
+            f"of the model context window ({chars} chars, "
+            f"projected {estimated:,}/{limit:,} tokens)."
+        )
+
 
 
     def _on_assistant_message_committed(self, message: dict):
@@ -2195,10 +2240,15 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                 if tool_name == '__preview_ref_expand__':
                     uri = args.get('uri')
                     if uri:
+                        content = self._preview_blob_content(uri)
+                        if content is not None:
+                            error = self._expanded_preview_context_error(uri, content, bool(args.get("numbered", False)))
+                            if error is not None:
+                                repl.send_reply(request_id, error=error)
+                                return
                         self._expanded_preview_refs[uri] = {"numbered": bool(args.get("numbered", False))}
                         self._append_session_event("preview_expanded", {"uri": uri, "numbered": bool(args.get("numbered", False))})
                     repl.send_reply(request_id, result=True)
-                    repl.send_ack(request_id)
                     return
                 if tool_name == '__preview_ref_collapse__':
                     uri = args.get('uri')
@@ -2206,11 +2256,9 @@ class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
                         self._expanded_preview_refs.pop(uri, None)
                         self._append_session_event("preview_collapsed", {"uri": uri})
                     repl.send_reply(request_id, result=True)
-                    repl.send_ack(request_id)
                     return
                 if tool_name == '__line_patch_is_attached__':
                     repl.send_reply(request_id, result=self._is_attached(args.get('path')))
-                    repl.send_ack(request_id)
                     return
                 if getattr(self, '_session_id', None) is None:
                     self._ensure_live_session()

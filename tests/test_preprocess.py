@@ -1384,6 +1384,118 @@ TWO\""")""",
         assert "ValueError: view('second.py') denied" in output
         assert "second.py" not in agent._read_attachments
         assert agent._read_attachments["first.py"] == "x" * 500
+    def test_preview_expansion_denied_when_projected_context_exceeds_90_percent(self):
+        uri = "session://preview/abc123"
+
+        class FakeClient:
+            model_config = {"context_window": 1000}
+
+            def _input_bytes(self, messages, tools=None):
+                return max(len(msg.get("content", "")) for msg in messages)
+
+            def _estimate_input_tokens(self, input_bytes):
+                return input_bytes
+
+        class FakeConversation:
+            messages = []
+
+            def _messages(self):
+                if uri in agent._expanded_preview_refs:
+                    return [{"role": "user", "content": "x" * 901}]
+                return [{"role": "user", "content": "small"}]
+
+        class FakeSessionStore:
+            def get_preview_blob(self, session_id, key):
+                return "x" * 901
+            def append_event(self, session_id, seq, event_type, payload):
+                pass
+
+
+        class FakeRepl:
+            def __init__(self):
+                self.replies = []
+                self.acks = []
+
+            def send_reply(self, request_id, result=None, error=None):
+                self.replies.append((request_id, result, error))
+
+            def send_ack(self, request_id):
+                self.acks.append(request_id)
+
+        agent = CodeAgent()
+        agent._llm_client = FakeClient()
+        agent._conversation = FakeConversation()
+        agent._expanded_preview_refs = {}
+        agent._session_id = "session"
+        agent._session_store = FakeSessionStore()
+        repl = FakeRepl()
+
+        agent._handle_tool_request(repl, {
+            "tool": "__preview_ref_expand__",
+            "args": {"uri": uri, "numbered": False},
+            "request_id": 1,
+        })
+
+        assert repl.replies[0][2] is not None
+        assert "ValueError: view('session://preview/abc123') denied" in repl.replies[0][2]
+        assert "preview would exceed 90%" in repl.replies[0][2]
+        assert "901 chars" in repl.replies[0][2]
+        assert uri not in agent._expanded_preview_refs
+
+    def test_preview_expansion_allowed_under_context_threshold(self):
+        uri = "session://preview/abc123"
+
+        class FakeClient:
+            model_config = {"context_window": 1000}
+
+            def _input_bytes(self, messages, tools=None):
+                return max(len(msg.get("content", "")) for msg in messages)
+
+            def _estimate_input_tokens(self, input_bytes):
+                return input_bytes
+
+        class FakeConversation:
+            messages = []
+
+            def _messages(self):
+                if uri in agent._expanded_preview_refs:
+                    return [{"role": "user", "content": "x" * 900}]
+                return [{"role": "user", "content": "small"}]
+
+        class FakeSessionStore:
+            def get_preview_blob(self, session_id, key):
+                return "x" * 900
+            def append_event(self, session_id, seq, event_type, payload):
+                pass
+
+        class FakeRepl:
+            def __init__(self):
+                self.replies = []
+                self.acks = []
+
+            def send_reply(self, request_id, result=None, error=None):
+                self.replies.append((request_id, result, error))
+
+            def send_ack(self, request_id):
+                self.acks.append(request_id)
+
+        agent = CodeAgent()
+        agent._llm_client = FakeClient()
+        agent._conversation = FakeConversation()
+        agent._expanded_preview_refs = {}
+        agent._session_id = "session"
+        agent._session_store = FakeSessionStore()
+        repl = FakeRepl()
+
+        agent._handle_tool_request(repl, {
+            "tool": "__preview_ref_expand__",
+            "args": {"uri": uri, "numbered": False},
+            "request_id": 1,
+        })
+
+        assert repl.replies[0] == (1, True, None)
+        assert agent._expanded_preview_refs[uri] == {"numbered": False}
+
 
 
     def test_unview_pending_prevents_same_turn_reattach(self, tmp_path):
