@@ -1292,6 +1292,99 @@ TWO\""")""",
             assert str(target) in agent._read_attachments
         finally:
             repl.close()
+    def test_full_view_attachment_denied_when_projected_context_exceeds_90_percent(self):
+        class FakeClient:
+            model_config = {"context_window": 1000}
+
+            def _input_bytes(self, messages, tools=None):
+                return max(len(msg.get("content", "")) for msg in messages)
+
+            def _estimate_input_tokens(self, input_bytes):
+                return input_bytes
+        class FakeConversation:
+            messages = []
+
+            def _messages(self):
+                return []
+
+
+        agent = CodeAgent()
+        agent._llm_client = FakeClient()
+        agent._conversation = FakeConversation()
+
+
+        output = agent.build_output_for_llm([
+            ("read_attach", "big.py\n"),
+            ("read", "x" * 901 + "\n"),
+        ])
+
+        assert "ValueError: view('big.py') denied" in output
+        assert "901 chars" in output
+        assert "projected 902/1,000 tokens" in output
+
+        assert "[Attachment: big.py]" not in output
+        assert agent._read_attachments == {}
+
+    def test_full_view_attachment_allowed_under_context_threshold(self):
+        class FakeClient:
+            model_config = {"context_window": 1000}
+
+            def _input_bytes(self, messages, tools=None):
+                return max(len(msg.get("content", "")) for msg in messages)
+
+            def _estimate_input_tokens(self, input_bytes):
+                return input_bytes
+
+        class FakeConversation:
+            messages = []
+
+            def _messages(self):
+                return []
+
+        agent = CodeAgent()
+        agent._llm_client = FakeClient()
+        agent._ensure_setup()
+        agent._conversation = FakeConversation()
+        output = agent.build_output_for_llm([
+            ("read_attach", "small.py\n"),
+            ("read", "x" * 899 + "\n"),
+        ])
+
+        assert output == "[Attachment: small.py]\n"
+        assert agent._read_attachments["small.py"] == "x" * 899
+
+    def test_full_view_attachment_budget_counts_same_turn_pending_attachments(self):
+        class FakeClient:
+            model_config = {"context_window": 1000}
+
+            def _input_bytes(self, messages, tools=None):
+                return max(len(msg.get("content", "")) for msg in messages)
+
+            def _estimate_input_tokens(self, input_bytes):
+                return input_bytes
+
+        class FakeConversation:
+            messages = []
+
+            def _messages(self):
+                return []
+
+        agent = CodeAgent()
+        agent._llm_client = FakeClient()
+        agent._conversation = FakeConversation()
+
+        output = agent.build_output_for_llm([
+            ("read_attach", "first.py\n"),
+            ("read", "x" * 500 + "\n"),
+            ("read_attach", "second.py\n"),
+            ("read", "y" * 450 + "\n"),
+        ])
+
+        assert "[Attachment: first.py]" in output
+        assert "ValueError: view('second.py') denied" in output
+        assert "second.py" not in agent._read_attachments
+        assert agent._read_attachments["first.py"] == "x" * 500
+
 
     def test_unview_pending_prevents_same_turn_reattach(self, tmp_path):
         target = tmp_path / "file.py"

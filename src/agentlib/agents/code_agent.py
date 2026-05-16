@@ -571,6 +571,50 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             return
         self._append_session_event("attachment_invalidated", {"name": name})
 
+    def _view_attachment_context_error(self, path: str, content: str, current_output: str = "") -> str | None:
+        client = getattr(self, "llm_client", None)
+        model_config = getattr(client, "model_config", {}) or {}
+        limits = [
+            value for value in (
+                model_config.get("context_window"),
+                model_config.get("max_input_tokens"),
+            )
+            if value
+        ]
+        if not limits:
+            return None
+        limit = min(limits)
+        conversation = getattr(self, "_conversation", None)
+        messages = []
+        if conversation is not None:
+            messages = [
+                {k: v for k, v in msg.items() if not k.startswith("_")}
+                for msg in conversation._messages()
+            ]
+        marker = f"[Attachment: {path}]"
+        prospective_content = current_output + marker + "\n"
+        for name, attachment in getattr(self, "_read_attachments", {}).items():
+            prospective_content = prospective_content.replace(f"[Attachment: {name}]", attachment)
+        prospective_content = prospective_content.replace(marker, content)
+        messages.append({"role": "user", "content": prospective_content})
+        try:
+            estimated = client._estimate_input_tokens(client._input_bytes(messages))
+        except Exception:
+            return None
+        if estimated is None:
+            return None
+        threshold = int(limit * 0.9)
+        if estimated <= threshold:
+            return None
+        chars = len(content)
+        bytes_len = len(content.encode("utf-8"))
+        return (
+            f"ValueError: view({path!r}) denied because the file would exceed 90% "
+            f"of the model context window ({chars} chars, {bytes_len} bytes, "
+            f"projected {estimated:,}/{limit:,} tokens).\n"
+        )
+
+
     def _on_assistant_message_committed(self, message: dict):
         self._persist_message(message)
 
@@ -617,8 +661,13 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 if path in unviewed_files:
                     result.append(self._auto_preview_output(chunk))
                     continue
+                content = chunk.rstrip('\n')
+                error = self._view_attachment_context_error(path, content, "".join(result))
+                if error is not None:
+                    result.append(error)
+                    continue
                 self._invalidate_attachment(path)
-                self._read_attachments[path] = chunk.rstrip('\n')
+                self._read_attachments[path] = content
                 result.append(f"[Attachment: {path}]\n")
                 continue
             if msg_type == "read" and partial_read_path:
