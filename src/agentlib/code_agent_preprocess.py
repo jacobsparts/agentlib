@@ -188,6 +188,17 @@ def preprocess_code_agent(
 
             if _is_named_call(node.value, "print") and len(node.value.args) == 1 and not node.value.keywords:
                 inner = node.value.args[0]
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr == "read_text"
+                    and not inner.args
+                    and not inner.keywords
+                ):
+                    receiver = _source(inner.func.value)
+                    if receiver is not None:
+                        all_rewrites.append((start, end, [f"{indent}view({receiver})"]))
+                        continue
                 path_arg = _direct_read_path(inner)
                 if path_arg is not None:
                     all_rewrites.append((start, end, [f"{indent}view({path_arg})"]))

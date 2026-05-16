@@ -739,7 +739,20 @@ class TestCodeAgentPreprocessCode:
         CodeAgent._preview_counter = 0
         agent = CodeAgent()
         r = agent.preprocess_code('print(Path("README.md").read_text())')
-        assert same_ast(r, 'view("README.md")')
+        assert same_ast(r, 'view(Path("README.md"))')
+
+
+    def test_print_dynamic_path_read_text_becomes_view(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('print((src_dir / "code_agent.py").read_text())')
+        assert same_ast(r, 'view(src_dir / "code_agent.py")')
+
+    def test_print_variable_path_read_text_becomes_view(self):
+        CodeAgent._preview_counter = 0
+        agent = CodeAgent()
+        r = agent.preprocess_code('print(filename.read_text())')
+        assert same_ast(r, 'view(filename)')
 
     def test_print_sliced_path_read_text_gets_warning(self):
         CodeAgent._preview_counter = 0
