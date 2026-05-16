@@ -239,12 +239,6 @@ register_provider("xai",
     tools=False,
     api_type="completions",
 )
-register_model("xai","grok-4-1",
-    model="grok-4-1-fast-reasoning",
-    input_cost=0.2,
-    cached_cost=0.05,
-    output_cost=0.5,
-)
 register_model("xai","grok-4.3",
     model="grok-4.3",
     input_cost=1.25,

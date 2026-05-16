@@ -40,25 +40,25 @@ Select the appropriate model automatically from this set when building agents:
 
 | Model | Use |
 |---|---|
-| `xai/grok-4-1` | Default for simple tasks. Fast, cheap, good general-purpose model, especially data retrieval tasks. |
-| `sonnet` | Everyday reasoning model. More intelligent than `xai/grok-4-1`, slower, and more opinionated. |
+| `google/gemini-3-flash-preview` | Default for simple tasks. Fast, cheap, good general-purpose model, especially data retrieval tasks. |
+| `sonnet` | Everyday reasoning model. More intelligent than `google/gemini-3-flash-preview`, slower, and more opinionated. |
 | `opus` | High-intelligence model for non-deterministic goal-oriented workflows, data analysis, and communication-heavy tasks. Prefers many turns. |
 | `gpt-5.5-medium` | High-intelligence model, concise and direct. Best REPL performance and a good orchestrator. |
 
 Default choices:
-- Simple retrieval, extraction, formatting, routing: `xai/grok-4-1`.
+- Simple retrieval, extraction, formatting, routing: `google/gemini-3-flash-preview`.
 - Normal business reasoning or mixed judgment: `sonnet`.
 - Complex data analysis or open-ended goal pursuit: ask before using `opus`.
 - REPL-heavy agents or orchestration-heavy workflows: ask before using `gpt-5.5-medium`.
 
 Approval rule:
 - For interactive, user-driven agents, choose the best fit from the table.
-- For unattended automation, scheduled jobs, or side-effecting production workflows, use only `xai/grok-4-1` or `sonnet` unless the user explicitly approves `opus` or `gpt-5.5-medium`.
+- For unattended automation, scheduled jobs, or side-effecting production workflows, use only `google/gemini-3-flash-preview` or `sonnet` unless the user explicitly approves `opus` or `gpt-5.5-medium`.
 - If requirements do not clearly justify one of the four models, ask the user.
 
 ```python
 class Agent(BaseAgent):
-    model = "xai/grok-4-1"
+    model = "google/gemini-3-flash-preview"
 ```
 
 For deployable projects:
@@ -79,7 +79,7 @@ class Agent(BaseAgent):
 from agentlib import BaseAgent
 
 class HashAgent(BaseAgent):
-    model = "xai/grok-4-1"
+    model = "google/gemini-3-flash-preview"
     system = "You are a hashing assistant. Use sha256 to answer."
 
     @BaseAgent.tool
@@ -191,7 +191,7 @@ from pydantic import Field, create_model
 from agentlib import BaseAgent
 
 class Picker(BaseAgent):
-    model = "xai/grok-4-1"
+    model = "google/gemini-3-flash-preview"
     system = "Pick one option and call choose."
 
     def __init__(self, options):
@@ -242,7 +242,7 @@ A `REPLAgent` makes the LLM write Python directly. The assistant response is exe
 from agentlib import REPLAgent
 
 class AnalysisAgent(REPLAgent):
-    model = "xai/grok-4-1"
+    model = "google/gemini-3-flash-preview"
     system = """You are a data analyst.
 Write Python only. Use emit(answer, release=True) for the final answer."""
 
@@ -393,7 +393,7 @@ from agentlib import PythonToolResponseMixin
 from agentlib.cli import CLIAgent
 
 class FinanceAgent(PythonToolResponseMixin, CLIAgent):
-    model = "xai/grok-4-1"
+    model = "google/gemini-3-flash-preview"
     system = """You answer questions about simplefin.sqlite3.
 
 Call sql_query(query) in Python to query the database.
