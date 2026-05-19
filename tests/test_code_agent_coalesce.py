@@ -76,6 +76,33 @@ def test_skips_small_interactions():
     assert projected == messages
 
 
+def test_can_coalesce_last_interactions_for_resume_compaction():
+    messages = [{"role": "system", "content": "system"}]
+    messages.extend(five_interactions())
+
+    default = coalesce_repl_messages(
+        messages,
+        keep_last_interactions=3,
+        keep_last_execution_interactions=1,
+        min_chars=1,
+        min_savings_chars=1,
+    )
+    aggressive = coalesce_repl_messages(
+        messages,
+        keep_last_interactions=3,
+        keep_last_execution_interactions=1,
+        min_chars=1,
+        min_savings_chars=1,
+        protect_last_interactions=False,
+    )
+
+    assert sum(1 for msg in default if msg.get("_coalesced")) == 2
+    assert sum(1 for msg in aggressive if msg.get("_coalesced")) == 5
+    assert sum(len(msg.get("content") or "") for msg in aggressive) < sum(len(msg.get("content") or "") for msg in default)
+
+
+
+
 def test_attachment_placeholders_and_payloads_survive():
     messages = [
         {"role": "system", "content": "system"},
@@ -402,6 +429,109 @@ def test_preview_expansion_event_survives_resume_replay_for_coalesced_preview(tm
     )
     assert any(uri in (m.get("content") or "") for m in projected_after_resume if m.get("_coalesced"))
     assert resumed._expanded_preview_refs == {uri: {"numbered": True}}
+
+
+def test_coalesce_preserves_expanded_preview_ref_placeholder():
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "Task", "_user_content": "Task"},
+        {"role": "assistant", "content": "print('x')\n" + ("x" * 2500)},
+        {
+            "role": "user",
+            "content": (
+                ">>> print('x')\n"
+                "[PreviewRef: session://preview/keep]\n"
+                "(1 lines, 10 chars)\n"
+                "[/PreviewRef]\n"
+                + ("y" * 2500)
+            ),
+        },
+        {"role": "assistant", "content": "emit('Done', release=True)"},
+    ]
+
+    projected = coalesce_repl_messages(
+        messages,
+        keep_last_interactions=0,
+        keep_last_execution_interactions=0,
+        min_chars=1,
+        min_savings_chars=1,
+        preserve_preview_refs={"session://preview/keep"},
+    )
+
+    coalesced = next(m for m in projected if m.get("_coalesced"))
+    assert "[PreviewRef: session://preview/keep]" in coalesced["content"]
+
+
+def test_actual_expanded_preview_refs_include_replayed_expanded_state(tmp_path):
+    from agentlib.agents.code_agent import CodeAgent
+    from agentlib.session_store import SessionStore
+
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session_id = store.create_session(str(tmp_path), "model")
+    key = "abc123"
+    uri = f"session://preview/{key}"
+    store.save_preview_blob(session_id, key, "expanded body")
+
+    agent = CodeAgent()
+    agent._ensure_setup()
+    agent._session_store = store
+    agent._session_id = session_id
+    agent._expanded_preview_refs = {uri: {"numbered": False}}
+    agent._configure_conversation(agent.conversation)
+    agent.conversation.messages.append({
+        "role": "user",
+        "content": "[Assistant work and REPL output coalesced into preview]",
+        "_synthetic": True,
+        "_coalesced": True,
+    })
+
+    assert agent._actual_expanded_preview_refs() == [uri]
+    assert agent._expanded_preview_context() == {uri: "expanded body"}
+    assert agent._current_file_context_names() == [uri]
+
+
+
+
+
+
+def test_resume_replay_loads_relative_attachment_refs_from_session_cwd(tmp_path):
+    from agentlib.session_replay import replay_session_into_agent
+    from agentlib.session_store import SessionStore
+
+    class Conversation:
+        def __init__(self):
+            self.messages = [{"role": "system", "content": "system"}]
+
+    class Agent:
+        def __init__(self):
+            self.conversation = Conversation()
+            self._expanded_preview_refs = {}
+
+        def _configure_conversation(self, conversation):
+            conversation.expanded_preview_refs = self._expanded_preview_refs
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "rel.py").write_text("print('from repo')\n")
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session_id = store.create_session(str(repo), "model")
+    store.append_event(session_id, 1, "message_added", {
+        "message": {
+            "role": "user",
+            "content": "[Attachment: rel.py]",
+            "_attachment_refs": {"rel.py": "rel.py"},
+        }
+    })
+
+    agent = Agent()
+    missing = replay_session_into_agent(agent, session_id, store)
+
+    assert missing == []
+    assert agent.conversation.messages[1]["_attachments"] == {
+        "rel.py": "    1→print('from repo')\n    2→"
+    }
+
+
 
 
 

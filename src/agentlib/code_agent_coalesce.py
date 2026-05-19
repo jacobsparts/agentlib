@@ -278,6 +278,34 @@ def _attachment_placeholders(messages: list[dict]) -> list[str]:
     return placeholders
 
 
+_PREVIEW_REF_BLOCK_RE = re.compile(
+    r"\[PreviewRef: (?P<uri>session://preview/[^\]\n]+)\]\n"
+    r".*?"
+    r"\[/PreviewRef\]",
+    re.DOTALL,
+)
+
+
+def _preserved_preview_ref_blocks(messages: list[dict], preserved_preview_refs) -> list[str]:
+    if not preserved_preview_refs:
+        return []
+    rendered_by_uri = preserved_preview_refs if isinstance(preserved_preview_refs, dict) else {}
+    uris = set(rendered_by_uri) or set(preserved_preview_refs)
+    seen = set()
+    blocks = []
+    for msg in messages:
+        for match in _PREVIEW_REF_BLOCK_RE.finditer(msg.get("content") or ""):
+            uri = match.group("uri")
+            if uri in uris and uri not in seen:
+                seen.add(uri)
+                blocks.append(match.group(0))
+    for uri, rendered in rendered_by_uri.items():
+        if uri not in seen and rendered:
+            seen.add(uri)
+            blocks.append(rendered)
+    return blocks
+
+
 def _strip_release_output_boilerplate(output: str, release_text: str) -> str:
     if not output:
         return ""
@@ -323,10 +351,16 @@ def _preview_content(range_messages: list[dict], release_msg: dict | None, relea
     return "\n".join(parts).rstrip("\n")
 
 
-def _coalesced_message_from_refs(rendered_refs: list[str], range_messages: list[dict]) -> dict:
+def _coalesced_message_from_refs(
+    rendered_refs: list[str],
+    range_messages: list[dict],
+    preserved_preview_refs=None,
+) -> dict:
     placeholders = _attachment_placeholders(range_messages)
+    preview_placeholders = _preserved_preview_ref_blocks(range_messages, preserved_preview_refs or set())
     visible_parts = ["[Assistant work and REPL output coalesced into preview]"]
     visible_parts.extend(placeholders)
+    visible_parts.extend(preview_placeholders)
     visible_parts.extend(["", *rendered_refs])
     visible = "\n".join(visible_parts).rstrip("\n")
     msg = {
@@ -399,6 +433,8 @@ def coalesce_repl_messages(
     min_savings_chars: int = 1000,
     save_preview_blob=None,
     auto_expand_preview_refs: list[str] | None = None,
+    preserve_preview_refs=None,
+    protect_last_interactions: bool = True,
 ) -> list[dict]:
     if not messages:
         return []
@@ -412,14 +448,16 @@ def coalesce_repl_messages(
     if len(interactions) <= keep_last_interactions:
         return messages
 
-    protected = set(range(max(0, len(interactions) - keep_last_interactions), len(interactions)))
-    if keep_last_execution_interactions:
-        execution_indexes = [
-            i
-            for i, item in enumerate(interactions)
-            if item.get("has_execution")
-        ]
-        protected.update(execution_indexes[-keep_last_execution_interactions:])
+    protected = set()
+    if protect_last_interactions:
+        protected.update(range(max(0, len(interactions) - keep_last_interactions), len(interactions)))
+        if keep_last_execution_interactions:
+            execution_indexes = [
+                i
+                for i, item in enumerate(interactions)
+                if item.get("has_execution")
+            ]
+            protected.update(execution_indexes[-keep_last_execution_interactions:])
 
     by_start = {item["start"]: (idx, item) for idx, item in enumerate(interactions)}
     skip_indexes = set()
@@ -447,7 +485,7 @@ def coalesce_repl_messages(
 
         rendered_refs = [render_preview_ref(section_content)[1] for _, section_content in section_contents]
 
-        projected = _coalesced_message_from_refs(rendered_refs, replacement_range)
+        projected = _coalesced_message_from_refs(rendered_refs, replacement_range, preserve_preview_refs)
         original_chars = sum(len(m.get("content") or "") for m in replacement_range)
         replacement_chars = len(projected.get("content") or "")
         if original_chars < min_chars:

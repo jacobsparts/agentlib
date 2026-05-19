@@ -159,7 +159,7 @@ This means:
 - **True collaboration** — drop into `/repl` and work alongside the agent in the same environment
 - **Inspect everything** — model can read its own tool source code, introspect objects, experiment
 
-Production-ready tools are included (glob, grep, read, edit, web_fetch, bash) for feature parity with leading coding agents. And since CodeAgent is just a Python class, it's easy to extend with custom tools, swap the model, modify the system prompt, or use it as a base for specialized agents in your own workflows.
+Production-ready tools are included (grep, read, view, edit, line_patch, bash) for feature parity with leading coding agents. And since CodeAgent is just a Python class, it's easy to extend with custom tools, swap the model, modify the system prompt, or use it as a base for specialized agents in your own workflows.
 
 ```python
 from agentlib.agents import CodeAgent

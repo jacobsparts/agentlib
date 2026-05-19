@@ -13,7 +13,7 @@ def _preview_key(path: str) -> str | None:
     return None
 
 
-def render_attachment_content(path: str, store=None, session_id: str | None = None) -> str:
+def render_attachment_content(path: str, store=None, session_id: str | None = None, base_dir: str | None = None) -> str:
     if key := _preview_key(path):
         if store is None or session_id is None:
             raise FileNotFoundError(path)
@@ -21,16 +21,26 @@ def render_attachment_content(path: str, store=None, session_id: str | None = No
         if content is None:
             raise FileNotFoundError(path)
     else:
-        content = Path(path).expanduser().read_text()
+        file_path = Path(path).expanduser()
+        if not file_path.is_absolute() and base_dir:
+            file_path = Path(base_dir).expanduser() / file_path
+        content = file_path.read_text()
     lines = content.split('\n')
     return '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
 
 
-def _load_attachment_map(refs: dict[str, str], missing: list[tuple[str, str]], store=None, session_id: str | None = None) -> dict[str, str]:
+def _attachment_path_exists(path: str, base_dir: str | None = None) -> bool:
+    file_path = Path(path).expanduser()
+    if not file_path.is_absolute() and base_dir:
+        file_path = Path(base_dir).expanduser() / file_path
+    return file_path.exists()
+
+
+def _load_attachment_map(refs: dict[str, str], missing: list[tuple[str, str]], store=None, session_id: str | None = None, base_dir: str | None = None) -> dict[str, str]:
     loaded = {}
     for name, path in refs.items():
         try:
-            loaded[name] = render_attachment_content(path, store, session_id)
+            loaded[name] = render_attachment_content(path, store, session_id, base_dir)
         except Exception:
             missing.append((name, path))
     return loaded
@@ -84,6 +94,9 @@ def _decode_media(value):
 
 def replay_session_into_agent(agent, session_id: str, store):
     events = store.get_events(session_id)
+    session = store.get_session(session_id) if hasattr(store, "get_session") else None
+    base_dir = (session or {}).get("cwd")
+
     snapshots = {}
     messages = [copy.deepcopy(agent.conversation.messages[0])]
     agent._expanded_preview_refs = {}
@@ -108,7 +121,7 @@ def replay_session_into_agent(agent, session_id: str, store):
             refs = msg.pop("_attachment_refs", None) or {}
             local_missing = []
             if refs:
-                loaded = _load_attachment_map(refs, local_missing, store, session_id)
+                loaded = _load_attachment_map(refs, local_missing, store, session_id, base_dir)
                 if loaded:
                     msg["_attachments"] = loaded
                 msg["_attachment_refs"] = refs
@@ -158,7 +171,7 @@ def replay_session_into_agent(agent, session_id: str, store):
                 if store.get_preview_blob(session_id, _preview_key(path)) is None:
                     attachments.pop(name, None)
                     final_missing.append((name, path))
-            elif not Path(path).expanduser().exists():
+            elif not _attachment_path_exists(path, base_dir):
                 attachments.pop(name, None)
                 final_missing.append((name, path))
         if "_attachments" in msg and not msg["_attachments"]:

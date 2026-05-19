@@ -3,11 +3,10 @@
 
 Combines REPLAgent with CLIMixin to create an interactive coding assistant
 that executes Python code directly. Uses native implementations for file
-operations, ripgrep for search, and Jina AI for web access.
+operations and ripgrep for search.
 
 Dependencies:
     - ripgrep (rg) must be installed: apt install ripgrep
-    - JINA_API_KEY env var for higher rate limits (optional, get free key at https://jina.ai/?sui=apikey)
 """
 
 from agentlib.code_agent_preprocess import preprocess_code_agent
@@ -24,7 +23,6 @@ from pathlib import Path
 from agentlib import REPLAgent, REPLAttachmentMixin, MCPMixin
 
 from agentlib.cli import CLIMixin
-from agentlib.jina_mixin import JinaMixin
 from agentlib.llm_registry import ModelNotFoundError
 from agentlib.client import ContextOverflowError
 from agentlib.cli.terminal import DIM, RESET, Panel, strip_ansi
@@ -198,12 +196,17 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     code_agent_coalesce_min_savings_chars = _get_config_value("code_agent_coalesce_min_savings_chars", 1000)
     code_agent_coalesce_keep_last_execution_interactions = _get_config_value("code_agent_coalesce_keep_last_execution_interactions", 1)
 
-    def _coalesce_context(self):
+    def _coalesce_context(self, *, protect_last_interactions: bool = True):
         from agentlib.code_agent_coalesce import coalesce_repl_messages
 
         if not self._session_id:
             return
         auto_expand_preview_refs = []
+        preserve_preview_refs = {}
+        for uri in getattr(self, "_expanded_preview_refs", {}):
+            content = self._preview_blob_content(uri)
+            if content is not None:
+                preserve_preview_refs[uri] = self._render_preview_ref(content)[1]
         self.conversation.messages = coalesce_repl_messages(
             self.conversation.messages,
             keep_last_interactions=3,
@@ -212,6 +215,8 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             min_savings_chars=self.code_agent_coalesce_min_savings_chars,
             save_preview_blob=lambda key, content: self._session_store.save_preview_blob(self._session_id, key, content),
             auto_expand_preview_refs=auto_expand_preview_refs,
+            preserve_preview_refs=preserve_preview_refs,
+            protect_last_interactions=protect_last_interactions,
         )
         for uri in auto_expand_preview_refs:
             self._expanded_preview_refs[uri] = {"numbered": False}
@@ -483,6 +488,14 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             for name, attachment in (msg.get("_attachments") or {}).items():
                 content = content.replace(f"[Attachment: {name}]", attachment)
             render_preview_refs(content, expanded, self._preview_blob_content, rendered)
+        has_coalesced_messages = any(
+            msg.get("_coalesced")
+            for msg in getattr(self.conversation, "messages", [])
+        )
+        if has_coalesced_messages:
+            for uri in expanded:
+                if uri not in rendered and self._preview_blob_content(uri) is not None:
+                    rendered.append(uri)
         return rendered
 
     def _expanded_preview_context(self) -> dict[str, str]:
@@ -1689,6 +1702,7 @@ If you don't know how to proceed:
                 for name, path in (msg.get('_attachment_refs') or {}).items():
                     self._explicit_attachment_refs[name] = path
             self._replay_display_output()
+            self._coalesce_context(protect_last_interactions=False)
             self.usermsg(">>> system_reset()\nREPL session has been reset\n")
             self._coalesce_context()
             if missing:
@@ -2158,11 +2172,8 @@ If you don't know how to proceed:
                 self.console.print(f"[dim]Resume session: code-agent --resume {session_id}[/dim]")
 
 
-class CodeAgent(JinaMixin, MCPMixin, CodeAgentBase):
-    """Code agent with native tools.
-
-    Inherits web_fetch and web_search from JinaMixin.
-    """
+class CodeAgent(MCPMixin, CodeAgentBase):
+    """Code agent with native tools."""
 
     def _last_pinnable_turn(self):
         for msg in reversed(self.conversation.messages):
