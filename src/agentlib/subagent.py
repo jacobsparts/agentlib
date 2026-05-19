@@ -47,7 +47,7 @@ Spawn isolated Code Agent instances as subprocesses with socket communication.
 
 ## Model Configuration
 
-    agent = Subagent()  # Uses parent's model
+    agent = Subagent()  # Uses parent's model when loaded via /subagents; otherwise config default
     agent = Subagent(model="opus")
 
 ## Response model
@@ -79,6 +79,18 @@ try:
     import cloudpickle as pickle
 except ImportError:
     import pickle
+
+
+def _configured_default_model() -> str:
+    try:
+        from agentlib.config import get_user_config
+        config = get_user_config()
+        value = getattr(config, "code_agent_model", None) if config else None
+        if value:
+            return value
+    except Exception:
+        pass
+    return "sonnet"
 
 
 # ---------------------------------------------------------------------------
@@ -467,7 +479,8 @@ class Subagent:
         response = agent.send("Now add tests")
     """
 
-    # Default model, can be set by parent agent via /subagents command
+    # Default model set by parent agent via /subagents command.  If unset,
+    # Subagent() falls back to the configured Code Agent model.
     default_model: Optional[str] = None
 
     def __init__(
@@ -478,8 +491,8 @@ class Subagent:
     ):
         self.id = str(uuid.uuid4())[:8]
         self.cwd = cwd or os.getcwd()
-        # Use explicit model, or class default (set by parent via /subagents)
-        self.model = model or Subagent.default_model
+        # Use explicit model, parent-injected default, or configured Code Agent default.
+        self.model = model or Subagent.default_model or _configured_default_model()
         self.max_turns = max_turns
 
         self._proc: Optional[subprocess.Popen] = None

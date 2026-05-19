@@ -22,7 +22,7 @@ class Conversation:
             attachments = out.pop('_attachments', None)
             if attachments:
                 for name, content in attachments.items():
-                    out['content'] = out['content'].replace(f'[Attachment: {name}]', content)
+                    out['content'] = out.get('content', '').replace(f'[Attachment: {name}]', content)
             if preview_loader is not None:
                 out['content'] = render_preview_refs(
                     out.get('content', ''),

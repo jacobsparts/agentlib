@@ -147,3 +147,4 @@ def test_base_agent_ephemeral_property_passthrough():
 
     assert agent.conversation.ephemeral == "first\n\nsecond"
     assert agent.conversation._messages()[-1]["content"] == "first\n\nsecond\n\nquestion"
+

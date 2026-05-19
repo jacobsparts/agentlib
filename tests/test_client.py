@@ -179,3 +179,52 @@ def test_input_token_ratio_updates_from_prompt_plus_cached_tokens():
     )
 
     assert client.usage_tracker.input_tokens_per_byte[client.model_name] == pytest.approx(0.25)
+
+
+@pytest.mark.parametrize(
+    "api_type,method_name",
+    [
+        ("completions", "_call_completions"),
+        ("messages", "_call_messages"),
+        ("gemini", "_call_gemini"),
+    ],
+)
+def test_client_strips_private_message_metadata_before_api_call(monkeypatch, api_type, method_name):
+    from agentlib.client import LLMClient
+
+    client = LLMClient("sonnet")
+    client.model_config = {
+        "api_type": api_type,
+        "model": "test-model",
+        "context_window": 1_000_000,
+    }
+    captured = {}
+
+    def fake_validate(input_bytes):
+        captured["input_bytes"] = input_bytes
+
+    def fake_provider_call(messages, tools):
+        captured["messages"] = messages
+        captured["tools"] = tools
+        return {"role": "assistant", "content": "ok"}
+
+    monkeypatch.setattr(client, "_validate_context_budget", fake_validate)
+    monkeypatch.setattr(client, method_name, fake_provider_call)
+
+    client._call([
+        {
+            "role": "user",
+            "content": "visible",
+            "_stdout": "large hidden stdout",
+            "_render_segments": [{"type": "stdout", "content": "large hidden stdout"}],
+            "_final_result": "hidden final result",
+            "_attachment_refs": ["file.py"],
+            "_event_seq": 123,
+        }
+    ])
+
+    assert captured["messages"] == [{"role": "user", "content": "visible"}]
+    assert captured["tools"] is None
+    assert captured["input_bytes"] == client._input_bytes(captured["messages"], None)
+
+
