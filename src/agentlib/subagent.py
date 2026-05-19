@@ -50,10 +50,18 @@ Spawn isolated Code Agent instances as subprocesses with socket communication.
     agent = Subagent()  # Uses parent's model
     agent = Subagent(model="opus")
 
+## Response model
+
+Subagents return text.  Synchronous and background calls expose the same final
+text via `response.result`; `bg=True` only changes when the caller waits.  If a
+task fails, the exception/traceback is serialized into that text response rather
+than raised to the caller.  If the worker process dies, stderr and exit status
+are serialized into the response text when available.
+
 ## Attributes
 
     Subagent: .id, .cwd, .model, .done, .result, .send(), .wait(), .kill()
-    SubagentResponse: .done, .result, .progress, .is_error, .wait()
+    SubagentResponse: .done, .result, .progress, .is_error, .error, .wait()
 """
 
 import fcntl
@@ -343,10 +351,11 @@ class SubagentResponse:
     """Result of a Subagent.send() call.
 
     Attributes:
-        done: Whether the task has completed
-        result: The result text (empty until done)
-        progress: List of progress updates from emit(release=False)
-        is_error: Whether the task resulted in an error
+        done: Whether the task has completed.
+        result: Final response text. Empty until done. Errors are serialized here.
+        progress: List of progress updates from emit(release=False).
+        is_error: Whether the response text represents a task/process error.
+        error: Error text if failed, else None. Same text is included in result.
     """
 
     def __init__(self, agent: 'Subagent'):
@@ -366,7 +375,7 @@ class SubagentResponse:
 
     @property
     def result(self) -> str:
-        """The result text. Empty string if not yet complete."""
+        """Final response text. Empty string if not yet complete."""
         if not self.done:
             return ""
         return self._result or ""
@@ -379,8 +388,27 @@ class SubagentResponse:
 
     @property
     def is_error(self) -> bool:
-        """Whether the task resulted in an error."""
+        """Whether the task/process ended in an error response."""
         return self._error is not None
+
+    @property
+    def error(self) -> Optional[str]:
+        """Error text if the task/process failed, else None."""
+        if not self.done:
+            return None
+        return self._error
+
+    def _set_result(self, text: Any) -> None:
+        self._result = str(text) if text is not None else ""
+        self._done = True
+
+    def _set_error(self, text: Any) -> None:
+        body = str(text) if text is not None else ""
+        if not body:
+            body = "Subagent failed with no error details."
+        self._error = body
+        self._result = body
+        self._done = True
 
     def wait(self, timeout: Optional[float] = None) -> 'SubagentResponse':
         """Wait for the task to complete.
@@ -389,19 +417,13 @@ class SubagentResponse:
             timeout: Maximum seconds to wait. None = wait indefinitely.
 
         Returns:
-            self, for chaining.
-
-        Raises:
-            SubagentError: If the task resulted in an error.
+            self, for chaining. Task/process errors are serialized into result.
         """
         start = time.time()
         while not self.done:
             if timeout is not None and (time.time() - start) > timeout:
                 break
             time.sleep(0.1)
-
-        if self.done and self.is_error:
-            raise SubagentError(self._error, self)
 
         return self
 
@@ -411,9 +433,6 @@ class SubagentResponse:
         if not self._done:
             progress_info = f", {len(self._progress)} updates" if self._progress else ""
             return f"[SubagentResponse: running{progress_info}]"
-        if self.is_error:
-            return f"[SubagentResponse: error] {self._error}"
-        # Truncate long results for repr
         r = self._result or ""
         if len(r) > 100:
             r = r[:100] + "..."
@@ -538,6 +557,42 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}), {repr(self.model)}, {s
 
         self._started = True
 
+    def _read_process_stderr(self) -> str:
+        """Return any currently available stderr from the worker process."""
+        if not self._proc or not self._proc.stderr:
+            return ""
+        try:
+            fd = self._proc.stderr.fileno()
+            old_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            try:
+                fcntl.fcntl(fd, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
+                chunks = []
+                while True:
+                    try:
+                        chunk = self._proc.stderr.read()
+                    except BlockingIOError:
+                        break
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                if not chunks:
+                    return ""
+                return b"".join(chunks).decode(errors="replace")
+            finally:
+                fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
+        except Exception as e:
+            return f"[failed to read subagent stderr: {type(e).__name__}: {e}]"
+
+    def _format_process_failure(self) -> str:
+        returncode = self._proc.poll() if self._proc else None
+        stderr = self._read_process_stderr()
+        parts = ["Subagent process died unexpectedly."]
+        if returncode is not None:
+            parts.append(f"Exit code: {returncode}")
+        if stderr:
+            parts.append("stderr:\n" + stderr)
+        return "\n\n".join(parts)
+
     def _poll(self) -> None:
         """Poll for messages from subprocess (non-blocking)."""
         if not self._conn or not self._current_response:
@@ -546,10 +601,8 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}), {repr(self.model)}, {s
         if self._current_response._done:
             return
 
-        # Check if process died
         if self._proc and self._proc.poll() is not None:
-            self._current_response._error = "Subagent process died unexpectedly"
-            self._current_response._done = True
+            self._current_response._set_error(self._format_process_failure())
             return
 
         while True:
@@ -559,22 +612,22 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}), {repr(self.model)}, {s
                 msg_type, msg_data = msg
 
                 if msg_type == "progress":
-                    self._current_response._progress.append(msg_data)
+                    self._current_response._progress.append(str(msg_data) if msg_data is not None else "")
                 elif msg_type == "result":
-                    self._current_response._result = msg_data
-                    self._current_response._done = True
+                    self._current_response._set_result(msg_data)
                     break
                 elif msg_type == "error":
-                    self._current_response._error = msg_data
-                    self._current_response._done = True
+                    self._current_response._set_error(f"Subagent task failed:\n\n{msg_data}")
                     break
             except socket.timeout:
                 break
             except BlockingIOError:
                 break
-            except ConnectionError:
-                self._current_response._error = "Connection lost"
-                self._current_response._done = True
+            except ConnectionError as e:
+                detail = f"Connection lost: {e}"
+                if self._proc and self._proc.poll() is not None:
+                    detail = self._format_process_failure()
+                self._current_response._set_error(detail)
                 break
 
     def send(
@@ -594,10 +647,8 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}), {repr(self.model)}, {s
             timeout: Seconds to wait; None waits indefinitely (ignored if bg=True).
 
         Returns:
-            SubagentResponse object with the result.
-
-        Raises:
-            SubagentError: If the task results in an error (only when blocking).
+            SubagentResponse object. Its .result is the final text response.
+            Task/process errors are serialized into .result.
         """
         self._ensure_started()
 
@@ -613,10 +664,6 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}), {repr(self.model)}, {s
             return response
 
         response.wait(timeout)
-
-        if response.done and response.is_error:
-            raise SubagentError(response._error, response)
-
         return response
 
     @property
@@ -641,15 +688,12 @@ worker_main({port}, bytes.fromhex({repr(authkey.hex())}), {repr(self.model)}, {s
             timeout: Maximum seconds to wait. None = wait indefinitely.
 
         Returns:
-            The SubagentResponse, or None if no task sent.
-
-        Raises:
-            SubagentError: If the task resulted in an error.
+            The SubagentResponse, or None if no task sent. Task/process errors
+            are serialized into response.result.
         """
         if self._current_response:
             return self._current_response.wait(timeout)
         return None
-
     def kill(self) -> str:
         """Kill the subagent process."""
         if self._proc:
