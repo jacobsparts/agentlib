@@ -262,6 +262,11 @@ def _is_released_assistant_message(msg: dict) -> bool:
     return stripped.startswith("emit(") and "release=True" in stripped.replace(" ", "")
 
 
+def _section_header(label: str, char: str = "═", width: int = 34) -> str:
+    prefix = f"{char} {label} "
+    return prefix + (char * max(0, width - len(prefix)))
+
+
 def replay_display_text(session_id: str, store, format_response=None) -> str:
     events = store.get_events(session_id)
     snapshots = {}
@@ -283,6 +288,7 @@ def replay_display_text(session_id: str, store, format_response=None) -> str:
                 released_to_user = True
                 text = _extract_released_assistant_text(msg)
                 if text:
+                    chunks.append(_section_header("Output") + "\n")
                     if format_response is not None:
                         text = format_response(text)
                     if not text.endswith("\n"):

@@ -86,10 +86,16 @@ class CodeAgentBenchmarkContext:
     @property
     def response_block(self) -> str:
         text = self.output
-        marker = "──────────────────────────────────"
-        if marker in text:
-            text = text.rsplit(marker, 1)[-1]
-        if "\n> " in text:
+        output_marker = "═ Output ═════════════════════════"
+        if output_marker in text:
+            text = text.rsplit(output_marker, 1)[-1]
+        else:
+            marker = "──────────────────────────────────"
+            if marker in text:
+                text = text.rsplit(marker, 1)[-1]
+        if "\n═ User " in text:
+            text = text.split("\n═ User ", 1)[0]
+        elif "\n> " in text:
             text = text.split("\n> ", 1)[0]
         lines = []
         for raw in text.splitlines():
@@ -112,6 +118,9 @@ class CodeAgentBenchmarkContext:
             "Loading ",
             "Working... (turn ",
             "────────",
+            "─ Python ",
+            "═ User ",
+            "═ Output ",
             ">>> ",
             "... (",
             "[Attachment:",

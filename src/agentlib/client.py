@@ -363,8 +363,20 @@ class LLMClient:
     def _update_input_tokens_per_byte(self, input_bytes, usage):
         if not usage or not input_bytes:
             return
-        normalized = self.usage_tracker._normalize(self.model_name, usage)
-        input_tokens = normalized.get('prompt_tokens', 0) + normalized.get('cached_tokens', 0)
+        ratio_usage = usage
+        if transform := self.model_config.get('token_transform'):
+            ratio_usage = transform(ratio_usage)
+        prompt_tokens = self.usage_tracker._coalesce_paths(ratio_usage, [
+            'native_tokens_prompt',
+            'prompt_tokens',
+            'input_tokens',
+        ])
+        cached_tokens = self.usage_tracker._coalesce_paths(ratio_usage, [
+            'native_tokens_cached',
+            ('prompt_tokens_details', 'cached_tokens'),
+        ])
+        cached_tokens += ratio_usage.get('cache_read_input_tokens', 0) + ratio_usage.get('cache_creation_input_tokens', 0)
+        input_tokens = prompt_tokens + cached_tokens
         if input_tokens <= 0:
             return
         ratios = getattr(self.usage_tracker, "input_tokens_per_byte", None)

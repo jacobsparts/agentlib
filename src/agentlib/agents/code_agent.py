@@ -25,7 +25,7 @@ from agentlib import REPLAgent, REPLAttachmentMixin, MCPMixin
 from agentlib.cli import CLIMixin
 from agentlib.llm_registry import ModelNotFoundError
 from agentlib.client import ContextOverflowError
-from agentlib.cli.terminal import DIM, RESET, Panel, strip_ansi
+from agentlib.cli.terminal import DIM, RESET, Panel, strip_ansi, TEXT
 from agentlib.session_store import SessionStore
 from agentlib.session_replay import replay_session_into_agent, replay_display_text
 from agentlib.preview_refs import is_preview_uri, preview_key, numbered_content, render_preview_refs
@@ -291,12 +291,15 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         print(text, end=end, flush=True)
         self._record_display_event(kind, strip_ansi(text) + end, create_session=create_session)
 
+    def _section_header(self, label: str, char: str = "═", color: str = "\x1b[1;36m", width: int = 34) -> str:
+        prefix = f"{char} {label} "
+        return f"{color}{prefix}{char * max(0, width - len(prefix))}{RESET}"
+
     def _display_input_block(self, text: str):
         lines = text.rstrip("\n").split("\n") if text else [""]
-        rendered = [f"{self.cli_prompt}{lines[0]}"]
+        rendered = [self._section_header("User"), f"{self.cli_prompt}{lines[0]}"]
         rendered.extend(lines[1:])
-        self._record_display_event("input", "\n".join(rendered) + "\n\n")
-
+        self._record_display_event("input", strip_ansi("\n".join(rendered)) + "\n\n")
     def _replay_display_output(self):
         if not self._session_id:
             return
@@ -313,9 +316,9 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
     def _show_python_header_if_pending(self):
         if getattr(self, '_header_pending', False):
-            header = "\x1b[34m"+("─"*13)+" Python "+("─"*13)+"\x1b[0m"
+            header = self._section_header("Python", "─", "\x1b[1;94m")
             print(f"\x1b[1G\x1b[K{header}")
-            self._capture_display_line("───────────── Python ─────────────")
+            self._capture_display_line(strip_ansi(header))
             self._header_pending = False
             self._repl_printed_header = True
 
@@ -1851,7 +1854,7 @@ If you don't know how to proceed:
 
                 try:
                     user_input = session.prompt(
-                        f"\n{prompt_str}",
+                        f"\n{self._section_header('User')}\n{prompt_str}",
                         initial_text=preload_input,
                         on_ctrl_o=open_transcript,
                         on_esc_esc=trigger_rewind,
@@ -2137,16 +2140,14 @@ If you don't know how to proceed:
 
                 self.console.clear_line()  # Clear thinking message
 
-                # Close Python block if we had output
-                if getattr(self, '_repl_printed_header', False):
-                    print("\x1b[34m"+("─"*34)+"\x1b[0m")
-                    self._capture_display_line("──────────────────────────────────")
-                self._flush_display_capture()
+                # The next section header delineates the end of Python output.
 
                 # Display response
                 response_str = str(response) if response is not None else ""
                 formatted = self.format_response(response_str)
                 if formatted:
+                    output_header = self._section_header("Output", "═", TEXT)
+                    print(output_header)
                     print(formatted)
         finally:
             altmode.uninstall()

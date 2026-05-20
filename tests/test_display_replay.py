@@ -26,7 +26,7 @@ def test_replay_display_text_respects_rewind():
     ])
 
     out = replay_display_text("sid", store)
-    assert out == "> first\n\none\n> third\n\n"
+    assert out == "> first\n\n═ Output ═════════════════════════\none\n> third\n\n"
 
 
 def test_replay_display_text_ignores_non_display_events():
@@ -56,7 +56,7 @@ def test_replay_display_text_keeps_prior_display_after_rewind():
     ])
 
     out = replay_display_text("sid", store)
-    assert out == "> first\n\none\nConversation rewound.\n"
+    assert out == "> first\n\n═ Output ═════════════════════════\none\nConversation rewound.\n"
 
 
 def test_replay_display_text_stops_after_release_until_next_input():
@@ -76,7 +76,7 @@ def test_replay_display_text_stops_after_release_until_next_input():
     ])
 
     out = replay_display_text("sid", store)
-    assert out == "> question\n\nanswer\n> next\n\nnext answer\n"
+    assert out == "> question\n\n═ Output ═════════════════════════\nanswer\n> next\n\n═ Output ═════════════════════════\nnext answer\n"
 
 
 def test_replay_display_text_prefers_persisted_final_result():
@@ -90,7 +90,7 @@ def test_replay_display_text_prefers_persisted_final_result():
     ])
 
     out = replay_display_text("sid", store)
-    assert out == "> question\n\ncomputed answer\n"
+    assert out == "> question\n\n═ Output ═════════════════════════\ncomputed answer\n"
 
 
 def test_replay_display_text_extracts_multiline_concatenated_emit_literal():
@@ -103,7 +103,7 @@ def test_replay_display_text_extracts_multiline_concatenated_emit_literal():
     ])
 
     out = replay_display_text("sid", store)
-    assert out == "> question\n\nDone.\n\nAdded entrypoint\n"
+    assert out == "> question\n\n═ Output ═════════════════════════\nDone.\n\nAdded entrypoint\n"
 
 
 def test_replay_display_text_ignores_emit_inside_string_literal():
@@ -131,4 +131,4 @@ def test_replay_display_text_does_not_duplicate_emit_display_event():
     ])
 
     out = replay_display_text("sid", store)
-    assert out == "> question\n\nanswer\n"
+    assert out == "> question\n\n═ Output ═════════════════════════\nanswer\n"
