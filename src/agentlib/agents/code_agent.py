@@ -352,6 +352,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         if filename is None:
             return f">>> {func}(...)"
         return f">>> {func}({filename!r}, ...)"
+
     @staticmethod
     def _file_diff_paths(diff: str) -> list[str]:
         paths = []
@@ -385,6 +386,39 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             "paths": self._file_diff_paths(diff),
             "diff": diff,
         })
+
+    def _matching_file_diff_events(self, file_path: str | None = None, limit: int | None = None) -> list[dict]:
+        if not getattr(self, "_session_id", None):
+            return []
+        events = []
+        for event in self._session_store.get_events(self._session_id):
+            if event.get("event_type") != "file_diff":
+                continue
+            payload = event.get("payload") or {}
+            if file_path:
+                paths = payload.get("paths") or []
+                if not any(path == file_path or self._same_file(path, file_path) for path in paths):
+                    continue
+            events.append(event)
+        if limit is not None:
+            events = events[-int(limit):]
+        return events
+
+    def _format_file_diff_events(self, file_path: str | None = None, limit: int | None = None) -> str:
+        events = self._matching_file_diff_events(file_path, limit)
+        if not events:
+            target = f" for {file_path}" if file_path else ""
+            return f"No file diffs recorded{target}."
+        chunks = []
+        for event in events:
+            payload = event.get("payload") or {}
+            paths = ", ".join(payload.get("paths") or [])
+            tool = payload.get("tool") or "unknown"
+            chunks.append(
+                f"# file_diff seq={event.get('seq')} tool={tool} paths={paths}\n"
+                f"{payload.get('diff', '').rstrip()}\n"
+            )
+        return "\n".join(chunks).rstrip() + "\n"
 
 
     def _flush_display_capture(self):
@@ -1136,7 +1170,6 @@ edit(file_path, old_string, new_string, replace_all=False)
     Replace exact string matches.
     - old_string must match exactly (whitespace, indentation)
     - Fails if not found or multiple matches (unless replace_all=True)
-
 line_patch(file_path, patch)
     Edit an existing file by line number.
     - Prefer a full view(file_path) first; if absent, line_patch uses current on-disk contents
@@ -1165,11 +1198,16 @@ delete 40:44''')
     `insert after 0` prepends to the file.
     `insert before LINE_COUNT + 1` appends to the file.
 
+
+diff_history(file_path=None, limit=None)
+    Review persisted unified diffs from this session. Optionally filter by file.
+    Use this to understand or manually reverse prior edits. It does not modify files.
 >>> anti_patterns()
 
 # BAD: Releasing immediately to show what you found
 files = list(Path('.').glob("**/*.py"))
 emit(f"Found {len(files)} Python files", release=True)  # WRONG - keep working!
+
 
 # GOOD: Keep working, release when done
 files = list(Path('.').glob("**/*.py"))
@@ -2241,7 +2279,6 @@ class CodeAgent(MCPMixin, CodeAgentBase):
             self._persist_message(turn)
         return "Pinned previous turn for coalescing."
 
-
     mcp_servers = []
 
     _preview_counter = 0  # Kept for backwards-compatible instance state.
@@ -2278,11 +2315,16 @@ class CodeAgent(MCPMixin, CodeAgentBase):
 
     def _handle_tool_request(self, repl, req: dict) -> None:
         tool_name = req.get('tool')
-        if tool_name in {'__preview_blob_save__', '__preview_blob_read__', '__line_patch_is_attached__', '__preview_ref_expand__', '__preview_ref_collapse__'}:
+        if tool_name in {'__preview_blob_save__', '__preview_blob_read__', '__line_patch_is_attached__', '__preview_ref_expand__', '__preview_ref_collapse__', '__file_diffs__'}:
 
             request_id = req.get('request_id')
             args = req.get('args', {})
             try:
+                if tool_name == '__file_diffs__':
+                    file_path = args.get("file_path")
+                    limit = args.get("limit")
+                    repl.send_reply(request_id, result=self._format_file_diff_events(file_path, limit))
+                    return
                 if tool_name == '__preview_ref_expand__':
                     uri = args.get('uri')
                     if uri:
@@ -2562,6 +2604,8 @@ class CodeAgent(MCPMixin, CodeAgentBase):
                 import hashlib
                 snapshots = globals().setdefault("_line_patch_snapshots", {})
                 snapshots[file_path] = {
+
+
                     "path": file_path,
                     "resolved_path": str(path.resolve()),
                     "content": content,
@@ -2574,6 +2618,23 @@ class CodeAgent(MCPMixin, CodeAgentBase):
             _send_output("read_partial", file_path + "\n")
 
         _send_output("read", output + "\n")
+
+    @REPLAgent.tool(inject=True)
+    def diff_history(self,
+            file_path: Optional[str] = "Optional file path to filter diffs",
+            limit: Optional[int] = "Maximum number of matching diff events to return"
+        ):
+        '''Review persisted file diffs from this session. Does not modify files.'''
+        import json as _json
+        global _request_id
+        _request_id += 1
+        _req_id = _request_id
+        _send_tool_request(_json.dumps({
+            "tool": "__file_diffs__",
+            "args": {"file_path": file_path, "limit": limit},
+            "request_id": _req_id,
+        }))
+        return _wait_for_ack(_req_id)
 
     @REPLAgent.tool
     def unview(self,

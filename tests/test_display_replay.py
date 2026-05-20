@@ -177,3 +177,114 @@ def test_code_agent_records_file_diff_event_with_tool_and_paths():
         },
         True,
     )]
+
+
+def test_code_agent_formats_file_diff_history_filtered_and_limited():
+    from agentlib.agents.code_agent import CodeAgentBase
+
+    class Store:
+        def get_events(self, session_id):
+            return [
+                {
+                    "seq": 1,
+                    "event_type": "file_diff",
+                    "payload": {
+                        "kind": "unified_diff",
+                        "tool": "edit",
+                        "paths": ["src/a.py"],
+                        "diff": "--- src/a.py\n+++ src/a.py\n@@ -1 +1 @@\n-a\n+b\n",
+                    },
+                },
+                {
+                    "seq": 2,
+                    "event_type": "file_diff",
+                    "payload": {
+                        "kind": "unified_diff",
+                        "tool": "line_patch",
+                        "paths": ["src/b.py"],
+                        "diff": "--- src/b.py\n+++ src/b.py\n@@ -1 +1 @@\n-b\n+c\n",
+                    },
+                },
+                {
+                    "seq": 3,
+                    "event_type": "file_diff",
+                    "payload": {
+                        "kind": "unified_diff",
+                        "tool": None,
+                        "paths": ["src/a.py"],
+                        "diff": "--- src/a.py\n+++ src/a.py\n@@ -2 +2 @@\n-x\n+y\n",
+                    },
+                },
+            ]
+
+    agent = CodeAgentBase.__new__(CodeAgentBase)
+    agent._session_id = "sid"
+    agent._session_store = Store()
+
+    assert agent._format_file_diff_events("src/a.py", limit=1) == (
+        "# file_diff seq=3 tool=unknown paths=src/a.py\n"
+        "--- src/a.py\n+++ src/a.py\n@@ -2 +2 @@\n-x\n+y\n"
+    )
+
+
+def test_code_agent_formats_empty_file_diff_history():
+    from agentlib.agents.code_agent import CodeAgentBase
+
+    class Store:
+        def get_events(self, session_id):
+            return []
+
+    agent = CodeAgentBase.__new__(CodeAgentBase)
+    agent._session_id = "sid"
+    agent._session_store = Store()
+
+    assert agent._format_file_diff_events("src/missing.py") == "No file diffs recorded for src/missing.py."
+
+
+def test_code_agent_diff_history_tool_bridge():
+    from agentlib.agents.code_agent import CodeAgent
+
+    class Store:
+        def get_events(self, session_id):
+            return [
+                {
+                    "seq": 10,
+                    "event_type": "file_diff",
+                    "payload": {
+                        "kind": "unified_diff",
+                        "tool": "edit",
+                        "paths": ["src/demo.py"],
+                        "diff": "--- src/demo.py\n+++ src/demo.py\n@@ -1 +1 @@\n-old\n+new\n",
+                    },
+                }
+            ]
+
+    class Repl:
+        def __init__(self):
+            self.replies = []
+            self.acks = []
+
+        def send_reply(self, request_id, result=None, error=None):
+            self.replies.append((request_id, result, error))
+
+        def send_ack(self, request_id):
+            self.acks.append(request_id)
+
+    agent = CodeAgent.__new__(CodeAgent)
+    agent._session_id = "sid"
+    agent._session_store = Store()
+    repl = Repl()
+
+    agent._handle_tool_request(repl, {
+        "tool": "__file_diffs__",
+        "request_id": 123,
+        "args": {"file_path": "src/demo.py", "limit": None},
+    })
+
+    assert repl.replies == [(
+        123,
+        "# file_diff seq=10 tool=edit paths=src/demo.py\n"
+        "--- src/demo.py\n+++ src/demo.py\n@@ -1 +1 @@\n-old\n+new\n",
+        None,
+    )]
+    assert repl.acks == [123]
