@@ -132,3 +132,48 @@ def test_replay_display_text_does_not_duplicate_emit_display_event():
 
     out = replay_display_text("sid", store)
     assert out == "> question\n\n═ Output ═════════════════════════\nanswer\n"
+
+
+
+def test_code_agent_file_diff_paths_extracts_unique_paths():
+    from agentlib.agents.code_agent import CodeAgentBase
+
+    diff = "\n".join([
+        "--- a/src/old.py",
+        "+++ b/src/old.py",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "--- /dev/null",
+        "+++ b/src/new.py",
+    ])
+
+    assert CodeAgentBase._file_diff_paths(diff) == ["src/old.py", "src/new.py"]
+
+
+def test_code_agent_records_file_diff_event_with_tool_and_paths():
+    from agentlib.agents.code_agent import CodeAgentBase
+
+    class Agent(CodeAgentBase):
+        def __init__(self):
+            self.events = []
+            self._edit_echo_buffer = [">>> line_patch('src/app.py', 'replace 1:1\\nnew')"]
+
+        def _append_session_event(self, event_type, payload, create_session=True):
+            self.events.append((event_type, payload, create_session))
+            return 1
+
+    diff = "--- src/app.py\n+++ src/app.py\n@@ -1 +1 @@\n-old\n+new\n"
+    agent = Agent()
+    agent._record_file_diff_event(diff)
+
+    assert agent.events == [(
+        "file_diff",
+        {
+            "kind": "unified_diff",
+            "tool": "line_patch",
+            "paths": ["src/app.py"],
+            "diff": diff,
+        },
+        True,
+    )]

@@ -352,6 +352,40 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         if filename is None:
             return f">>> {func}(...)"
         return f">>> {func}({filename!r}, ...)"
+    @staticmethod
+    def _file_diff_paths(diff: str) -> list[str]:
+        paths = []
+        seen = set()
+        for line in diff.splitlines():
+            if not (line.startswith("--- ") or line.startswith("+++ ")):
+                continue
+            path = line[4:].strip().split("\t", 1)[0]
+            if path == "/dev/null":
+                continue
+            if path.startswith("a/") or path.startswith("b/"):
+                path = path[2:]
+            if path and path not in seen:
+                seen.add(path)
+                paths.append(path)
+        return paths
+
+    def _record_file_diff_event(self, diff: str):
+        if not diff:
+            return
+        buffer = getattr(self, '_edit_echo_buffer', [])
+        first = buffer[0] if buffer else ""
+        tool = None
+        if first.startswith(">>> edit("):
+            tool = "edit"
+        elif first.startswith(">>> line_patch("):
+            tool = "line_patch"
+        self._append_session_event("file_diff", {
+            "kind": "unified_diff",
+            "tool": tool,
+            "paths": self._file_diff_paths(diff),
+            "diff": diff,
+        })
+
 
     def _flush_display_capture(self):
         if not self._display_capture:
@@ -1449,6 +1483,7 @@ If you don't know how to proceed:
                     print(f"{DIM}{line}{RESET}", flush=True)
                     self._capture_display_line(line)
         elif msg_type == "file_diff":
+            self._record_file_diff_event(chunk)
             self._show_python_header_if_pending()
             if getattr(self, '_edit_echo_buffer', []):
                 echo_line = self._compact_edit_echo(chunk)
