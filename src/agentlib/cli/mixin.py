@@ -104,7 +104,7 @@ class InputSession:
         self.altmode = altmode
 
     def prompt(self, prompt_str: str = "> ", initial_text: str = "",
-               on_ctrl_o=None, on_esc_esc=None) -> str:
+               on_ctrl_o=None, on_esc_esc=None, accepted_prefix=None) -> str:
         """Get input from user."""
         user_input = raw_prompt(
             prompt_str=prompt_str,
@@ -114,6 +114,7 @@ class InputSession:
             initial_text=initial_text,
             on_ctrl_o=on_ctrl_o,
             on_esc_esc=on_esc_esc,
+            accepted_prefix=accepted_prefix,
         )
         return user_input
 

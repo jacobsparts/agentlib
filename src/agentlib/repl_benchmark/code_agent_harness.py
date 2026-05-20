@@ -46,11 +46,11 @@ def parse_events(text: str) -> list[dict]:
 def _prompt_idle(output: bytearray, inputs_done: bool) -> bool:
     if not inputs_done:
         return False
-    decoded = output.decode(errors="replace")
+    decoded = strip_ansi(output.decode(errors="replace"))
     stripped = decoded.rstrip()
     if not stripped.endswith(">"):
         return False
-    after_last_prompt = decoded.rsplit("\n>", 1)[-1].strip() if "\n>" in decoded else ""
+    after_last_prompt = decoded.rsplit("\n>", 1)[-1].strip() if "\n>" in decoded else stripped
     return after_last_prompt == "" or after_last_prompt == ">"
 
 

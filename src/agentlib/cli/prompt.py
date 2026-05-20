@@ -52,6 +52,7 @@ def prompt(
     initial_text: str = '',
     on_ctrl_o: Optional[Callable[[str, int], None]] = None,
     on_esc_esc: Optional[Callable[[], Optional[str]]] = None,
+    accepted_prefix: Optional[Callable[[str], Optional[str]]] = None,
 ) -> str:
     """
     Read a line of input with editing support.
@@ -550,9 +551,14 @@ def prompt(
                             i += 1
                             continue
                         line = ''.join(buf)
+                        prefix = accepted_prefix(line) if accepted_prefix else None
+                        total_rows, _ = _measure(buf, len(buf))
                         if alt_input and alt_input.active:
                             alt_input.exit(buf, len(buf))
+                            prefix = None
                         sys.stdout.write('\n')
+                        if prefix:
+                            sys.stdout.write(f'\x1b[{total_rows}A\r\x1b[L{prefix}\n\x1b[{total_rows}B')
                         sys.stdout.flush()
                         if add_to_history and line.strip() and (not history or history[-1] != line):
                             history.append(line)

@@ -295,11 +295,14 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         prefix = f"{char} {label} "
         return f"{color}{prefix}{char * max(0, width - len(prefix))}{RESET}"
 
-    def _display_input_block(self, text: str):
+    def _display_input_block(self, text: str, include_header: bool = False):
         lines = text.rstrip("\n").split("\n") if text else [""]
-        rendered = [self._section_header("User"), f"{self.cli_prompt}{lines[0]}"]
+        rendered = []
+        if include_header:
+            rendered.append(strip_ansi(self._section_header("User")))
+        rendered.append(f"{self.cli_prompt}{lines[0]}")
         rendered.extend(lines[1:])
-        self._record_display_event("input", strip_ansi("\n".join(rendered)) + "\n\n")
+        self._record_display_event("input", "\n".join(rendered) + "\n\n")
     def _replay_display_output(self):
         if not self._session_id:
             return
@@ -1906,10 +1909,12 @@ If you don't know how to proceed:
                 self._auto_context_attachment_names.update(files)
                 for filename in files:
                     self.attach_file_ref(filename, filename)
-        synth = not resumed_on_start and not bool(resume)
+
+        synth = not resumed_on_start
 
         try:
             preload_input = ""
+            user_header_pending = False
             while True:
                 rewind_shortcut = False
 
@@ -1925,12 +1930,21 @@ If you don't know how to proceed:
                     rewind_shortcut = True
                     return "/rewind"
 
+                def accepted_user_prefix(line: str) -> str | None:
+                    if not user_header_pending:
+                        return None
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("/"):
+                        return None
+                    return self._section_header("User")
+
                 try:
                     user_input = session.prompt(
-                        f"\n{self._section_header('User')}\n{prompt_str}",
+                        prompt_str,
                         initial_text=preload_input,
                         on_ctrl_o=open_transcript,
                         on_esc_esc=trigger_rewind,
+                        accepted_prefix=accepted_user_prefix,
                     )
                 except KeyboardInterrupt:
                     print()
@@ -1949,7 +1963,7 @@ If you don't know how to proceed:
                 self._ensure_live_session()
                 self._flush_pending_session_events()
                 if user_input.strip() == "/repl":
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     try:
                         if self.user_repl_session(history):
                             self._coalesce_context()
@@ -1959,7 +1973,7 @@ If you don't know how to proceed:
 
                 if user_input.strip() == "/rewind":
                     if not rewind_shortcut:
-                        self._display_input_block(user_input)
+                        self._display_input_block(user_input, include_header=False)
                     from agentlib.cli.rewind import rewind_ui
                     self._ensure_live_session()
                     self._flush_pending_session_events()
@@ -1984,7 +1998,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/resume"):
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     resumed = False
                     parts = user_input.strip().split(None, 1)
                     if len(parts) == 1:
@@ -2001,7 +2015,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/fork"):
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     parts = user_input.strip().split(None, 1)
                     source_id = parts[1].strip() if len(parts) > 1 else getattr(self, "_session_id", None)
                     if not source_id:
@@ -2016,7 +2030,7 @@ If you don't know how to proceed:
 
 
                 if user_input.strip().startswith("/skills"):
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     parts = user_input.strip().split(None, 1)
                     if len(parts) == 1:
                         from agentlib.cli.skills import select_skills_ui
@@ -2035,7 +2049,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/attach "):
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     filename = user_input.strip()[8:].strip()
                     if filename:
                         try:
@@ -2048,7 +2062,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/detach "):
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     filename = user_input.strip()[8:].strip()
                     if filename:
                         if is_preview_uri(filename):
@@ -2064,7 +2078,7 @@ If you don't know how to proceed:
 
 
                 if user_input.strip() == "/attachments":
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     attachments = self.list_attachments()
                     expanded = self._expanded_preview_context()
                     if not attachments and not expanded:
@@ -2081,7 +2095,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/model"):
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     parts = user_input.strip().split(None, 1)
                     if len(parts) == 1:
                         # No argument - show current model
@@ -2112,7 +2126,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip() == "/tokens":
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     tracker = self.llm_client.usage_tracker
                     if not tracker.history:
                         self._display_text(f"{DIM}No API calls yet{RESET}", kind="status")
@@ -2129,7 +2143,7 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.strip().startswith("/subagents"):
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     try:
                         # Import subagent module into REPL and show docstring to agent
                         # Optional model parameter: /subagents [model]
@@ -2167,12 +2181,13 @@ If you don't know how to proceed:
                     continue
 
                 if user_input.lstrip().startswith("/"):
-                    self._display_input_block(user_input)
+                    self._display_input_block(user_input, include_header=False)
                     self.console.print(startup_help)
                     self._record_display_event("status", startup_commands + "\n")
                     continue
 
-                self._display_input_block(user_input)
+                self._display_input_block(user_input, include_header=user_header_pending)
+                user_header_pending = False
 
                 if synth:
                     try:
@@ -2219,6 +2234,7 @@ If you don't know how to proceed:
                 response_str = str(response) if response is not None else ""
                 formatted = self.format_response(response_str)
                 if formatted:
+                    user_header_pending = True
                     output_header = self._section_header("Output", "═", TEXT)
                     print(output_header)
                     print(formatted)
