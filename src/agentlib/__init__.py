@@ -13,8 +13,6 @@ from .mcp_mixin import MCPMixin
 from .shell_mixin import SubShellMixin
 from .python_tool_mixin import PythonToolMixin, PythonToolResponseMixin, PythonMCPMixin
 from .patch_mixin import FilePatchMixin
-from .jina_mixin import JinaMixin
-from .tavily_mixin import TavilyMixin
 from .attachment_mixin import AttachmentMixin
 from .repl_attachment_mixin import REPLAttachmentMixin
 from .subagent import Subagent, SubagentError, SubagentResponse
@@ -41,8 +39,6 @@ __all__ = [
     "PythonToolMixin",
     "PythonToolResponseMixin",
     "FilePatchMixin",
-    "JinaMixin",
-    "TavilyMixin",
     "AttachmentMixin",
     "REPLAttachmentMixin",
     "Subagent",

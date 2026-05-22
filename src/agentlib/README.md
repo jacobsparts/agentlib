@@ -25,7 +25,6 @@
 |--------|-------------|
 | `mcp_mixin.py` | `MCPMixin` - MCP server integration |
 | `shell_mixin.py` | `SubShellMixin` - persistent bash shell |
-| `jina_mixin.py` | `JinaMixin` - `web_fetch`, `web_search` via Jina AI |
 | `patch_mixin.py` | `FilePatchMixin` - unified diff patching |
 | `attachment_mixin.py` | `AttachmentMixin` - persistent context files |
 | `repl_attachment_mixin.py` | `REPLAttachmentMixin` - attachments as REPL output |
