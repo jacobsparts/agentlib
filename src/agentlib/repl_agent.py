@@ -47,7 +47,8 @@ import logging
 import os
 import signal
 import sys
-from multiprocessing import Process, Queue
+from multiprocessing import Queue
+
 from queue import Empty
 from typing import Any, Callable, Optional, Union
 
@@ -79,11 +80,13 @@ class _InterruptedError(KeyboardInterrupt):
 
 
 from agentlib.tools.subrepl import (
+    MultiprocessingTransport,
     SubREPL,
     _format_echo,
     _format_echo_stdout,
     _split_into_statements,
 )
+
 from agentlib.tools.source_extract import extract_method_source as _extract_tool_source
 
 
@@ -346,36 +349,33 @@ class ToolREPL(SubREPL):
     normal Python code instead of structured tool calls.
     """
 
-    def __init__(self, echo: bool = True) -> None:
+    def __init__(self, echo: bool = True, transport: Optional[type] = None) -> None:
         super().__init__(echo=echo)
+        self._transport_class = transport or MultiprocessingTransport
         self._tool_request_queue: Optional[Queue] = None
         self._tool_response_queue: Optional[Queue] = None
         self._tools_injected: bool = False
         self._cmd_seq: int = 0  # Command sequence number for detecting stale messages
-
     def _ensure_session(self) -> None:
         """Override to use tool-aware worker and add tool queues."""
-        if self._worker is None or not self._worker.is_alive():
-            self._cmd_queue = Queue(maxsize=1)
-            self._output_queue = Queue(maxsize=1)
-            self._tool_request_queue = Queue(maxsize=1)
-            self._tool_response_queue = Queue(maxsize=1)
-
-            self._worker = Process(
+        if self._transport is None or not self._transport.is_alive():
+            self._transport = self._transport_class(
                 target=_tool_worker_main,
-                args=(
-                    self._cmd_queue,
-                    self._output_queue,
-                    self._tool_request_queue,
-                    self._tool_response_queue,
-                ),
-                daemon=True,
+                queue_count=4,
             )
-            self._worker.start()
+            self._transport.start()
+            (
+                self._cmd_queue,
+                self._output_queue,
+                self._tool_request_queue,
+                self._tool_response_queue,
+            ) = self._transport.queues
+            self._worker = self._transport.worker
             self._running = False
             self._tools_injected = False
             self._builtins_injected = False
             self._cmd_seq = 0  # Reset sequence on new session
+
 
     def inject_tools(self, tools: dict[str, tuple[Callable, Any]]) -> None:
         """
@@ -461,7 +461,7 @@ class ToolREPL(SubREPL):
 
     def _check_worker_alive(self) -> None:
         """Check if worker is alive, drain queues and raise if dead."""
-        if self._worker is None or not self._worker.is_alive():
+        if self._transport is None or not self._transport.is_alive():
             # Drain all queues to prevent blocking
             for q in (self._tool_response_queue, self._tool_request_queue, self._output_queue):
                 if q is not None:
@@ -711,6 +711,8 @@ class REPLMixin:
 
     advertise_emit: bool = True
 
+    repl_transport = MultiprocessingTransport
+
     def build_output_for_llm(self, output_chunks):
         """Build the output string sent to the LLM from typed output chunks.
 
@@ -791,7 +793,7 @@ class REPLMixin:
             super()._ensure_setup()
 
         if not hasattr(self, '_tool_repl'):
-            self._tool_repl = ToolREPL(echo=True)
+            self._tool_repl = ToolREPL(echo=True, transport=self.repl_transport)
 
     def _get_tool_repl(self) -> ToolREPL:
         """Get or create the ToolREPL instance, with tools and startup code injected."""

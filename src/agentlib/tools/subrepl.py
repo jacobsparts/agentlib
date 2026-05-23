@@ -34,13 +34,15 @@ import signal
 import sys
 import time
 from codeop import compile_command
-from multiprocessing import Process, Queue
+from multiprocessing import Queue
 from queue import Empty
 from typing import Any, Optional
 
 
 STILL_RUNNING = "[still running]\n"
 
+
+from agentlib.tools.transports import MultiprocessingTransport, StdioSubprocessTransport
 
 def _redact_long_strings(source: str, max_len: int = 200, max_newlines: int = 3) -> str:
     """Replace long string literals with redaction marker for echo display.
@@ -344,6 +346,8 @@ class SubREPL:
         self._cmd_queue: Optional[Queue] = None
         self._output_queue: Optional[Queue] = None
         self._worker: Optional[Process] = None
+        self._transport: Optional[MultiprocessingTransport] = None
+
         self._running: bool = False
         self._echo: bool = echo
 
@@ -356,15 +360,15 @@ class SubREPL:
 
     def _ensure_session(self) -> None:
         """Lazily create worker session if not exists."""
-        if self._worker is None or not self._worker.is_alive():
-            self._cmd_queue = Queue(maxsize=1)
-            self._output_queue = Queue(maxsize=1)
-            self._worker = Process(
+        if self._transport is None or not self._transport.is_alive():
+            self._transport = MultiprocessingTransport(
                 target=_worker_main,
-                args=(self._cmd_queue, self._output_queue, os.getcwd()),
-                daemon=True
+                args=(os.getcwd(),),
+                queue_count=2,
             )
-            self._worker.start()
+            self._transport.start()
+            self._cmd_queue, self._output_queue = self._transport.queues
+            self._worker = self._transport.worker
             self._running = False
 
     def _inject_code(self, code: str, timeout: float = 10.0) -> None:
@@ -509,32 +513,24 @@ class SubREPL:
 
     def _escalating_interrupt(self, output_chunks: list[str]) -> str:
         """Interrupt with escalating signals: SIGINT (x3) -> SIGKILL."""
-        if not self._running or self._worker is None:
+        if not self._running or self._transport is None:
             return ""
-
         # Try SIGINT up to 3 times
         for _ in range(3):
-            try:
-                os.kill(self._worker.pid, signal.SIGINT)
-            except (ProcessLookupError, OSError):
-                pass
+            self._transport.interrupt()
 
             result = self._drain_and_wait(output_chunks, timeout=1.0)
             if result is not None:
                 return result
 
         # Nuclear option: SIGKILL
-        try:
-            os.kill(self._worker.pid, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            pass
+        self._transport.terminate()
 
-        self._worker.join(timeout=1.0)
         self._running = False
 
         output = "".join(output_chunks) + "\n[Process killed]\n"
 
-        # Session destroyed
+        self._transport = None
         self._worker = None
         self._cmd_queue = None
         self._output_queue = None
@@ -570,14 +566,10 @@ class SubREPL:
         Returns:
             Output string (always complete after interrupt).
         """
-        if not self._running or self._worker is None:
+        if not self._running or self._transport is None:
             return ""
 
-        try:
-            os.kill(self._worker.pid, signal.SIGINT)
-        except (ProcessLookupError, OSError):
-            pass
-
+        self._transport.interrupt()
         output_chunks: list[str] = []
 
         while True:
@@ -590,7 +582,7 @@ class SubREPL:
                     self._running = False
                     return "".join(output_chunks)
             except Empty:
-                if not self._worker.is_alive():
+                if not self._transport.is_alive():
                     self._running = False
                     return "".join(output_chunks) + "\n[Process died]\n"
 
@@ -601,9 +593,8 @@ class SubREPL:
         Returns:
             Output string, or None if no session active.
         """
-        if self._worker is None:
+        if self._transport is None:
             return None
-
         output_chunks: list[str] = []
 
         if self._output_queue is not None:
@@ -615,16 +606,13 @@ class SubREPL:
                 except Empty:
                     break
 
-        if self._worker.is_alive():
-            try:
-                os.kill(self._worker.pid, signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
-            self._worker.join(timeout=1.0)
+        if self._transport.is_alive():
+            self._transport.terminate()
 
         was_running = self._running
         result = "".join(output_chunks) if was_running else None
 
+        self._transport = None
         self._worker = None
         self._cmd_queue = None
         self._output_queue = None
