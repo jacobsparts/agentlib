@@ -35,7 +35,7 @@ from agentlib.session_store import SessionStore
 from agentlib.session_replay import replay_session_into_agent, replay_display_text
 from agentlib.preview_refs import is_preview_uri, preview_key, numbered_content, render_preview_refs
 
-from dotenv import load_dotenv
+from agentlib.dotenv import load_dotenv
 
 load_dotenv()
 

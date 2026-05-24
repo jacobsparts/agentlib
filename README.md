@@ -52,7 +52,7 @@ The result:
 
 * **Production-proven.** Powers our live dynamic-pricing, product-classification, and customer-support automations.  
 * **Fast iteration.** New tools or model swaps are often a one-line change.  
-* **Minimal deps.** Only `pydantic` (v1 & v2) and `python-dotenv`.  
+* **Minimal deps.** Only `pydantic` (v1 & v2).  
 
 Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in minimalist agent design.
 

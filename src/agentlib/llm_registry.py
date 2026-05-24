@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass, field
-from dotenv import load_dotenv
+from agentlib.dotenv import load_dotenv
 
 load_dotenv()
 
