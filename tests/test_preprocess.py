@@ -1004,11 +1004,8 @@ class TestCodeAgentPreprocessCode:
             repl.close()
 
 
-    def test_attached_file_matches_absolute_written_path(self, tmp_path):
-        target = tmp_path / "file.py"
-        target.write_text("before\n")
-        rel = Path.cwd().joinpath(target).relative_to(Path.cwd()) if target.is_relative_to(Path.cwd()) else str(target)
-        name = str(rel)
+    def test_attached_file_matches_written_logical_path(self, tmp_path):
+        name = "file.py"
 
         agent = CodeAgent()
         agent._ensure_setup()
@@ -1017,8 +1014,10 @@ class TestCodeAgentPreprocessCode:
             _attachments={name: "    1→before\n"},
         )
 
-        target.write_text("after\n")
-        output = agent.build_output_for_llm([("file_written", str(target.resolve()) + "\n")])
+        output = agent.build_output_for_llm([(
+            "file_written",
+            json.dumps({"path": name, "content": "after\n"}) + "\n",
+        )])
 
         assert f"[Attachment: {name}]" in output
         rendered = agent.conversation._messages()

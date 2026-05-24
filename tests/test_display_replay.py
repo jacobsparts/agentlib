@@ -175,7 +175,7 @@ def test_code_agent_records_file_diff_event_with_tool_and_paths():
             "paths": ["src/app.py"],
             "diff": diff,
         },
-        True,
+        False,
     )]
 
 

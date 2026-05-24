@@ -2,7 +2,7 @@ import ast
 import base64
 import copy
 import re
-from pathlib import Path
+from .attachment_mixin import MemoryAttachment, decode_attachment_refs
 
 
 def _preview_key(path: str) -> str | None:
@@ -13,36 +13,30 @@ def _preview_key(path: str) -> str | None:
     return None
 
 
-def render_attachment_content(path: str, store=None, session_id: str | None = None, base_dir: str | None = None) -> str:
-    if key := _preview_key(path):
+def render_attachment_content(ref, store=None, session_id: str | None = None, base_dir: str | None = None) -> str:
+    if isinstance(ref, MemoryAttachment):
+        content = ref.content
+    elif key := _preview_key(ref):
         if store is None or session_id is None:
-            raise FileNotFoundError(path)
+            raise FileNotFoundError(ref)
         content = store.get_preview_blob(session_id, key)
         if content is None:
-            raise FileNotFoundError(path)
+            raise FileNotFoundError(ref)
     else:
-        file_path = Path(path).expanduser()
-        if not file_path.is_absolute() and base_dir:
-            file_path = Path(base_dir).expanduser() / file_path
-        content = file_path.read_text()
+        raise FileNotFoundError(ref)
     lines = content.split('\n')
     return '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
 
 
-def _attachment_path_exists(path: str, base_dir: str | None = None) -> bool:
-    file_path = Path(path).expanduser()
-    if not file_path.is_absolute() and base_dir:
-        file_path = Path(base_dir).expanduser() / file_path
-    return file_path.exists()
-
-
-def _load_attachment_map(refs: dict[str, str], missing: list[tuple[str, str]], store=None, session_id: str | None = None, base_dir: str | None = None) -> dict[str, str]:
+def _load_attachment_map(refs: dict, missing: list[tuple[str, object]], store=None, session_id: str | None = None, base_dir: str | None = None) -> dict[str, str]:
     loaded = {}
-    for name, path in refs.items():
+    for name, ref in refs.items():
+        if not isinstance(ref, MemoryAttachment) and not _preview_key(ref):
+            continue
         try:
-            loaded[name] = render_attachment_content(path, store, session_id, base_dir)
+            loaded[name] = render_attachment_content(ref, store, session_id, base_dir)
         except Exception:
-            missing.append((name, path))
+            missing.append((name, ref))
     return loaded
 
 
@@ -118,7 +112,7 @@ def replay_session_into_agent(agent, session_id: str, store):
             for key in ("images", "audio"):
                 if msg.get(key):
                     msg[key] = _decode_media(msg[key])
-            refs = msg.pop("_attachment_refs", None) or {}
+            refs = decode_attachment_refs(msg.pop("_attachment_refs", None) or {})
             local_missing = []
             if refs:
                 loaded = _load_attachment_map(refs, local_missing, store, session_id, base_dir)
@@ -166,14 +160,15 @@ def replay_session_into_agent(agent, session_id: str, store):
     for msg in messages:
         refs = msg.get("_attachment_refs") or {}
         attachments = msg.get("_attachments", {})
-        for name, path in refs.items():
-            if _preview_key(path):
-                if store.get_preview_blob(session_id, _preview_key(path)) is None:
+        refs = decode_attachment_refs(refs)
+        msg["_attachment_refs"] = refs
+        for name, ref in refs.items():
+            if isinstance(ref, MemoryAttachment):
+                continue
+            if _preview_key(ref):
+                if store.get_preview_blob(session_id, _preview_key(ref)) is None:
                     attachments.pop(name, None)
-                    final_missing.append((name, path))
-            elif not _attachment_path_exists(path, base_dir):
-                attachments.pop(name, None)
-                final_missing.append((name, path))
+                    final_missing.append((name, ref))
         if "_attachments" in msg and not msg["_attachments"]:
             del msg["_attachments"]
 
@@ -182,9 +177,10 @@ def replay_session_into_agent(agent, session_id: str, store):
     deduped = []
     seen = set()
     for item in final_missing:
-        if item not in seen:
+        key = (item[0], repr(item[1]))
+        if key not in seen:
             deduped.append(item)
-            seen.add(item)
+            seen.add(key)
     return deduped
 
 

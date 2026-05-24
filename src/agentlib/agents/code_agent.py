@@ -5,8 +5,12 @@ Combines REPLAgent with CLIMixin to create an interactive coding assistant
 that executes Python code directly. Uses native implementations for file
 operations and ripgrep for search.
 
+Project filesystem access belongs in the worker process. Parent-side code
+should treat project files as worker-owned resources and receive content/paths
+over the REPL queues instead of reading or statting them directly.
+
 Dependencies:
-    - ripgrep (rg) must be installed: apt install ripgrep
+    - ripgrep (rg) enables grep(); when missing in the worker, grep is disabled.
 """
 
 from agentlib.code_agent_preprocess import preprocess_code_agent
@@ -14,13 +18,14 @@ import base64
 import hashlib
 import json
 import os
-import shutil
 import sys
 import copy
 import re
 from typing import Optional
 from pathlib import Path
+from queue import Empty
 from agentlib import REPLAgent, REPLAttachmentMixin, MCPMixin
+from agentlib.attachment_mixin import MemoryAttachment, encode_attachment_refs
 
 from agentlib.cli import CLIMixin
 from agentlib.llm_registry import ModelNotFoundError
@@ -34,9 +39,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-if not shutil.which('rg'):
-    sys.exit("Error: ripgrep (rg) is required but not found. Install with: apt install ripgrep")
-
 #import logging; logging.getLogger('agentlib').setLevel(logging.DEBUG)
 
 
@@ -45,67 +47,6 @@ def _get_config_value(attr_name, default):
     from agentlib.config import get_user_config
     config = get_user_config()
     return getattr(config, attr_name, default) if config else default
-
-
-def gather_auto_attach_files():
-    '''Find CLAUDE.md or AGENTS.md files and their @ imports.
-
-    Searches current directory and parent directories for CLAUDE.md or AGENTS.md.
-    Recursively processes @ imports (lines starting with @ followed by filename).
-    Returns list of file paths relative to current directory, with no duplicates.
-    '''
-    current = Path.cwd()
-    found_files = []
-    seen_paths = set()
-
-    def add_file_and_imports(file_path: Path, base_dir: Path):
-        'Recursively add file and its imports.'
-        # Normalize to absolute path for deduplication
-        abs_path = file_path.resolve()
-        if abs_path in seen_paths:
-            return
-        seen_paths.add(abs_path)
-
-        # Add to results (relative to cwd)
-        rel_path = os.path.relpath(abs_path, current)
-        found_files.append(rel_path)
-
-        # Scan for @ imports
-        try:
-            content = file_path.read_text()
-            for line in content.split('\n'):
-                if line.startswith('@'):
-                    import_name = line[1:].strip()
-                    if import_name:
-                        # Resolve relative to the directory containing this file
-                        import_path = (file_path.parent / import_name).resolve()
-                        if import_path.exists() and import_path.is_file():
-                            add_file_and_imports(import_path, file_path.parent)
-        except Exception:
-            pass  # Ignore read errors
-
-    # Search for CLAUDE.md or AGENTS.md in current and parent directories
-    md_files = []
-    search_dir = current
-    while True:
-        for name in ['CLAUDE.md', 'AGENTS.md']:
-            candidate = search_dir / name
-            if candidate.exists():
-                md_files.append(candidate)
-
-        parent = search_dir.parent
-        if parent == search_dir:  # Reached root
-            break
-        search_dir = parent
-
-    # Sort so parent directories come first (reverse order of discovery)
-    md_files.reverse()
-
-    # Process each markdown file and its imports
-    for md_file in md_files:
-        add_file_and_imports(md_file, md_file.parent)
-
-    return found_files
 
 
 def _skill_description(path: Path) -> str:
@@ -141,6 +82,8 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             self._pending_unviewed_files = set()
             self._auto_context_attachment_names = set()
             self._expanded_preview_refs = {}
+            self._rg_available = None
+            self._rg_warning_printed = False
 
         if hasattr(self, "_conversation"):
             self._configure_conversation(self._conversation)
@@ -184,7 +127,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         try:
             new_session_id = self._session_store.fork_session(
                 session_id,
-                cwd=str(Path.cwd()),
+                cwd=self.worker_cwd(),
                 model=getattr(self, "model", None),
             )
         except Exception as e:
@@ -239,7 +182,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
     def _ensure_live_session(self):
         if self._session_id is None:
-            self._session_id = self._session_store.create_session(str(Path.cwd()), getattr(self, 'model', None))
+            self._session_id = self._session_store.create_session(self.worker_cwd(), getattr(self, 'model', None))
             self._next_event_seq = 1
             if not self._acquire_session_lock(self._session_id):
                 raise RuntimeError("Could not acquire session lock.")
@@ -388,7 +331,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             "tool": tool,
             "paths": self._file_diff_paths(diff),
             "diff": diff,
-        })
+        }, create_session=False)
 
     def _matching_file_diff_events(self, file_path: str | None = None, limit: int | None = None) -> list[dict]:
         if not getattr(self, "_session_id", None):
@@ -446,7 +389,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 msg[key] = copy.deepcopy(value)
         refs = message.get('_attachment_refs')
         if refs:
-            msg['_attachment_refs'] = copy.deepcopy(refs)
+            msg['_attachment_refs'] = encode_attachment_refs(refs)
         return msg
 
     def _tag_latest_segment_seq(self, message: dict, seq: int):
@@ -493,14 +436,209 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
         self._persist_message(self.conversation.messages[-1])
         return result
 
+    _worker_attachment_helpers = r"""
+import json as _agentlib_json
+import os as _agentlib_os
+from pathlib import Path as _agentlib_Path
+
+def _agentlib_attach_file_ref(filepath, name=None):
+    path = _agentlib_Path(filepath).expanduser()
+    content = path.read_text()
+    attach_name = name or filepath
+    _send_output("attachment_ref", _agentlib_json.dumps({
+        "name": attach_name,
+        "path": str(path),
+        "content": content,
+    }) + "\n")
+
+def _agentlib_gather_auto_attach_files():
+    current = _agentlib_Path.cwd()
+    found_files = []
+    seen_paths = set()
+
+    def add_file_and_imports(file_path):
+        abs_path = file_path.resolve()
+        if abs_path in seen_paths:
+            return
+        seen_paths.add(abs_path)
+        found_files.append(_agentlib_os.path.relpath(abs_path, current))
+        try:
+            content = file_path.read_text()
+            for line in content.split("\n"):
+                if line.startswith("@"):
+                    import_name = line[1:].strip()
+                    if import_name:
+                        import_path = (file_path.parent / import_name).resolve()
+                        if import_path.exists() and import_path.is_file():
+                            add_file_and_imports(import_path)
+        except Exception:
+            pass
+
+    md_files = []
+    search_dir = current
+    while True:
+        for name in ["CLAUDE.md", "AGENTS.md"]:
+            candidate = search_dir / name
+            if candidate.exists():
+                md_files.append(candidate)
+        parent = search_dir.parent
+        if parent == search_dir:
+            break
+        search_dir = parent
+
+    md_files.reverse()
+    for md_file in md_files:
+        add_file_and_imports(md_file)
+    return found_files
+
+def _agentlib_send_auto_context_files():
+    _send_output("auto_context_files", _agentlib_json.dumps(_agentlib_gather_auto_attach_files()) + "\n")
+
+def _agentlib_send_worker_cwd():
+    _send_output("worker_cwd", str(_agentlib_Path.cwd()) + "\n")
+
+def _agentlib_send_rg_available():
+    import shutil as _agentlib_shutil
+    _send_output("rg_available", _agentlib_json.dumps(bool(_agentlib_shutil.which("rg"))) + "\n")
+"""
+
+    def _ensure_worker_attachment_helpers(self):
+        self._ensure_setup()
+        repl = self._tool_repl
+        repl.inject_builtins()
+        if not getattr(self, '_worker_attachment_helpers_injected', False):
+            repl._inject_code(self._worker_attachment_helpers)
+            self._worker_attachment_helpers_injected = True
+        return repl
+
+    def _run_worker_control_code(self, code: str, capture_types: set[str]) -> list[tuple[str, str]]:
+        repl = self._ensure_worker_attachment_helpers()
+        repl._ensure_session()
+        repl._running = True
+        repl._cmd_seq += 1
+        current_seq = repl._cmd_seq
+        repl._cmd_queue.put((current_seq, code))
+        chunks = []
+        error_output = []
+
+        try:
+            while True:
+                tool_req = repl.poll_tool_request(timeout=0)
+                if tool_req:
+                    self._handle_tool_request(repl, tool_req)
+
+                try:
+                    msg_type, msg_data = repl._output_queue.get(timeout=0.05)
+                except Empty:
+                    continue
+
+                if msg_type in capture_types:
+                    chunks.append((msg_type, msg_data))
+                elif msg_type in {"output", "print", "error"}:
+                    error_output.append(msg_data)
+                elif msg_type == "done":
+                    seq_id, had_error = msg_data
+                    if seq_id != current_seq:
+                        continue
+                    repl._running = False
+                    if had_error:
+                        detail = "".join(error_output).strip() or "Worker command failed."
+                        raise RuntimeError(detail)
+                    return chunks
+        finally:
+            repl._running = False
+
+    def worker_cwd(self) -> str:
+        chunks = self._run_worker_control_code(
+            "_agentlib_send_worker_cwd()",
+            {"worker_cwd"},
+        )
+        if not chunks:
+            raise RuntimeError("Worker did not return cwd")
+        return chunks[-1][1].strip()
+
+    def worker_has_rg(self) -> bool:
+        if self._rg_available is None:
+            chunks = self._run_worker_control_code(
+                "_agentlib_send_rg_available()",
+                {"rg_available"},
+            )
+            self._rg_available = bool(json.loads(chunks[-1][1])) if chunks else False
+        return self._rg_available
+
+    def _warn_rg_missing(self):
+        if self._rg_warning_printed:
+            return
+        print(f"{DIM}Warning: ripgrep (rg) not found in worker; grep() tool disabled. Install with: apt install ripgrep{RESET}", file=sys.stderr)
+        self._rg_warning_printed = True
+
+    @property
+    def toolspecs(self):
+        specs = super().toolspecs
+        if not self.worker_has_rg():
+            specs = dict(specs)
+            specs.pop("grep", None)
+            self._warn_rg_missing()
+        return specs
+
+    def gather_auto_attach_files(self) -> list[str]:
+        chunks = self._run_worker_control_code(
+            "_agentlib_send_auto_context_files()",
+            {"auto_context_files"},
+        )
+        if not chunks:
+            return []
+        return json.loads(chunks[-1][1])
+
+    def _load_file_ref_content(self, filepath: str, name: str | None = None) -> dict:
+        chunks = self._run_worker_control_code(
+            f"_agentlib_attach_file_ref({filepath!r}, {name!r})",
+            {"attachment_ref"},
+        )
+        if not chunks:
+            raise RuntimeError(f"Worker did not return attachment content for {filepath}")
+        return json.loads(chunks[-1][1])
+
     def attach_file_ref(self, filepath: str, name: str | None = None):
-        path = str(Path(filepath).expanduser())
-        attach_name = name or filepath
-        content = Path(path).read_text()
+        item = self._load_file_ref_content(filepath, name)
+        attach_name = item["name"]
+        path = item["path"]
+        content = item["content"]
         self.attach(attach_name, content)
         self._explicit_attachment_refs[attach_name] = path
         self._pending_explicit_attachment_refs[attach_name] = path
         self._append_session_event("attachment_added", {"name": attach_name, "path": path}, create_session=False)
+        return len(content)
+
+    def _materialize_replayed_attachment_refs(self) -> list[tuple[str, object]]:
+        missing = []
+        loaded = {}
+        for msg in self.conversation.messages:
+            refs = msg.get('_attachment_refs') or {}
+            attachments = msg.setdefault('_attachments', {}) if refs else {}
+            for name, ref in refs.items():
+                if isinstance(ref, MemoryAttachment) or is_preview_uri(ref) or name in attachments:
+                    continue
+                key = (name, ref)
+                if key not in loaded:
+                    try:
+                        loaded[key] = self._load_file_ref_content(ref, name)["content"]
+                    except Exception:
+                        loaded[key] = None
+                        missing.append((name, ref))
+                content = loaded[key]
+                if content is not None:
+                    attachments[name] = self._render_attachment(name, content)
+            if "_attachments" in msg and not msg["_attachments"]:
+                del msg["_attachments"]
+        return missing
+
+    def attach_memory_ref(self, name: str, content: str):
+        ref = MemoryAttachment(content)
+        self.attach(name, content)
+        self._explicit_attachment_refs[name] = ref
+        self._pending_explicit_attachment_refs[name] = ref
+        self._append_session_event("attachment_added", {"name": name, "memory": True}, create_session=False)
 
     def detach_file_ref(self, name: str):
         self.detach(name)
@@ -518,6 +656,10 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     def _is_session_uri(name: str) -> bool:
         return isinstance(name, str) and name.startswith("session://")
 
+    @staticmethod
+    def _is_memory_attachment_name(name: str) -> bool:
+        return isinstance(name, str) and name.startswith("skill://")
+
     def _is_auto_context_file(self, name: str) -> bool:
         return (
             isinstance(name, str)
@@ -527,8 +669,14 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
             )
         )
 
-    def list_attachments(self, include_session_blobs: bool = True, include_auto_context: bool = True) -> dict[str, str]:
+    def list_attachments(self, include_session_blobs: bool = True, include_auto_context: bool = True, include_memory: bool = False) -> dict[str, str]:
         attachments = super().list_attachments()
+        if not include_memory:
+            attachments = {
+                name: content
+                for name, content in attachments.items()
+                if not self._is_memory_attachment_name(name)
+            }
         if not include_session_blobs:
             attachments = {
                 name: content
@@ -542,6 +690,7 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 if not self._is_auto_context_file(name)
             }
         return attachments
+
     def _configure_conversation(self, conversation):
         conversation.expanded_preview_refs = self._expanded_preview_refs
         conversation.preview_loader = self._preview_blob_content
@@ -602,11 +751,12 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                     "source": source,
                     "description": _skill_description(path),
                 }
-        active = set(self.list_attachments())
+        active = set(self.list_attachments(include_memory=True))
         items = []
         for name in sorted(skills):
             item = dict(skills[name])
-            item["attached"] = item["file_name"] in active
+            item["attachment_name"] = self._skill_attachment_name(item)
+            item["attached"] = item["attachment_name"] in active
             items.append(item)
         return items
 
@@ -619,24 +769,28 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 return item
         return None
 
+    def _skill_attachment_name(self, skill: dict) -> str:
+        source = "builtin" if skill["source"] == "built-in" else skill["source"]
+        return f"skill://{source}/{skill['file_name']}"
+
     def attach_skill(self, name: str) -> tuple[bool, str]:
         skill = self.resolve_skill(name)
         if not skill:
             return False, f"Skill not found: {name}"
-        self.attach_file_ref(str(skill["path"]), skill["file_name"])
+        self.attach_memory_ref(self._skill_attachment_name(skill), Path(skill["path"]).read_text())
         return True, f"Attached skill: {skill['name']} [{skill['source']}]"
 
     def apply_skill_selection(self, selected_skills: list[dict]) -> list[str]:
-        current = {item["file_name"]: item for item in self.list_skills() if item["attached"]}
-        desired = {item["file_name"]: item for item in selected_skills if item["attached"]}
+        current = {item["attachment_name"]: item for item in self.list_skills() if item["attached"]}
+        desired = {item["attachment_name"]: item for item in selected_skills if item["attached"]}
         messages = []
-        for file_name, item in current.items():
-            if file_name not in desired:
-                self.detach_file_ref(file_name)
+        for attachment_name, item in current.items():
+            if attachment_name not in desired:
+                self.detach_file_ref(attachment_name)
                 messages.append(f"Detached skill: {item['name']}")
-        for file_name, item in desired.items():
-            if file_name not in current:
-                self.attach_file_ref(str(item["path"]), file_name)
+        for attachment_name, item in desired.items():
+            if attachment_name not in current:
+                self.attach_memory_ref(attachment_name, Path(item["path"]).read_text())
                 messages.append(f"Attached skill: {item['name']} [{item['source']}]")
         return messages
 
@@ -810,7 +964,11 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
                 continue
 
             if msg_type == "file_written":
-                written_files.append(chunk.strip())
+                text = chunk.strip()
+                try:
+                    written_files.append(json.loads(text))
+                except Exception:
+                    written_files.append({"path": text, "content": None})
                 continue
             if msg_type == "file_diff":
                 continue
@@ -821,39 +979,41 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
 
         flush_statement()
 
-        # Auto-refresh: re-read attached files that were written but not re-read by agent
-        for path in written_files:
+        # Auto-refresh attached files from worker-supplied write content.
+        for item in written_files:
+            path = item.get("path")
+            content = item.get("content")
+            if not path or content is None:
+                continue
             if path in self._read_attachments:
                 continue  # Agent already re-read this file
             attached_name = self._attached_file_name(path)
             if attached_name is None:
                 continue  # File wasn't attached
-            try:
-                content = Path(path).read_text()
-                lines = content.split('\n')
-                formatted = '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
-                self._invalidate_attachment(attached_name)
-                self._read_attachments[attached_name] = formatted
-                result.append(f">>> view({attached_name!r})\n[Attachment: {attached_name}]\n")
-            except Exception:
-                pass
+            lines = content.split('\n')
+            formatted = '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))
+            self._invalidate_attachment(attached_name)
+            self._read_attachments[attached_name] = formatted
+            result.append(f">>> view({attached_name!r})\n[Attachment: {attached_name}]\n")
 
         return "".join(result)
 
 
     def _same_file(self, left: str, right: str) -> bool:
-        try:
-            return os.path.samefile(left, right)
-        except (FileNotFoundError, OSError, TypeError):
-            try:
-                return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
-            except (OSError, RuntimeError):
-                return left == right
+        if not isinstance(left, str) or not isinstance(right, str):
+            return False
+        return self._logical_path(left) == self._logical_path(right)
+
+    @staticmethod
+    def _logical_path(path: str) -> str:
+        return os.path.normpath(path.replace("\\", "/"))
 
     def _attached_file_name(self, path: str) -> str | None:
         """Return the active attachment name for a filesystem path."""
         for msg in self.conversation.messages:
             for name in msg.get('_attachments', {}):
+                if self._is_memory_attachment_name(name):
+                    continue
                 if self._same_file(name, path):
                     return name
         return None
@@ -950,6 +1110,8 @@ class CodeAgentBase(REPLAttachmentMixin, CLIMixin, REPLAgent):
     def _current_file_context_names(self, extra=None) -> list[str]:
         names = {}
         for name in self.list_attachments(include_auto_context=False):
+            if self._is_memory_attachment_name(name):
+                continue
             names[name] = None
         for uri in self._actual_expanded_preview_refs():
             names[uri] = None
@@ -1769,6 +1931,8 @@ If you don't know how to proceed:
             del self._tool_repl
         if hasattr(self, '_repl_startup_injected'):
             del self._repl_startup_injected
+        if hasattr(self, '_worker_attachment_helpers_injected'):
+            del self._worker_attachment_helpers_injected
         _ = self.conversation
         self._suspend_persistence = True
         try:
@@ -1778,8 +1942,9 @@ If you don't know how to proceed:
             self._explicit_attachment_refs = {}
             self._pending_explicit_attachment_refs = {}
             for msg in self.conversation.messages:
-                for name, path in (msg.get('_attachment_refs') or {}).items():
-                    self._explicit_attachment_refs[name] = path
+                for name, ref in (msg.get('_attachment_refs') or {}).items():
+                    self._explicit_attachment_refs[name] = ref
+            missing.extend(self._materialize_replayed_attachment_refs())
             self._replay_display_output()
             self._coalesce_context(protect_last_interactions=False)
             self.usermsg(">>> system_reset()\nREPL session has been reset\n")
@@ -1813,8 +1978,9 @@ If you don't know how to proceed:
             self._explicit_attachment_refs = {}
             self._pending_explicit_attachment_refs = {}
             for msg in self.conversation.messages:
-                for name, path in (msg.get('_attachment_refs') or {}).items():
-                    self._explicit_attachment_refs[name] = path
+                for name, ref in (msg.get('_attachment_refs') or {}).items():
+                    self._explicit_attachment_refs[name] = ref
+            self._materialize_replayed_attachment_refs()
             self._coalesce_context()
         finally:
             self._suspend_persistence = False
@@ -1895,7 +2061,7 @@ If you don't know how to proceed:
         if resume:
             if resume is True:
                 from agentlib.cli.sessions import select_session_ui
-                selection = select_session_ui(altmode, self._session_store, str(Path.cwd()))
+                selection = select_session_ui(altmode, self._session_store, self.worker_cwd())
                 session_id = self._resolve_session_selection(selection)
             else:
                 session_id = resume
@@ -1904,7 +2070,7 @@ If you don't know how to proceed:
 
 
         if not resumed_on_start:
-            if files := gather_auto_attach_files():
+            if files := self.gather_auto_attach_files():
                 self._display_text(f"Loading {', '.join(files)}", kind="status", create_session=False)
                 self._auto_context_attachment_names.update(files)
                 for filename in files:
@@ -2003,7 +2169,7 @@ If you don't know how to proceed:
                     parts = user_input.strip().split(None, 1)
                     if len(parts) == 1:
                         from agentlib.cli.sessions import select_session_ui
-                        selection = select_session_ui(altmode, self._session_store, str(Path.cwd()))
+                        selection = select_session_ui(altmode, self._session_store, self.worker_cwd())
                         session_id = self._resolve_session_selection(selection)
                         if session_id:
                             resumed = self.resume_session(session_id)
@@ -2053,9 +2219,7 @@ If you don't know how to proceed:
                     filename = user_input.strip()[8:].strip()
                     if filename:
                         try:
-                            content = Path(filename).expanduser().read_text()
-                            self.attach_file_ref(filename, filename)
-                            size_kb = len(content) / 1000
+                            size_kb = self.attach_file_ref(filename, filename) / 1000
                             self._display_text(f"{DIM}Attached {filename} ({size_kb:.1f}KB){RESET}", kind="status")
                         except Exception as e:
                             self._display_text(f"{DIM}Error attaching {filename}: {e}{RESET}", kind="status")
@@ -2725,7 +2889,11 @@ class CodeAgent(MCPMixin, CodeAgentBase):
         ))
         if diff:
             _send_output("file_diff", diff.rstrip('\n') + "\n")
-        _send_output("file_written", str(path.resolve()) + "\n")
+        import json as _json
+        _send_output("file_written", _json.dumps({
+            "path": file_path,
+            "content": new_content,
+        }) + "\n")
 
         if replace_all and count > 1:
             return f"All {count} occurrences replaced."
@@ -2962,7 +3130,10 @@ class CodeAgent(MCPMixin, CodeAgentBase):
         ))
         if diff:
             _send_output("file_diff", diff.rstrip('\n') + "\n")
-        _send_output("file_written", str(path.resolve()) + "\n")
+        _send_output("file_written", _json.dumps({
+            "path": file_path,
+            "content": new_text,
+        }) + "\n")
         if not was_attached:
             lines = new_text.split('\n')
             formatted = '\n'.join(f"{i+1:>5}→{line}" for i, line in enumerate(lines))

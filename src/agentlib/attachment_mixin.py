@@ -29,6 +29,32 @@ Behavior:
 """
 
 import json
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class MemoryAttachment:
+    content: str
+
+
+def encode_attachment_ref(ref):
+    if isinstance(ref, MemoryAttachment):
+        return {"__memory_attachment__": True, "content": ref.content}
+    return ref
+
+
+def decode_attachment_ref(ref):
+    if isinstance(ref, dict) and ref.get("__memory_attachment__"):
+        return MemoryAttachment(ref.get("content", ""))
+    return ref
+
+
+def encode_attachment_refs(refs):
+    return {name: encode_attachment_ref(ref) for name, ref in (refs or {}).items()}
+
+
+def decode_attachment_refs(refs):
+    return {name: decode_attachment_ref(ref) for name, ref in (refs or {}).items()}
 
 
 class AttachmentMixin:

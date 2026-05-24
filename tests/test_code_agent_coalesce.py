@@ -494,7 +494,7 @@ def test_actual_expanded_preview_refs_include_replayed_expanded_state(tmp_path):
 
 
 
-def test_resume_replay_loads_relative_attachment_refs_from_session_cwd(tmp_path):
+def test_resume_replay_leaves_path_attachment_refs_for_code_agent_worker_materialization(tmp_path):
     from agentlib.session_replay import replay_session_into_agent
     from agentlib.session_store import SessionStore
 
@@ -527,9 +527,8 @@ def test_resume_replay_loads_relative_attachment_refs_from_session_cwd(tmp_path)
     missing = replay_session_into_agent(agent, session_id, store)
 
     assert missing == []
-    assert agent.conversation.messages[1]["_attachments"] == {
-        "rel.py": "    1→print('from repo')\n    2→"
-    }
+    assert "_attachments" not in agent.conversation.messages[1]
+    assert agent.conversation.messages[1]["_attachment_refs"] == {"rel.py": "rel.py"}
 
 
 

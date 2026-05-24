@@ -26,6 +26,14 @@ removed and only a small placeholder remains: [Attachment: config.json]
 
 import json
 
+from .attachment_mixin import (
+    MemoryAttachment,
+    decode_attachment_ref,
+    decode_attachment_refs,
+    encode_attachment_ref,
+    encode_attachment_refs,
+)
+
 
 class REPLAttachmentMixin:
     """Mixin that adds REPL-style attachment support. Use with REPLAgent."""
