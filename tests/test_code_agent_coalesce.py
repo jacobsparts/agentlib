@@ -163,7 +163,7 @@ def test_appended_user_content_is_preserved():
     assert "Next task" not in coalesced["content"]
 
 
-def test_release_output_extra_non_release_output_goes_to_preview():
+def test_release_output_is_preserved_live_not_saved_to_preview():
     saved = {}
     messages = [
         {"role": "system", "content": "system"},
@@ -175,9 +175,12 @@ def test_release_output_extra_non_release_output_goes_to_preview():
     ]
 
     projected = coalesce_repl_messages(messages, keep_last_interactions=0, keep_last_execution_interactions=0, min_chars=1, min_savings_chars=1, save_preview_blob=saved.setdefault)
+    visible = "\n".join(m.get("content") or "" for m in projected)
 
     assert any(m["role"] == "assistant" and m["content"] == "emit('Done', release=True)" for m in projected)
-    assert "extra line" in next(iter(saved.values()))
+    assert ">>> emit('Done', release=True)" in visible
+    assert "Done\nextra line" in visible
+    assert "extra line" not in next(iter(saved.values()))
 
 
 def test_coalesced_messages_are_synthetic():

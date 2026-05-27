@@ -158,6 +158,25 @@ def split_appended_user_content(msg: dict, text: str) -> tuple[str, str | None]:
             return stripped, suffix
     return text, suffix
 
+def split_release_repl_output(text: str) -> tuple[str, str | None]:
+    if not text:
+        return text, None
+    offset = 0
+    split_at = None
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        compact = stripped.replace(" ", "")
+        if stripped.startswith(">>>") and "emit(" in stripped and "release=True" in compact:
+            split_at = offset
+        offset += len(line)
+    if split_at is None or split_at <= 0:
+        return text, None
+    prefix = text[:split_at].rstrip("\n")
+    release = text[split_at:]
+    if not prefix or not release.strip():
+        return text, None
+    return prefix, release
+
 
 def reconstruct_omitted_echo(assistant_code: str, repl_output: str) -> str:
     if OMITTED_ECHO_MARKER not in repl_output:
@@ -189,23 +208,45 @@ def _real_user_message(msg: dict) -> bool:
     return msg.get("role") == "user" and bool(human_inputs(msg))
 
 
+def _stdout_message_from(template: dict, content: str) -> dict:
+    msg = copy.deepcopy(template)
+    msg["content"] = content
+    if msg.get("_stdout") is not None:
+        msg["_stdout"] = content
+    msg["_render_segments"] = [{"type": "stdout", "content": content}]
+    msg.pop("_user_content", None)
+    return msg
+
+
 def _split_repl_messages_with_appended_user(messages: list[dict]) -> list[dict]:
     out = []
     for msg in messages:
         if msg.get("role") == "user" and is_repl_output_message(msg) and msg.get("_user_content") is not None:
             copied = copy.deepcopy(msg)
             text, appended = split_appended_user_content(copied, copied.get("content") or "")
-            copied["content"] = text
+            stdout = None
             if copied.get("_stdout") is not None:
                 stdout, _ = split_appended_user_content(copied, copied.get("_stdout") or "")
-                copied["_stdout"] = stdout
-            copied.pop("_user_content", None)
-            out.append(copied)
+
+            prefix, release_text = split_release_repl_output(stdout if stdout is not None else text)
+            if release_text is not None and out and out[-1].get("role") == "assistant" and is_release_assistant_message(out[-1]):
+                release_msg = out.pop()
+                out.append(_stdout_message_from(copied, prefix))
+                out.append(release_msg)
+                out.append(_stdout_message_from(copied, release_text))
+            else:
+                copied["content"] = text
+                if stdout is not None:
+                    copied["_stdout"] = stdout
+                copied.pop("_user_content", None)
+                out.append(copied)
+
             if appended is not None:
                 out.append({"role": "user", "content": appended, "_user_content": appended})
         else:
             out.append(copy.deepcopy(msg))
     return out
+
 
 
 def _interaction_has_execution(messages: list[dict], start: int, release: int) -> bool:
@@ -420,7 +461,7 @@ def _coalesced_ordered_sections(
             normal.append(msg)
         i += 1
 
-    flush_normal(include_release_output=True)
+    flush_normal()
     return sections
 
 
@@ -459,6 +500,7 @@ def coalesce_repl_messages(
             ]
             protected.update(execution_indexes[-keep_last_execution_interactions:])
 
+
     by_start = {item["start"]: (idx, item) for idx, item in enumerate(interactions)}
     skip_indexes = set()
     replacements = {}
@@ -471,10 +513,7 @@ def coalesce_repl_messages(
         release_output = item.get("release_output")
         range_messages = messages[start + 1:release]
         replacement_range = list(range_messages)
-        release_output_msg = None
-        if release_output is not None:
-            release_output_msg = messages[release_output]
-            replacement_range.append(release_output_msg)
+        release_output_msg = messages[release_output] if release_output is not None else None
 
         if any(m.get("_coalesced") for m in replacement_range):
             continue
@@ -484,12 +523,9 @@ def coalesce_repl_messages(
             continue
 
         rendered_refs = [render_preview_ref(section_content)[1] for _, section_content in section_contents]
-
         projected = _coalesced_message_from_refs(rendered_refs, replacement_range, preserve_preview_refs)
         original_chars = sum(len(m.get("content") or "") for m in replacement_range)
         replacement_chars = len(projected.get("content") or "")
-        if original_chars < min_chars:
-            continue
         if original_chars - replacement_chars < min_savings_chars:
             continue
 
@@ -502,8 +538,6 @@ def coalesce_repl_messages(
 
         replacements[start] = projected
         skip_indexes.update(range(start + 1, release))
-        if release_output is not None:
-            skip_indexes.add(release_output)
 
     projected = [copy.deepcopy(messages[0])]
     for i, msg in enumerate(messages[1:], start=1):
