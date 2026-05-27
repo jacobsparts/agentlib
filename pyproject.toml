@@ -26,9 +26,6 @@ dev = [
   "pytest>=7",
 ]
 
-[project.scripts]
-code-agent = "agentlib.agents.code_agent:main"
-repl-benchmark = "agentlib.repl_benchmark.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -36,10 +33,3 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where   = ["src"]
 include = ["agentlib*"]
-
-[tool.setuptools.package-data]
-agentlib = [
-  "docs/**/*.md",
-  "skills/**/*.md",
-  "examples/**/*",
-]

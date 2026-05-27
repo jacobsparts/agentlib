@@ -30,16 +30,16 @@ print(agent.run("What is the factorial of 20?"))
 
 <!--ts-->
 ## Table of Contents
-- [Why AgentLib?](#why-agentlib)
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [How It Works](#how-it-works)
-- [Supported LLM Providers](#supported-llm-providers)
-- [Installation](#installation)
-- [Roadmap](#roadmap)
-- [FAQ](#faq)
-- [Contributing](#contributing)
-- [License](#license)
+- [Why AgentLib?](#why-agentlib)  
+- [Features](#features)  
+- [Quick Start](#quick-start)  
+- [How It Works](#how-it-works)  
+- [Supported LLM Providers](#supported-llm-providers)  
+- [Installation](#installation)  
+- [Roadmap](#roadmap)  
+- [FAQ](#faq)  
+- [Contributing](#contributing)  
+- [License](#license)  
 <!--te-->
 
 ---
@@ -87,10 +87,7 @@ pip install git+https://github.com/jacobsparts/agentlib.git
 # 2. Set an API key (example: Anthropic Claude)
 export ANTHROPIC_API_KEY=sk-...
 
-# 3. Try the built-in code agent (Python REPL-based coding assistant)
-code-agent
-
-# Or run an example agent
+# 3. Run an example agent
 python examples/todo_agent.py
 ```
 
@@ -142,30 +139,6 @@ via puppeteer and Python with pandas, pdfplumber, beautifulsoup4, and openpyxl."
 
 if __name__ == "__main__":
     DataExtractor.main()
-```
-
-### Built-in Code Agent
-
-The code agent inverts the usual agent paradigm: instead of an LLM calling tools via JSON, the model *lives inside a Python REPL*. Model output becomes REPL input; REPL output becomes the model's next prompt. The model writes Python directly—no tool schemas, no JSON marshalling.
-
-```bash
-code-agent
-code-agent --model anthropic/claude-opus-4-5
-```
-
-This means:
-- **Unrestricted Python** — stdlib, installed packages, subprocesses, network, filesystem
-- **Tools on the fly** — model can define helper functions mid-conversation and reuse them
-- **True collaboration** — drop into `/repl` and work alongside the agent in the same environment
-- **Inspect everything** — model can read its own tool source code, introspect objects, experiment
-
-Production-ready tools are included (grep, read, view, edit, line_patch, bash) for feature parity with leading coding agents. And since CodeAgent is just a Python class, it's easy to extend with custom tools, swap the model, modify the system prompt, or use it as a base for specialized agents in your own workflows.
-
-```python
-from agentlib.agents import CodeAgent
-
-with CodeAgent() as agent:
-    result = agent.run("Find all TODO comments in the codebase")
 ```
 
 ---

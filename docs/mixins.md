@@ -178,7 +178,6 @@ with MyAgent() as agent:
 -------- END config ----------
 ```
 
-**Variant:** `REPLAttachmentMixin` renders as line-numbered content (like `read()` output) for use with `REPLAgent`.
 
 ## Combining Mixins
 
@@ -207,7 +206,6 @@ class MyAgent(CLIMixin, MCPMixin, REPLAgent):
     interactive = True
 ```
 
-> **Tip:** For a production-ready coding assistant, see `agentlib.agents.CodeAgent` which combines REPLAgent, CLIMixin, and built-in file/search/web tools. Run `code-agent` from the command line or extend it programmatically.
 
 **Lightweight MCP + direct response:**
 ```python

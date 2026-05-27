@@ -14,22 +14,10 @@ from .shell_mixin import SubShellMixin
 from .python_tool_mixin import PythonToolMixin, PythonToolResponseMixin, PythonMCPMixin
 from .patch_mixin import FilePatchMixin
 from .attachment_mixin import AttachmentMixin
-from .repl_attachment_mixin import REPLAttachmentMixin
-from .subagent import Subagent, SubagentError, SubagentResponse
 from .tools.subshell import SubShell, STILL_RUNNING
 from .tools.subrepl import SubREPL
 from .cli import CLIMixin, CLIAgent
 from .repl_agent import REPLAgent
-from .repl_benchmark import (
-    BenchmarkRunResult,
-    BenchmarkTask,
-    BenchmarkTaskResult,
-    BenchmarkViolation,
-    InstrumentedREPLBenchmarkMixin,
-    REPLBenchmarkRunner,
-    discover_tasks,
-    register_task,
-)
 __all__ = [
     "BaseAgent",
     "ToolMixin",
@@ -40,10 +28,6 @@ __all__ = [
     "PythonToolResponseMixin",
     "FilePatchMixin",
     "AttachmentMixin",
-    "REPLAttachmentMixin",
-    "Subagent",
-    "SubagentError",
-    "SubagentResponse",
     "SubShell",
     "SubREPL",
     "STILL_RUNNING",
@@ -55,26 +39,7 @@ __all__ = [
     # CLI
     "CLIMixin",
     "CLIAgent",
-    # REPL-based agent
     "REPLAgent",
-    "BenchmarkTask",
-    "BenchmarkTaskResult",
-    "BenchmarkRunResult",
-    "BenchmarkViolation",
-    "InstrumentedREPLBenchmarkMixin",
-    "REPLBenchmarkRunner",
-    "register_task",
-    "discover_tasks",
-    # Ready-to-use agents
-    "CodeAgent",
-    "CodeAgentBase",
 ]
 
 __version__ = "0.3.0"
-
-
-def __getattr__(name):
-    if name in {"CodeAgent", "CodeAgentBase"}:
-        from .agents import CodeAgent, CodeAgentBase
-        return {"CodeAgent": CodeAgent, "CodeAgentBase": CodeAgentBase}[name]
-    raise AttributeError(name)

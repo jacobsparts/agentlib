@@ -1,8 +1,6 @@
 import json
 from .utils import JSON_INDENT
 
-from .preview_refs import render_preview_refs
-
 
 class Conversation:
     def __init__(self, llm_client, system_prompt):
@@ -12,10 +10,6 @@ class Conversation:
 
     def _messages(self):
         result = []
-        expanded_preview_refs = getattr(self, "expanded_preview_refs", {})
-        preview_loader = getattr(self, "preview_loader", None)
-
-        rendered_preview_refs = []
 
         for msg in self.messages:
             out = dict(msg)
@@ -23,16 +17,7 @@ class Conversation:
             if attachments:
                 for name, content in attachments.items():
                     out['content'] = out.get('content', '').replace(f'[Attachment: {name}]', content)
-            if preview_loader is not None:
-                out['content'] = render_preview_refs(
-                    out.get('content', ''),
-                    expanded_preview_refs,
-                    preview_loader,
-                    rendered_preview_refs,
-                )
             result.append(out)
-        self.rendered_preview_refs = rendered_preview_refs
-
         if self.ephemeral:
             for i in range(len(result) - 1, -1, -1):
                 if result[i].get("role") == "user":

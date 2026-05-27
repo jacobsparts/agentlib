@@ -27,7 +27,6 @@
 | `shell_mixin.py` | `SubShellMixin` - persistent bash shell |
 | `patch_mixin.py` | `FilePatchMixin` - unified diff patching |
 | `attachment_mixin.py` | `AttachmentMixin` - persistent context files |
-| `repl_attachment_mixin.py` | `REPLAttachmentMixin` - attachments as REPL output |
 
 ## CLI
 
@@ -46,12 +45,6 @@
 | `tools/subshell.py` | `SubShell` - streaming bash subprocess |
 | `tools/mcp.py` | `MCPClient` - stdio/SSE MCP protocol client |
 | `tools/apply_patch.py` | Unified diff parser/applier |
-
-## Ready-to-use Agents
-
-| Module | Description |
-|--------|-------------|
-| `agents/code_agent.py` | `CodeAgent` - full-featured coding assistant with file ops |
 
 ---
 
@@ -113,7 +106,6 @@ class DynamicAgent(REPLAgent):
 ```
 
 Supported by:
-- `REPLAgent` / `REPLMixin` (via ToolREPL)
-- `PythonToolMixin` (via SubREPL)
+- `REPLAgent` (via ToolREPL)
 
 The startup code is injected silently (no output shown to agent).

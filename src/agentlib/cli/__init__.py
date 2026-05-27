@@ -43,8 +43,6 @@ from .mixin import (
     SQLiteHistory,
     InputSession,
 )
-from .sessions import select_session_ui
-
 # Import base classes for CLIAgent
 from ..core import BaseAgent
 
@@ -116,7 +114,5 @@ __all__ = [
     'CLIMixin',
     'SQLiteHistory',
     'InputSession',
-    'select_session_ui',
-    # Pre-composed agent
     'CLIAgent',
 ]

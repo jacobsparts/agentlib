@@ -36,10 +36,9 @@ from typing import Any, Callable, Optional, Tuple
 # REPLAgent subclasses can opt into an alternate transport by setting
 # `repl_transport` before the REPL session is created:
 #
-#     from agentlib.agents.code_agent import CodeAgent
-#     from agentlib.tools.transports import StdioSubprocessTransport
+#     from agentlib import REPLAgent
 #
-#     class MyAgent(CodeAgent):
+#     class MyAgent(REPLAgent):
 #         repl_transport = StdioSubprocessTransport
 #
 # Default transport selection for direct SubREPL use currently happens at the

@@ -75,8 +75,7 @@ class MyAgent(BaseAgent):
 
 ### Attachments
 
-Requires `AttachmentMixin` (or `REPLAttachmentMixin` for `REPLAgent`):
-
+Requires `AttachmentMixin`:
 ```python
 from agentlib import BaseAgent, AttachmentMixin
 
@@ -270,22 +269,3 @@ Mixins add specialized capabilities to agents. See [mixins.md](mixins.md) for de
 ## Alternative: REPLAgent
 
 For code-heavy tasks, consider `REPLAgent` instead of `BaseAgent`. The LLM writes Python code directly instead of making tool calls. See [replagent.md](replagent.md).
-
-## Ready-to-Use Agents
-
-AgentLib includes production-ready agents in `agentlib.agents`:
-
-- **CodeAgent** - The model lives inside a Python REPL. Output → stdin, stdout → input. No JSON tool calls—just Python. Full stdlib, any package, dynamic function creation, user can drop into `/repl` to collaborate.
-
-```bash
-code-agent
-code-agent --model anthropic/claude-sonnet-4-20250514
-```
-
-```python
-from agentlib.agents import CodeAgent
-
-with CodeAgent() as agent:
-    result = agent.run("Find all TODO comments")
-```
-
