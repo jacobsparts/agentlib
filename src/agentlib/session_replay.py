@@ -135,6 +135,11 @@ def replay_session_into_agent(agent, session_id: str, store):
                     del attachments[name]
                     if not attachments:
                         del msg["_attachments"]
+                refs = msg.get("_attachment_refs")
+                if refs and name in refs:
+                    del refs[name]
+                    if not refs:
+                        del msg["_attachment_refs"]
         elif event_type == "message_pinned":
             target_seq = payload.get("message_event_seq")
             for msg in reversed(messages):
@@ -158,10 +163,12 @@ def replay_session_into_agent(agent, session_id: str, store):
 
     final_missing = []
     for msg in messages:
-        refs = msg.get("_attachment_refs") or {}
+        refs = decode_attachment_refs(msg.get("_attachment_refs") or {})
         attachments = msg.get("_attachments", {})
-        refs = decode_attachment_refs(refs)
-        msg["_attachment_refs"] = refs
+        if refs:
+            msg["_attachment_refs"] = refs
+        else:
+            msg.pop("_attachment_refs", None)
         for name, ref in refs.items():
             if isinstance(ref, MemoryAttachment):
                 continue
@@ -171,7 +178,6 @@ def replay_session_into_agent(agent, session_id: str, store):
                     final_missing.append((name, ref))
         if "_attachments" in msg and not msg["_attachments"]:
             del msg["_attachments"]
-
     messages = _coalesce_user_messages(messages)
     agent.conversation.messages = messages
     deduped = []

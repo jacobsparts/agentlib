@@ -238,6 +238,35 @@ def test_unview_collapses_preview_uri():
     assert "session://preview/abc" in agent._pending_unviewed_files
 
 
+
+def test_replay_attachment_invalidated_removes_attachment_refs(tmp_path):
+    from agentlib.session_replay import replay_session_into_agent
+
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session_id = store.create_session(str(tmp_path), "model")
+    store.append_event(session_id, 1, "message_added", {
+        "message": {
+            "role": "user",
+            "content": "[Attachment: stale.py]",
+            "_attachment_refs": {"stale.py": "stale.py"},
+        }
+    })
+    store.append_event(session_id, 2, "attachment_invalidated", {"name": "stale.py"})
+
+    class ReplayAgent:
+        def __init__(self):
+            self.conversation = Conversation(DummyClient(), "system")
+            self._expanded_preview_refs = {}
+
+        def _configure_conversation(self, conversation):
+            pass
+
+    agent = ReplayAgent()
+    replay_session_into_agent(agent, session_id, store)
+
+    assert "_attachment_refs" not in agent.conversation.messages[1]
+    assert "_attachments" not in agent.conversation.messages[1]
+
 def make_persistent_agent(tmp_path):
     agent = CodeAgent()
     agent._ensure_setup()
