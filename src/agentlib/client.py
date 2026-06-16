@@ -366,16 +366,7 @@ class LLMClient:
         ratio_usage = usage
         if transform := self.model_config.get('token_transform'):
             ratio_usage = transform(ratio_usage)
-        prompt_tokens = self.usage_tracker._coalesce_paths(ratio_usage, [
-            'native_tokens_prompt',
-            'prompt_tokens',
-            'input_tokens',
-        ])
-        cached_tokens = self.usage_tracker._coalesce_paths(ratio_usage, [
-            'native_tokens_cached',
-            ('prompt_tokens_details', 'cached_tokens'),
-        ])
-        cached_tokens += (ratio_usage.get('cache_read_input_tokens') or 0) + (ratio_usage.get('cache_creation_input_tokens') or 0)
+        prompt_tokens, cached_tokens = self.usage_tracker._prompt_and_cached_tokens(ratio_usage)
         input_tokens = prompt_tokens + cached_tokens
         if input_tokens <= 0:
             return

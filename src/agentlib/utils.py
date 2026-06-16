@@ -46,28 +46,36 @@ class UsageTracker:
                 return value
         return 0
 
-    def _normalize(self, model_name, usage):
-        model_config = get_model_config(model_name)
-        if transform := model_config.get('token_transform'):
-            usage = transform(usage)
-        # Anthropic uses input_tokens/output_tokens; OpenAI uses prompt_tokens/completion_tokens
+    def _prompt_and_cached_tokens(self, usage):
         cached_tokens = self._coalesce_paths(usage, [
             'native_tokens_cached',
             ('prompt_tokens_details', 'cached_tokens'),
         ])
         cached_tokens += (usage.get('cache_read_input_tokens') or 0) + (usage.get('cache_creation_input_tokens') or 0)
-        prompt_tokens = self._coalesce_paths(usage, [
+        reported_prompt_tokens = self._coalesce_paths(usage, [
             'native_tokens_prompt',
             'prompt_tokens',
             'input_tokens',
         ])
-        prompt_tokens -= cached_tokens
-        if prompt_tokens < 0:
-            logger.warning(f"⚠️ Negative prompt token count: {usage}")
-            return {'prompt_tokens': 0, 'cached_tokens': 0, 'completion_tokens': 0, 'reasoning_tokens': 0, 'cost': 0.0}
+        if reported_prompt_tokens >= cached_tokens:
+            # OpenAI-style: prompt/input tokens are total input, including cache hits.
+            prompt_tokens = reported_prompt_tokens - cached_tokens
+        else:
+            # Some proxies/providers report input_tokens as only the uncached prompt
+            # while also reporting cache_read/cache_creation separately.
+            prompt_tokens = reported_prompt_tokens
+        return prompt_tokens, cached_tokens
+
+    def _normalize(self, model_name, usage):
+        model_config = get_model_config(model_name)
+        if transform := model_config.get('token_transform'):
+            usage = transform(usage)
+        # Anthropic uses input_tokens/output_tokens; OpenAI uses prompt_tokens/completion_tokens
+        prompt_tokens, cached_tokens = self._prompt_and_cached_tokens(usage)
         reasoning_tokens = self._coalesce_paths(usage, [
             'native_tokens_reasoning',
             ('completion_tokens_details', 'reasoning_tokens'),
+            ('output_tokens_details', 'thinking_tokens'),
         ])
         completion_tokens = self._coalesce_paths(usage, [
             'native_tokens_completion',
