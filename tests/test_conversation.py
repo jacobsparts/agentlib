@@ -106,3 +106,31 @@ def test_base_agent_ephemeral_property_passthrough():
     assert agent.conversation.ephemeral == "first\n\nsecond"
     assert agent.conversation._messages()[-1]["content"] == "first\n\nsecond\n\nquestion"
 
+
+def test_base_agent_switch_model_replaces_client_and_conversation_client(monkeypatch):
+    from agentlib import BaseAgent
+
+    class DummyLLMClient:
+        def __init__(self, model_name, native=None):
+            self.model_name = model_name
+            self.native = native
+            self.model_config = {"provider": "dummy", "model": model_name}
+
+    monkeypatch.setattr("agentlib.agent.LLMClient", DummyLLMClient)
+
+    class TestAgent(BaseAgent):
+        model = "old-model"
+        system = "system"
+
+    agent = TestAgent()
+    old_client = DummyLLMClient("old-model")
+    agent._llm_client = old_client
+    agent._conversation = Conversation(old_client, "system")
+
+    config = agent.switch_model("new-model")
+
+    assert config == {"provider": "dummy", "model": "new-model"}
+    assert agent.model == "new-model"
+    assert agent.llm_client.model_name == "new-model"
+    assert agent.conversation.llm_client is agent.llm_client
+    assert agent.conversation.llm_client is not old_client

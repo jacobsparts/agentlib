@@ -29,6 +29,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
+import shlex
 from typing import Optional, Any
 
 from .prompt import prompt as raw_prompt
@@ -281,6 +282,25 @@ class CLIMixin:
                         last_response = rewind_result.get("last_response")
                         if last_response:
                             print(self.format_response(last_response))
+                    continue
+
+                if user_input.strip() == "/model" or user_input.strip().startswith("/model "):
+                    parts = shlex.split(user_input.strip())
+                    if len(parts) == 1:
+                        current_model = getattr(self, 'model', None)
+                        self.console.print(f"[dim]Current model: {current_model}[/dim]")
+                    elif len(parts) == 2:
+                        try:
+                            config = self.switch_model(parts[1])
+                        except Exception as e:
+                            self.console.print(f"[red]Model switch failed: {e}[/red]")
+                        else:
+                            self.console.print(
+                                f"[green]Switched model to {parts[1]} "
+                                f"({config.get('provider')}/{config.get('model')}).[/green]"
+                            )
+                    else:
+                        self.console.print("[yellow]Usage: /model [model-name][/yellow]")
                     continue
 
                 # Send to agent

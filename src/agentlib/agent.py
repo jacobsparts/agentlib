@@ -227,6 +227,17 @@ class BaseAgent(metaclass=AgentMeta):
             self._llm_client = LLMClient(self.model, native=native)
             return self._llm_client
 
+    def switch_model(self, model_name, native=None):
+        """Switch the agent to a different model for future LLM calls."""
+        if native is None and hasattr(self, 'native'):
+            native = self.native
+        new_client = LLMClient(model_name, native=native)
+        self.model = model_name
+        self._llm_client = new_client
+        if hasattr(self, '_conversation'):
+            self._conversation.llm_client = new_client
+        return new_client.model_config
+
     @property
     def conversation(self):
         try:
