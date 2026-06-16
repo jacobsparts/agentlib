@@ -375,7 +375,7 @@ class LLMClient:
             'native_tokens_cached',
             ('prompt_tokens_details', 'cached_tokens'),
         ])
-        cached_tokens += ratio_usage.get('cache_read_input_tokens', 0) + ratio_usage.get('cache_creation_input_tokens', 0)
+        cached_tokens += (ratio_usage.get('cache_read_input_tokens') or 0) + (ratio_usage.get('cache_creation_input_tokens') or 0)
         input_tokens = prompt_tokens + cached_tokens
         if input_tokens <= 0:
             return
