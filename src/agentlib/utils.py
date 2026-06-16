@@ -55,7 +55,7 @@ class UsageTracker:
             'native_tokens_cached',
             ('prompt_tokens_details', 'cached_tokens'),
         ])
-        cached_tokens += usage.get('cache_read_input_tokens', 0) + usage.get('cache_creation_input_tokens', 0)
+        cached_tokens += (usage.get('cache_read_input_tokens') or 0) + (usage.get('cache_creation_input_tokens') or 0)
         prompt_tokens = self._coalesce_paths(usage, [
             'native_tokens_prompt',
             'prompt_tokens',
