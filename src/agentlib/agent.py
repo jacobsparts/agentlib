@@ -254,7 +254,7 @@ class BaseAgent(metaclass=AgentMeta):
         return self.conversation.llm(self.toolspecs)
 
     def text(self):
-        return self.conversation.llm()['content']
+        return self.llm()['content']
 
     def usermsg(self, *args, **kwargs):
         return self.conversation.usermsg(*args, **kwargs)
