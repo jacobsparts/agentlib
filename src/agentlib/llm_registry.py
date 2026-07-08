@@ -250,6 +250,14 @@ register_model("xai","grok-4.3",
     input_cost=1.25,
     cached_cost=0.2,
     output_cost=2.5,
+    context_window=1_000_000
+)
+register_model("xai","grok-4.5",
+    model="grok-4.3",
+    input_cost=2.0,
+    cached_cost=0.5,
+    output_cost=6.0,
+    context_window=500_000,
 )
 
 # --- OpenRouter ---
