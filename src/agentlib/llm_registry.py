@@ -253,7 +253,7 @@ register_model("xai","grok-4.3",
     context_window=1_000_000
 )
 register_model("xai","grok-4.5",
-    model="grok-4.3",
+    model="grok-4.5",
     input_cost=2.0,
     cached_cost=0.5,
     output_cost=6.0,
