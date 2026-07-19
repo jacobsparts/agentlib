@@ -28,6 +28,7 @@ Or use the pre-composed CLIAgent:
 import os
 import sqlite3
 import sys
+import termios
 from pathlib import Path
 import shlex
 from typing import Optional, Any
@@ -259,7 +260,15 @@ class CLIMixin:
         self.console.print("[dim]Enter = submit | Alt+Enter = newline | Ctrl+C = interrupt | Ctrl+D = quit[/dim]\n")
 
         try:
+            flush_input_before_prompt = False
             while True:
+                if flush_input_before_prompt:
+                    try:
+                        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+                    except (OSError, termios.error):
+                        pass
+                    flush_input_before_prompt = False
+
                 try:
                     user_input = session.prompt(f"\n{prompt_str}")
                 except KeyboardInterrupt:
@@ -310,6 +319,7 @@ class CLIMixin:
                 print(f"{DIM}{thinking}{RESET}\r", end="", flush=True)
 
                 # Run agent loop (may be interrupted by Ctrl+C or turn limit)
+                flush_input_before_prompt = True
                 try:
                     response = self.run_loop(max_turns=max_turns)
                 except KeyboardInterrupt:
