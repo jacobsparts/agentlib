@@ -9,6 +9,9 @@ __pycache__/
 *.so
 .Python
 
+# Dependency lock files
+uv.lock
+
 # Distribution / packaging
 build/
 develop-eggs/

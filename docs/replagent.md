@@ -149,25 +149,34 @@ MCP tools become callable functions alongside your defined tools.
 Override for custom output handling:
 
 ```python
+from agentlib import REPLAgent, ReplEvent
+
 class CustomAgent(REPLAgent):
     def on_repl_execute(self, code):
         """Called at start of each turn."""
         pass
 
-    def on_repl_chunk(self, chunk: str):
-        """Called for each output chunk (streaming)."""
+    def on_repl_event(self, event: ReplEvent):
+        """Called for each ordered execution event."""
         pass
 
-    def on_repl_output(self, output: str):
-        """Called after execution with full output."""
+    def on_statement_events(self, events: list[ReplEvent]):
+        """Called after each statement."""
+        pass
+
+    def on_repl_events_complete(self, events: list[ReplEvent]):
+        """Called after the turn's execution completes."""
         pass
 
     def process_repl_output(self, output: str) -> str:
-        """Process/truncate output before sending to LLM."""
+        """Process/truncate model-visible output."""
         if len(output) > 10000:
             return output[:5000] + "\n...(truncated)..."
         return output
 ```
+
+Event kinds include `statement_started`, worker output such as `print` and
+`error`, tool lifecycle events, and `statement_finished`.
 
 ## When to Use REPLAgent
 

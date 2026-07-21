@@ -70,6 +70,12 @@ def _emit_event(event_type: str, **payload) -> None:
 
 from agentlib.agent import BaseAgent, _CompleteException
 from agentlib.client import BadRequestError
+from agentlib.repl_events import (
+    ReplEvent,
+    direct_call_name,
+    events_output_text,
+    normalize_worker_message,
+)
 
 
 class _InterruptedError(KeyboardInterrupt):
@@ -713,14 +719,17 @@ class REPLMixin:
 
     repl_transport = MultiprocessingTransport
 
-    def build_output_for_llm(self, output_chunks):
-        """Build the output string sent to the LLM from typed output chunks.
+    def build_output_for_llm(self, events: list[ReplEvent]) -> str:
+        """Build the model-visible output from REPL events."""
+        return events_output_text(events)
 
-        Override to filter specific chunk types (e.g., exclude "emit" output).
-        Each chunk is a (msg_type, text) tuple where msg_type is one of:
-        "echo", "output", "print", "preview", "emit", "read", "read_attach", "file_written", "progress", "error".
-        """
-        return "".join(chunk for _, chunk in output_chunks)
+    def _publish_repl_event(self, event: ReplEvent) -> None:
+        publisher = getattr(self, "_active_repl_event_publisher", None)
+        if publisher is not None:
+            publisher(event)
+
+    def _publish_tool_event(self, kind: str, name: str, **data) -> None:
+        self._publish_repl_event(ReplEvent(kind=kind, data={"name": name, **data}))
 
     interactive: bool = False  # Legacy flag, kept for compatibility
 
@@ -949,7 +958,7 @@ Call help(function_name) for parameter descriptions.
 
             # Retry loop for pure syntax errors (nothing executed)
             output = ""
-            output_chunks = []
+            events = []
             try:
                 for syntax_retry in range(max_syntax_retries):
                     try:
@@ -977,7 +986,7 @@ Call help(function_name) for parameter descriptions.
                     if not content:
                         break
 
-                    output, pure_syntax_error, output_chunks, corrected_code = self._execute_with_tool_handling(repl, content)
+                    output, pure_syntax_error, events, corrected_code = self._execute_with_tool_handling(repl, content)
 
                     # Apply silent corrections to conversation (both sides see corrected code)
                     if corrected_code != content:
@@ -1031,9 +1040,8 @@ Call help(function_name) for parameter descriptions.
                     return value
                 return self._final_result
 
-            # Fire output hook after successful execution
-            if hasattr(self, 'on_repl_output'):
-                self.on_repl_output(output_chunks)
+            if hasattr(self, "on_repl_events_complete"):
+                self.on_repl_events_complete(events)
 
             # Commit successful response to conversation
             if getattr(self, "complete", False) and getattr(self, "_final_result", None) is not None:
@@ -1045,9 +1053,8 @@ Call help(function_name) for parameter descriptions.
             if not content:
                 continue
 
-            # Feed output back to LLM as the REPL response
-            # build_output_for_llm lets subclasses filter chunk types (e.g., exclude emit)
-            output_for_llm = self.build_output_for_llm(output_chunks)
+            # Feed output back to LLM as the REPL response.
+            output_for_llm = self.build_output_for_llm(events)
             if hasattr(self, 'process_output_for_llm'):
                 output_for_llm = self.process_output_for_llm(output_for_llm)
             elif hasattr(self, 'process_repl_output'):
@@ -1150,133 +1157,136 @@ Call help(function_name) for parameter descriptions.
         from agentlib.preprocess import preprocess
         return preprocess(code)
 
-    def _execute_with_tool_handling(self, repl: ToolREPL, code: str) -> tuple[str, bool, list, str]:
-        """Execute code statement-by-statement, handling tool calls as they occur.
-
-        Returns:
-            Tuple of (output, is_pure_syntax_error, output_chunks, corrected_code) where:
-            - is_pure_syntax_error is True when no statements executed successfully
-            - output_chunks is list of (msg_type, chunk) tuples
-            - corrected_code is the code after any preprocessing corrections
-        """
+    def _execute_with_tool_handling(self, repl: ToolREPL, code: str) -> tuple[str, bool, list[ReplEvent], str]:
+        """Execute code statement-by-statement while publishing ordered REPL events."""
         code = self.preprocess_code(code)
         validation_code = self._transform_toplevel_print(code)
         try:
             compile(validation_code, '<repl>', 'exec')
         except SyntaxError as e:
             output = self._format_syntax_error(e)
-            output_chunks = [("error", output)]
-            if hasattr(self, 'on_repl_chunk'):
-                self.on_repl_chunk(output, "error")
-            return output, True, output_chunks, code
+            events = [ReplEvent(kind="error", text=output)]
+            if hasattr(self, "on_repl_event"):
+                self.on_repl_event(events[0])
+            return output, True, events, code
 
-        # Split into statements, then transform each individually
-        # (Can't transform whole code first because AST strips comments,
-        # which would cause misalignment between original and transformed statements)
         original_statements = _split_into_statements(code)
         if not original_statements:
             return "", False, [], code
 
         repl._ensure_session()
-        output_chunks = []  # List of (msg_type, chunk) tuples for entire turn
+        events: list[ReplEvent] = []
+        statement_events: list[ReplEvent] = []
         any_executed = False
 
-        # Per-statement tracking for on_statement_output hook
-        statement_chunks = []
+        def publish(event: ReplEvent) -> None:
+            events.append(event)
+            statement_events.append(event)
+            if hasattr(self, "on_repl_event"):
+                self.on_repl_event(event)
 
-        def stream(chunk, msg_type="echo", display_chunk=None):
-            output_chunks.append((msg_type, chunk))
-            statement_chunks.append((msg_type, chunk))
-            if hasattr(self, 'on_repl_chunk'):
-                self.on_repl_chunk(display_chunk if display_chunk is not None else chunk, msg_type)
+        def publish_worker(message_type: str, text: str) -> None:
+            publish(normalize_worker_message(message_type, text))
 
-        for original_stmt in original_statements:
-            # Transform this statement (print -> _print for output tagging)
-            exec_stmt = self._transform_toplevel_print(original_stmt)
+        previous_publisher = getattr(self, "_active_repl_event_publisher", None)
+        self._active_repl_event_publisher = publish
+        try:
+            for original_stmt in original_statements:
+                exec_stmt = self._transform_toplevel_print(original_stmt)
+                publish(ReplEvent(
+                    kind="statement_started",
+                    data={
+                        "source": original_stmt,
+                        "echo": _format_echo(original_stmt),
+                        "display_echo": _format_echo_stdout(original_stmt),
+                        "direct_call": direct_call_name(original_stmt),
+                    },
+                ))
 
-            # Pre-validate syntax before echoing (use transformed for validation)
-            try:
-                compile(exec_stmt, '<repl>', 'exec')
-            except SyntaxError as e:
-                # Echo the original statement, show error, stop processing
-                stream(_format_echo(original_stmt), "echo", _format_echo_stdout(original_stmt))
-                stream(self._format_syntax_error(e), "error")
-                if hasattr(self, 'on_statement_output'):
-                    self.on_statement_output(statement_chunks)
-                break
+                try:
+                    compile(exec_stmt, '<repl>', 'exec')
+                except SyntaxError as e:
+                    publish(ReplEvent(kind="error", text=self._format_syntax_error(e)))
+                    publish(ReplEvent(kind="statement_finished", data={"had_error": True}))
+                    if hasattr(self, "on_statement_events"):
+                        self.on_statement_events(list(statement_events))
+                    statement_events.clear()
+                    break
 
-            # Valid syntax - echo original, execute transformed
-            any_executed = True
-            stream(_format_echo(original_stmt), "echo", _format_echo_stdout(original_stmt))
-            repl._running = True
-            repl._cmd_seq += 1
-            current_seq = repl._cmd_seq
-            repl._cmd_queue.put((current_seq, exec_stmt))
+                any_executed = True
+                repl._running = True
+                repl._cmd_seq += 1
+                current_seq = repl._cmd_seq
+                repl._cmd_queue.put((current_seq, exec_stmt))
+                statement_had_error = False
+                completed_early = False
 
-            # Poll loop for this statement
-            statement_had_error = False
-            try:
-                while True:
-                    # Check for tool requests (non-blocking)
-                    tool_req = repl.poll_tool_request(timeout=0)
-                    if tool_req:
-                        self._handle_tool_request(repl, tool_req)
-                        if self.complete:
-                            # emit(release=True) was called - drain output and return
-                            while True:
-                                try:
-                                    msg_type, msg_data = repl._output_queue.get(timeout=0.1)
-                                    if msg_type in ("output", "print", "preview", "preview_expand", "emit", "read", "progress",
-                                                    "read_attach", "read_partial", "file_written", "file_diff"):
-
-                                        stream(msg_data, msg_type)
-                                    elif msg_type == "done":
-                                        seq_id, _ = msg_data
-                                        if seq_id == current_seq:
-                                            break
-                                        # Stale done from previous command, ignore
-                                except Empty:
-                                    break
-                            repl._running = False
-                            output = "".join(chunk for _, chunk in output_chunks)
-                            return output, False, output_chunks, code
-
-                    # Check for output
-                    try:
-                        msg_type, msg_data = repl._output_queue.get(timeout=0.05)
-                        if msg_type in ("output", "print", "preview", "preview_expand", "emit", "read", "progress",
-                                        "read_attach", "read_partial", "file_written", "file_diff"):
-                            stream(msg_data, msg_type)
-                        elif msg_type == "done":
-                            seq_id, had_error = msg_data
-                            if seq_id == current_seq:
+                try:
+                    while True:
+                        tool_req = repl.poll_tool_request(timeout=0)
+                        if tool_req:
+                            self._handle_tool_request(repl, tool_req)
+                            if self.complete:
+                                while True:
+                                    try:
+                                        msg_type, msg_data = repl._output_queue.get(timeout=0.1)
+                                        if msg_type == "done":
+                                            seq_id, had_error = msg_data
+                                            if seq_id == current_seq:
+                                                statement_had_error = had_error
+                                                break
+                                            continue
+                                        publish_worker(msg_type, msg_data)
+                                    except Empty:
+                                        break
                                 repl._running = False
-                                statement_had_error = had_error
-                                break  # Statement complete, move to next
-                            # Stale done from previous command, ignore and keep polling
-                    except Empty:
-                        pass
-            except KeyboardInterrupt:
-                # User pressed Ctrl+C - interrupt the subprocess
-                # interrupt() drains and returns all output, so stream it immediately
-                interrupted_output = repl.interrupt()
-                if interrupted_output:
-                    stream(interrupted_output, "output")
-                repl._running = False
-                raise _InterruptedError()
+                                completed_early = True
+                                break
 
-            # Statement complete - call hook and reset per-statement tracking
-            if hasattr(self, 'on_statement_output'):
-                self.on_statement_output(statement_chunks)
-            statement_chunks.clear()  # Must use clear() to preserve closure reference
+                        try:
+                            msg_type, msg_data = repl._output_queue.get(timeout=0.05)
+                            if msg_type == "done":
+                                seq_id, had_error = msg_data
+                                if seq_id == current_seq:
+                                    repl._running = False
+                                    statement_had_error = had_error
+                                    break
+                                continue
+                            publish_worker(msg_type, msg_data)
+                        except Empty:
+                            pass
+                except KeyboardInterrupt:
+                    interrupted_output = repl.interrupt()
+                    if interrupted_output:
+                        publish_worker("output", interrupted_output)
+                    repl._running = False
+                    raise _InterruptedError()
 
-            # Stop processing if this statement had a runtime error
-            if statement_had_error:
-                break
+                publish(ReplEvent(
+                    kind="statement_finished",
+                    data={"had_error": statement_had_error},
+                ))
+                if hasattr(self, "on_statement_events"):
+                    self.on_statement_events(list(statement_events))
+                statement_events.clear()
 
-        output = "".join(chunk for _, chunk in output_chunks)
-        is_pure_syntax_error = not any_executed and bool(output_chunks)
-        return output, is_pure_syntax_error, output_chunks, code
+                if completed_early:
+                    output = events_output_text(events)
+                    return output, False, events, code
+                if statement_had_error:
+                    break
+        finally:
+            if previous_publisher is None:
+                try:
+                    del self._active_repl_event_publisher
+                except AttributeError:
+                    pass
+            else:
+                self._active_repl_event_publisher = previous_publisher
+
+        output = events_output_text(events)
+        is_pure_syntax_error = not any_executed and bool(events)
+        return output, is_pure_syntax_error, events, code
 
     def _handle_tool_request(self, repl: ToolREPL, req: dict) -> None:
         """Handle a tool request from the REPL."""
@@ -1296,6 +1306,9 @@ Call help(function_name) for parameter descriptions.
             return x
 
         args = {k: _deserialize(v) for k, v in args.items()}
+        event_name = "emit" if tool_name == "__emit__" else tool_name
+        if event_name:
+            self._publish_tool_event("tool_called", event_name, args=args)
 
         try:
             if tool_name == '__emit__':
@@ -1304,23 +1317,20 @@ Call help(function_name) for parameter descriptions.
                 self._final_result = value
                 if release:
                     self.complete = True
-                # No reply needed for emit, just ACK
+                self._publish_tool_event("tool_returned", "emit", result=None)
 
             elif tool_name:
-                # Regular tool call - send reply with result
                 try:
                     result = self.toolcall(tool_name, args)
                     repl.send_reply(request_id, result=result)
+                    self._publish_tool_event("tool_returned", tool_name, result=result)
                 except _CompleteException:
-                    # Tool called self.respond() — send a reply so the child
-                    # subprocess unblocks from _tool_response_queue.get().
-                    # Without this, the child stays stuck forever and any
-                    # subsequent run_loop on the same agent deadlocks.
                     if request_id is None:
                         repl.send_reply(request_id, result=None)
                     raise
                 except Exception as e:
                     repl.send_reply(request_id, error=str(e))
+                    self._publish_tool_event("tool_failed", tool_name, error=str(e))
         finally:
             # Send ACK only for builtin protocol calls (emit, etc.) that use
             # _wait_for_ack().  Relay stubs don't send request_id and only do

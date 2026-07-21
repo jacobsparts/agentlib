@@ -18,6 +18,7 @@ from .tools.subshell import SubShell, STILL_RUNNING
 from .tools.subrepl import SubREPL
 from .cli import CLIMixin, CLIAgent
 from .repl_agent import REPLAgent
+from .repl_events import ReplEvent
 __all__ = [
     "BaseAgent",
     "ToolMixin",
@@ -40,6 +41,7 @@ __all__ = [
     "CLIMixin",
     "CLIAgent",
     "REPLAgent",
+    "ReplEvent",
 ]
 
 __version__ = "0.3.0"
