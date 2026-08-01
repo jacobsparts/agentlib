@@ -8,7 +8,7 @@
 from agentlib import BaseAgent
 
 class MyAgent(BaseAgent):
-    model = 'google/gemini-2.5-flash'  # or 'openai/gpt-5', etc.
+    model = 'google/gemini-3.6-flash'
     system = "You are a helpful assistant. Use tools to accomplish tasks."
 
     @BaseAgent.tool
@@ -21,8 +21,8 @@ class MyAgent(BaseAgent):
 ## Key Concepts
 
 ### Model Selection
-- **Google**: `google/gemini-2.5-flash`, `google/gemini-2.5-pro`
-- **OpenAI**: `openai/gpt-5.1`, `openai/gpt-5-mini`
+- **Google**: `google/gemini-3.1-pro`, `google/gemini-3.6-flash`
+- **OpenAI**: `openai/gpt-5.6-luna-high`
 - **Anthropic**: `anthropic/claude-sonnet-4-5`
 - Set via env vars: `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
 - **Custom models**: Create `~/.agentlib/config.py` to register providers/models and configure agents (see `examples/config.py`)
@@ -80,7 +80,7 @@ Requires `AttachmentMixin`:
 from agentlib import BaseAgent, AttachmentMixin
 
 class MyAgent(AttachmentMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a helpful assistant."
     # attach/detach methods are now available
 ```
@@ -197,7 +197,7 @@ def submit(self, **payload):
 
 ```python
 class AnalystAgent(BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "Analyze data and provide insights."
 
     @BaseAgent.tool
@@ -205,7 +205,7 @@ class AnalystAgent(BaseAgent):
         self.respond(analysis)
 
 class MainAgent(BaseAgent):
-    model = 'google/gemini-2.5-pro'
+    model = 'google/gemini-3.6-flash'
     system = "Make decisions based on analyst input."
 
     def __init__(self, sku):

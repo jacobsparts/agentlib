@@ -12,7 +12,7 @@ For tool-calling agents that need Python execution as a tool (not the paradigm),
 from agentlib import REPLAgent
 
 class MyAgent(REPLAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a helpful assistant."
 
     @REPLAgent.tool
@@ -88,7 +88,7 @@ For CLI/chat agents, enable multi-turn autonomous work:
 
 ```python
 class ChatAgent(REPLAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a helpful assistant."
     interactive = True  # Enables multi-turn autonomous workflow
 ```
@@ -105,7 +105,7 @@ The agent controls the conversation until it explicitly releases with `release=T
 
 ```python
 class MyAgent(REPLAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are helpful."
     interactive = False  # Default: single run, emit(release=True) returns to caller
     repl_startup = "import json"  # Optional: code to run silently at REPL startup
@@ -128,7 +128,7 @@ from agentlib import REPLAgent, MCPMixin
 from agentlib.cli import CLIMixin
 
 class PowerAgent(CLIMixin, MCPMixin, REPLAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a powerful assistant."
     mcp_servers = [
         ('browser', 'npx -y @anthropic/mcp-server-puppeteer'),
@@ -193,7 +193,7 @@ Event kinds include `statement_started`, worker output such as `print` and
 from agentlib import REPLAgent
 
 class AnalysisAgent(REPLAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = """You are a data analysis assistant.
     Write Python to analyze data. Use emit(..., release=True) for final answers."""
 

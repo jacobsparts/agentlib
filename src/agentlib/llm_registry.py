@@ -111,25 +111,17 @@ register_provider("openai",
 )
 
 for conf, efforts in (
-    ({'model': 'gpt-4.1', 'input_cost': 2.0, 'cached_cost': 0.5, 'output_cost': 8.0}, (None,)),
-    ({'model': 'gpt-5-mini', 'input_cost': 0.25, 'cached_cost': 0.025, 'output_cost': 2.0}, ('high',)),
     ({'model': 'gpt-5.1', 'input_cost': 1.25, 'cached_cost': 0.125, 'output_cost': 10.0}, ('none',)),
     ({'model': 'gpt-5.2', 'input_cost': 1.75, 'cached_cost': 0.175, 'output_cost': 14.0}, ('none', 'medium', 'high')),
     ({'model': 'gpt-5.4', 'input_cost': 2.5, 'cached_cost': 0.25, 'output_cost': 15.0}, ('none', 'medium', 'high')),
-    ({'model': 'gpt-5.4-mini', 'input_cost': 0.75, 'cached_cost': 0.075, 'output_cost': 4.5}, ('high',)),
-    ({'model': 'gpt-5.4-nano', 'input_cost': 0.2, 'cached_cost': 0.02, 'output_cost': 1.25}, ('high',)),
     ({'model': 'gpt-5.5', 'input_cost': 5.0, 'cached_cost': 0.5, 'output_cost': 30.0}, ('none', 'medium', 'high')),
+    ({'model': 'gpt-5.6-luna', 'input_cost': 0.2, 'cached_cost': 0.02, 'output_cost': 1.2}, ('high','xhigh')),
+    ({'model': 'gpt-5.6-sol', 'input_cost': 5.0, 'cached_cost': 0.5, 'output_cost': 30.0}, ('medium', 'high', 'xhigh', 'max')),
 ):
     for effort in efforts:
         suffix = '' if (effort == 'none' or len(efforts) == 1) else f"-{effort}"
         kwargs = {**conf, "config":{"reasoning_effort": effort}} if effort else conf
         register_model("openai", f"{conf['model']}{suffix}", **kwargs)
-        if conf['model'] == 'gpt-5-mini':
-            kwargs['config']['service_tier'] = "flex"
-            kwargs['timeout'] = 1200
-            for k in ('input_cost','cached_cost','output_cost'):
-                kwargs[k] /= 2
-            register_model("openai", f"{conf['model']}{suffix}-flex", **kwargs)
 
 
 # --- Anthropic ---
@@ -196,30 +188,6 @@ register_provider("google",
     token_transform=gemini_token_transform,
     cost_transform=gemini_cost_transform,
 )
-register_model("google","gemini-2.5-flash",
-    model="gemini-2.5-flash",
-    config={"thinkingBudget": 32768},
-    input_cost=0.3,
-    cached_cost=0.03,
-    output_cost=2.5,
-    reasoning_cost=2.5,
-)
-register_model("google","gemini-2.5-pro",
-    model="gemini-2.5-pro",
-    config={"thinkingBudget": 32768},
-    input_cost=1.25,
-    cached_cost=0.125,
-    output_cost=10.00,
-    reasoning_cost=10.00,
-)
-register_model("google","gemini-3-flash-preview",
-    model="gemini-3-flash-preview",
-    config={"thinkingLevel": "high"},
-    input_cost=0.5,
-    cached_cost=0.05,
-    output_cost=3.0,
-    reasoning_cost=3.0,
-)
 register_model("google","gemini-3.1-pro",
     model="gemini-3.1-pro-preview",
     config={"thinkingLevel": "high"},
@@ -227,8 +195,8 @@ register_model("google","gemini-3.1-pro",
     cached_cost=0.2,
     output_cost=12.00,
 )
-register_model("google","gemini-3.5-flash",
-    model="gemini-3.5-flash",
+register_model("google","gemini-3.6-flash",
+    model="gemini-3.6-flash",
     config={"thinkingLevel": "high"},
     input_cost=1.5,
     cached_cost=0.15,

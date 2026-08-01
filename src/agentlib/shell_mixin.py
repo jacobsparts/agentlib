@@ -5,7 +5,7 @@ Example:
     from agentlib import BaseAgent, SubShellMixin
 
     class MyAgent(SubShellMixin, BaseAgent):
-        model = 'google/gemini-2.5-flash'
+        model = 'google/gemini-3.6-flash'
         system = "You are a helpful assistant."
 
         @BaseAgent.tool

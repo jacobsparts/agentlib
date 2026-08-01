@@ -13,7 +13,7 @@
 from agentlib import BaseAgent
 
 class FactorialAgent(BaseAgent):
-    model = "google/gemini-2.5-flash"
+    model = "google/gemini-3.6-flash"
     system = "You are a factorial calculation assistant. Use the tool to fulfill user requests."
     
     @BaseAgent.tool
@@ -98,7 +98,7 @@ from agentlib import BaseAgent
 import hashlib
 
 class HashAgent(BaseAgent):
-    model = "google/gemini-2.5-flash"
+    model = "google/gemini-3.6-flash"
     system = "You are a hashing assistant. Use the tool to fulfill user requests."
 
     @BaseAgent.tool
@@ -114,7 +114,7 @@ Expected output:
 
 ```
 b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
-google/gemini-2.5-flash: In=342, Out=54, Rsn=61, Cost=$0.000
+google/gemini-3.6-flash: In=342, Out=54, Rsn=61, Cost=$0.000
 ```
 
 ### Build an Interactive CLI Assistant
@@ -128,7 +128,7 @@ class DataExtractor(
     PythonToolResponseMixin,    # Direct code execution response
     CLIAgent,               # Interactive terminal interface
 ):
-    model = "google/gemini-2.5-flash"
+    model = "google/gemini-3.6-flash"
     system = """You are a data extraction specialist. You scrape websites, pull tables
 from PDFs, and transform messy data into clean formats. You have browser automation
 via puppeteer and Python with pandas, pdfplumber, beautifulsoup4, and openpyxl."""

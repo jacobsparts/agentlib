@@ -12,7 +12,7 @@ Adds persistent Python REPL as a tool. Variables, imports, functions persist acr
 from agentlib import BaseAgent, PythonToolMixin
 
 class MyAgent(PythonToolMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a helpful assistant with Python execution."
     repl_timeout = 30.0  # Default timeout (optional)
 
@@ -36,7 +36,7 @@ Mark methods for injection into the REPL as callable functions:
 from agentlib import BaseAgent, PythonToolMixin
 
 class MyAgent(PythonToolMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You have a multiply() function available."
 
     @PythonToolMixin.repl
@@ -81,7 +81,7 @@ If code throws an exception or times out, error returns to agent for retry.
 from agentlib import BaseAgent, PythonToolResponseMixin
 
 class CalcAgent(PythonToolResponseMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a calculator. Use python_execute_response to compute and return results."
 ```
 
@@ -93,7 +93,7 @@ Alternative to `MCPMixin` that uses fewer tokens. MCP clients are pre-instantiat
 from agentlib import BaseAgent, PythonMCPMixin
 
 class MyAgent(PythonMCPMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a helpful assistant."
     repl_mcp_servers = [
         ('fs', '/path/to/mcp-server-filesystem /tmp'),

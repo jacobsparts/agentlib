@@ -14,7 +14,7 @@ For core agent concepts, see [guide.md](guide.md). For REPLAgent, see [replagent
 from agentlib import BaseAgent, MCPMixin
 
 class MyAgent(MCPMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a helpful assistant."
     mcp_servers = [
         ('fs', 'npx -y @mcp/server-filesystem /tmp'),
@@ -121,7 +121,7 @@ Adds persistent bash shell. Environment and cwd persist across calls.
 from agentlib import BaseAgent, SubShellMixin
 
 class MyAgent(SubShellMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a helpful assistant with shell access."
     shell_timeout = 30.0  # Default timeout (optional)
 
@@ -149,7 +149,7 @@ Adds named attachments that persist in conversation context. Content is injected
 from agentlib import BaseAgent, AttachmentMixin
 
 class MyAgent(AttachmentMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a helpful assistant."
 
     @BaseAgent.tool
@@ -185,7 +185,7 @@ with MyAgent() as agent:
 from agentlib import BaseAgent, MCPMixin, SubShellMixin, PythonToolMixin
 
 class PowerAgent(PythonToolMixin, SubShellMixin, MCPMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You have shell, Python, and MCP server access."
     mcp_servers = [('fs', 'npx -y @mcp/server-filesystem /tmp')]
 
@@ -200,7 +200,7 @@ from agentlib import REPLAgent, MCPMixin
 from agentlib.cli import CLIMixin
 
 class MyAgent(CLIMixin, MCPMixin, REPLAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a coding assistant."
     mcp_servers = [('browser', 'npx -y @anthropic/mcp-server-puppeteer')]
     interactive = True
@@ -212,7 +212,7 @@ class MyAgent(CLIMixin, MCPMixin, REPLAgent):
 from agentlib import BaseAgent, PythonMCPMixin, PythonToolResponseMixin
 
 class DataAgent(PythonMCPMixin, PythonToolResponseMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "Query data and return formatted results."
     repl_mcp_servers = [('db', 'python db_server.py')]
 ```
@@ -231,7 +231,7 @@ Adds interactive CLI REPL functionality with terminal rendering, readline histor
 from agentlib.cli import CLIAgent
 
 class MyAssistant(CLIAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a helpful assistant."
     welcome_message = "[bold]My Bot[/bold]\nReady to help!"
 
@@ -245,7 +245,7 @@ from agentlib import PythonToolResponseMixin
 from agentlib.cli import CLIAgent
 
 class CodeAssistant(PythonToolResponseMixin, CLIAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a Python assistant."
 ```
 
@@ -253,7 +253,7 @@ class CodeAssistant(PythonToolResponseMixin, CLIAgent):
 
 ```python
 class MyAssistant(CLIAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are helpful."
 
     # CLI options
@@ -300,7 +300,7 @@ from agentlib import BaseAgent, PythonToolResponseMixin
 from agentlib.cli import CLIMixin
 
 class CustomAgent(CLIMixin, PythonToolResponseMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are helpful."
     welcome_message = "Hello!"
 
@@ -315,7 +315,7 @@ from agentlib import PythonMCPMixin
 from agentlib.cli import CLIAgent
 
 class MCPAssistant(PythonMCPMixin, CLIAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are helpful."
     repl_mcp_servers = [
         ('fs', '/path/to/mcp-server /tmp'),
@@ -360,7 +360,7 @@ Adds efficient file patching with context-based matching. Supports adding, updat
 from agentlib import BaseAgent, FilePatchMixin
 
 class MyAgent(FilePatchMixin, BaseAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a coding assistant."
     patch_preview = None  # True=always, False=never, None=agent decides
 
@@ -431,7 +431,7 @@ from agentlib import FilePatchMixin
 from agentlib.cli import CLIAgent
 
 class Editor(FilePatchMixin, CLIAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are a code editor."
 ```
 
@@ -466,7 +466,7 @@ Place personal mixins in `~/.agentlib/mixins/` to make them importable from any 
 from my_tools import MyToolsMixin
 
 class MyAgent(MyToolsMixin, CLIAgent):
-    model = 'google/gemini-2.5-flash'
+    model = 'google/gemini-3.6-flash'
     system = "You are helpful."
 ```
 
