@@ -227,7 +227,7 @@ def test_usage_normalization_handles_uncached_input_with_separate_cache_tokens()
         ("gemini", "_call_gemini"),
     ],
 )
-def test_client_strips_private_message_metadata_before_api_call(monkeypatch, api_type, method_name):
+def test_client_preserves_private_message_metadata_until_transport(monkeypatch, api_type, method_name):
     from agentlib.client import LLMClient
 
     client = LLMClient("sonnet")
@@ -237,6 +237,15 @@ def test_client_strips_private_message_metadata_before_api_call(monkeypatch, api
         "context_window": 1_000_000,
     }
     captured = {}
+    private_message = {
+        "role": "user",
+        "content": "visible",
+        "_stdout": "large hidden stdout",
+        "_render_segments": [{"type": "stdout", "content": "large hidden stdout"}],
+        "_final_result": "hidden final result",
+        "_attachment_refs": ["file.py"],
+        "_event_seq": 123,
+    }
 
     def fake_validate(input_bytes):
         captured["input_bytes"] = input_bytes
@@ -249,20 +258,31 @@ def test_client_strips_private_message_metadata_before_api_call(monkeypatch, api
     monkeypatch.setattr(client, "_validate_context_budget", fake_validate)
     monkeypatch.setattr(client, method_name, fake_provider_call)
 
-    client._call([
+    client._call([private_message])
+
+    # Dispatch preserves private metadata so transports can consume it.
+    assert captured["messages"] == [private_message]
+    assert captured["tools"] is None
+    # Sizing ignores private metadata.
+    assert captured["input_bytes"] == client._input_bytes(
+        [{"role": "user", "content": "visible"}],
+        None,
+    )
+    assert client._public_messages([private_message]) == [
+        {"role": "user", "content": "visible"}
+    ]
+
+
+def test_public_messages_helper_strips_underscore_keys():
+    from agentlib.client import LLMClient
+
+    assert LLMClient._public_messages([
         {
             "role": "user",
             "content": "visible",
-            "_stdout": "large hidden stdout",
-            "_render_segments": [{"type": "stdout", "content": "large hidden stdout"}],
-            "_final_result": "hidden final result",
-            "_attachment_refs": ["file.py"],
-            "_event_seq": 123,
+            "_stdout": "hidden",
+            "_event_seq": 1,
         }
-    ])
-
-    assert captured["messages"] == [{"role": "user", "content": "visible"}]
-    assert captured["tools"] is None
-    assert captured["input_bytes"] == client._input_bytes(captured["messages"], None)
+    ]) == [{"role": "user", "content": "visible"}]
 
 

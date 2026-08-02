@@ -59,15 +59,13 @@ class Conversation:
                     result[i] = out
                     break
 
-        return result
+        return self._with_cache_breakpoints(result)
 
     def _append_message(self, message):
         self.messages.append(message)
 
     def llm(self, tools=None):
-        resp_msg = self.llm_client.call(
-            self._with_cache_breakpoints(self._messages()), tools
-        )
+        resp_msg = self.llm_client.call(self._messages(), tools)
         self.messages.append(resp_msg)
         return resp_msg
 
