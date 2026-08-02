@@ -211,19 +211,13 @@ register_provider("xai",
     tools=False,
     api_type="completions",
 )
-register_model("xai","grok-4.3",
-    model="grok-4.3",
-    input_cost=1.25,
-    cached_cost=0.2,
-    output_cost=2.5,
-    context_window=1_000_000
-)
 register_model("xai","grok-4.5",
     model="grok-4.5",
     input_cost=2.0,
     cached_cost=0.5,
     output_cost=6.0,
     context_window=500_000,
+    config={"reasoning_effort": "high"},
 )
 
 # --- OpenRouter ---
@@ -234,21 +228,21 @@ register_provider("openrouter",
     tools=None,
     api_type="completions",
 )
-register_model("openrouter","kimi-k2.6",
-    model="moonshotai/kimi-k2.6",
-    config={
-        'provider': {'order': ['cloudflare'], 'allow_fallbacks': False},
-        'reasoning': {'enabled': True},
-        "temperature": 1.0,
-        "top_p": 1,
-        "top_k": 40,
-        "max_tokens": 1024*64,
-    },
-    input_cost=0.95,
-    cached_cost=0.16,
-    output_cost=4.0,
-    tools=False,
-)
+#register_model("openrouter","kimi-k2.6",
+#    model="moonshotai/kimi-k2.6",
+#    config={
+#        'provider': {'order': ['cloudflare'], 'allow_fallbacks': False},
+#        'reasoning': {'enabled': True},
+#        "temperature": 1.0,
+#        "top_p": 1,
+#        "top_k": 40,
+#        "max_tokens": 1024*64,
+#    },
+#    input_cost=0.95,
+#    cached_cost=0.16,
+#    output_cost=4.0,
+#    tools=False,
+#)
 
 
 def cloudflare_response_parser(response_json):
@@ -266,19 +260,19 @@ register_provider("cloudflare",
     api_type="completions",
     response_parser=cloudflare_response_parser,
 )
-register_model("cloudflare","kimi-k2.6",
-    model="@cf/moonshotai/kimi-k2.6",
-    path=f"/client/v4/accounts/{os.getenv('CLOUDFLARE_ACCOUNT_ID')}/ai/run/@cf/moonshotai/kimi-k2.6",
-    context_window=262144,
-    config={
-        "temperature": 1.0,
-        "max_tokens": 16384,
-    },
-    input_cost=0.95,
-    cached_cost=0.16,
-    output_cost=4.0,
-    tools=False,
-)
+#register_model("cloudflare","kimi-k2.6",
+#    model="@cf/moonshotai/kimi-k2.6",
+#    path=f"/client/v4/accounts/{os.getenv('CLOUDFLARE_ACCOUNT_ID')}/ai/run/@cf/moonshotai/kimi-k2.6",
+#    context_window=262144,
+#    config={
+#        "temperature": 1.0,
+#        "max_tokens": 16384,
+#    },
+#    input_cost=0.95,
+#    cached_cost=0.16,
+#    output_cost=4.0,
+#    tools=False,
+#)
 
 
 # --- User Configuration ---
