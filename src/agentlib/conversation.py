@@ -7,6 +7,38 @@ class Conversation:
         self.llm_client = llm_client
         self.messages = [ {"role": "system", "content": system_prompt} ]
         self.ephemeral = ""
+        self._prompt_cache = []
+        self._prompt_cache_model = getattr(llm_client, "model_name", None)
+
+    def _with_cache_breakpoints(self, messages):
+        """Annotate projected messages; update continuity for the next call."""
+        model_name = getattr(self.llm_client, "model_name", None)
+        if model_name != self._prompt_cache_model:
+            self._prompt_cache = []
+            self._prompt_cache_model = model_name
+        cache, self._prompt_cache = self._prompt_cache, []
+        annotated = []
+        for message in messages:
+            out = dict(message)
+            content = out.get("content")
+            if (
+                cache is not False
+                and isinstance(content, str)
+                and out.get("role") in ("system", "user")
+            ):
+                content_hash = hash(content)
+                if cache:
+                    if (expected := cache.pop(0)) is None:
+                        if not cache:
+                            cache = False
+                    elif content_hash != expected:
+                        cache = [None] * 3
+                    elif not cache:
+                        cache = [None] * 4
+                out["_prompt_cache_breakpoint"] = True
+                self._prompt_cache.append(content_hash)
+            annotated.append(out)
+        return annotated
 
     def _messages(self):
         result = []
@@ -33,7 +65,9 @@ class Conversation:
         self.messages.append(message)
 
     def llm(self, tools=None):
-        resp_msg = self.llm_client.call(self._messages(), tools)
+        resp_msg = self.llm_client.call(
+            self._with_cache_breakpoints(self._messages()), tools
+        )
         self.messages.append(resp_msg)
         return resp_msg
 
