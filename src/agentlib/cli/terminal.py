@@ -275,7 +275,7 @@ def _is_tableish_line(line: str) -> bool:
     return stripped.startswith('|') or stripped.endswith('|') or stripped.count('|') >= 2
 
 
-def _collect_table_rows(lines: list[str], start: int) -> tuple[list[list[str]], int] | None:
+def _collect_table_rows(lines: list[str], start: int) -> Optional[tuple[list[list[str]], int]]:
     """Collect markdown table rows, repairing wrapped rows when needed."""
     raw_rows = []
     i = start

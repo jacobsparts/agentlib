@@ -12,6 +12,8 @@ class Conversation:
 
     def _with_cache_breakpoints(self, messages):
         """Annotate projected messages; update continuity for the next call."""
+        if self.llm_client is None:
+            return messages
         model_name = getattr(self.llm_client, "model_name", None)
         if model_name != self._prompt_cache_model:
             self._prompt_cache = []
