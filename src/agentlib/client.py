@@ -9,6 +9,7 @@ import threading
 import time
 import logging
 import base64
+import uuid
 from collections import defaultdict
 
 from .utils import throttle, JSON_INDENT, UsageTracker
@@ -1077,7 +1078,13 @@ class LLMClient:
             resp_msg = {
                 'role': 'assistant',
                 'tool_calls': [
-                    {'function': {'name': row['name'], 'arguments': json.dumps(row['arguments'])}}
+                    {
+                        'id': f"call_{uuid.uuid4().hex}",
+                        'function': {
+                            'name': row['name'],
+                            'arguments': json.dumps(row['arguments'])
+                        }
+                    }
                     for row in tool_calls['function_calls']
                 ],
                 'content': (content[:json_start_index] + content[json_end_index+1:]).strip('`').removeprefix('json').strip()

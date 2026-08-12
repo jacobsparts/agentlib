@@ -138,6 +138,57 @@ def test_native_tool_validation_retry_uses_temporary_feedback(monkeypatch):
     assert "valid tool call only" in calls[1][2]["content"]
 
 
+def test_emulated_tool_calls_receive_unique_ids_and_ids_stay_off_wire(monkeypatch):
+    from pydantic import create_model
+
+    from agentlib.client import LLMClient
+
+    client = LLMClient("sonnet")
+    client.concurrency_lock = type("NoopLock", (), {
+        "__enter__": lambda self: None,
+        "__exit__": lambda self, exc_type, exc, tb: False,
+    })()
+
+    ToolSpec = create_model("Lookup", value=(int, ...))
+    ToolSpec.__doc__ = "Look up a value."
+
+    monkeypatch.setattr(client, "_call", lambda messages: {
+        "role": "assistant",
+        "content": json.dumps({
+            "function_calls": [
+                {"name": "lookup", "arguments": {"value": 1}},
+                {"name": "lookup", "arguments": {"value": 2}},
+            ]
+        }),
+    })
+
+    result = client.tool_call_shim(
+        [{"role": "user", "content": "look these up"}],
+        {"lookup": ToolSpec},
+        retry=0,
+    )
+
+    ids = [call["id"] for call in result["tool_calls"]]
+    assert all(call_id.startswith("call_") and len(call_id) == 37 for call_id in ids)
+    assert len(set(ids)) == 2
+
+    prepared_call = client.prepare_message(result)
+    assert all(call_id not in prepared_call["content"] for call_id in ids)
+    assert json.loads(prepared_call["content"]) == {
+        "function_calls": [
+            {"name": "lookup", "arguments": {"value": 1}},
+            {"name": "lookup", "arguments": {"value": 2}},
+        ]
+    }
+
+    prepared_result = client.prepare_message({
+        "role": "tool",
+        "name": "lookup",
+        "content": "result",
+        "tool_call_id": ids[0],
+    })
+    assert prepared_result == {"role": "user", "content": "lookup: result"}
+
 
 def test_context_budget_does_not_enforce_without_learned_token_ratio():
     from agentlib.client import LLMClient

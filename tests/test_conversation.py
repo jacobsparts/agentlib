@@ -107,6 +107,43 @@ def test_base_agent_ephemeral_property_passthrough():
     assert agent.conversation._messages()[-1]["content"] == "first\n\nsecond\n\nquestion"
 
 
+def test_base_agent_propagates_emulated_tool_call_id_to_result():
+    from agentlib import BaseAgent
+
+    class TestAgent(BaseAgent):
+        system = "system"
+
+        def __init__(self):
+            self.recorded_tool_messages = []
+
+        def llm(self):
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_0123456789abcdef0123456789abcdef",
+                    "function": {"name": "finish", "arguments": "{}"},
+                }],
+            }
+
+        def toolcall(self, toolname, function_args):
+            self.respond("done")
+
+        def toolmsg(self, content, **kwargs):
+            self.recorded_tool_messages.append((content, kwargs))
+
+    agent = TestAgent()
+
+    assert agent.run_loop(max_turns=1) == "done"
+    assert agent.recorded_tool_messages == [(
+        "done",
+        {
+            "name": "finish",
+            "tool_call_id": "call_0123456789abcdef0123456789abcdef",
+        },
+    )]
+
+
 def test_base_agent_switch_model_replaces_client_and_conversation_client(monkeypatch):
     from agentlib import BaseAgent
 
