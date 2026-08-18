@@ -141,6 +141,45 @@ def test_initialization_prunes_terminal_waiters_only(tmp_path):
     admission.release(active)
 
 
+def test_pruned_expired_waiter_requeues_instead_of_failing(tmp_path, monkeypatch):
+    db, notify = paths(tmp_path)
+    first = ProviderAdmission(
+        "pool", 1, request_timeout=2, claim_window=0.05,
+        db_path=db, notify_path=notify,
+    )
+    other = ProviderAdmission(
+        "pool", 1, request_timeout=2, claim_window=0.05,
+        db_path=db, notify_path=notify,
+    )
+
+    queued_at = time.time()
+    ticket, waiter_id = first._enqueue()
+    other_ticket, other_waiter_id = other._enqueue()
+    assert other._try_claim(other_ticket, other_waiter_id, time.time()).state == "waiting"
+    time.sleep(0.06)
+    other_lease = other._try_claim(
+        other_ticket, other_waiter_id, time.time()
+    ).lease
+    assert other_lease is not None
+
+    ProviderAdmission(
+        "new-client", 1, request_timeout=2, claim_window=0.05,
+        db_path=db, notify_path=notify,
+    )
+    original_enqueue = first._enqueue
+    queued = [(ticket, waiter_id)]
+
+    def enqueue():
+        return queued.pop(0) if queued else original_enqueue()
+
+    monkeypatch.setattr(first, "_enqueue", enqueue)
+    other.release(other_lease)
+
+    lease = first.acquire()
+    assert lease.ticket > other_ticket
+    assert first.release(lease)
+
+
 def test_queue_timeout_cancels_waiter(tmp_path):
     db, notify = paths(tmp_path)
     owner = ProviderAdmission(

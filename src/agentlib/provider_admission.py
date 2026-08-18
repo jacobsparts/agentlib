@@ -554,7 +554,7 @@ class ProviderAdmission:
                 "AND ticket=? AND waiter_id=?",
                 (self.pool_key, ticket, waiter_id),
             ).fetchone()
-            state = own["state"] if own else "cancelled"
+            state = own["state"] if own else "missing"
             token_ready, _tokens, _token_deadline = self._token_status(conn, now)
             if (
                 state == "waiting" and free is not None and head is not None
@@ -666,7 +666,7 @@ class ProviderAdmission:
                     return result.lease
                 if result.changed:
                     self._broadcast()
-                if result.state == "expired":
+                if result.state in {"expired", "missing"}:
                     ticket, waiter_id = -1, ""
                     continue
                 if result.state != "waiting":
