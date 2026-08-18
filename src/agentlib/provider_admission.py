@@ -347,10 +347,18 @@ class ProviderAdmission:
             (self.pool_key,),
         ).fetchone()
         if actual["capacity"] != self.capacity:
-            raise AdmissionConfigurationError(
-                f"pool {self.pool_key!r} has capacity {actual['capacity']}, "
-                f"not {self.capacity}"
+            conn.execute(
+                "UPDATE admission_pools SET capacity=? WHERE pool_key=?",
+                (self.capacity, self.pool_key),
             )
+            actual_capacity = self.capacity
+            if actual_capacity < actual["capacity"]:
+                conn.execute(
+                    "DELETE FROM admission_slots WHERE pool_key=? AND slot_no>=?",
+                    (self.pool_key, self.capacity),
+                )
+        else:
+            actual_capacity = actual["capacity"]
         if actual["rate_per_minute"] is None and self.rate_per_minute is not None:
             conn.execute(
                 "UPDATE admission_pools SET rate_per_minute=?,"
@@ -374,9 +382,9 @@ class ProviderAdmission:
             and math.isclose(actual_rate, self.rate_per_minute)
         )
         if not rate_matches:
-            raise AdmissionConfigurationError(
-                f"pool {self.pool_key!r} has rate {actual_rate}, "
-                f"not {self.rate_per_minute}"
+            conn.execute(
+                "UPDATE admission_pools SET rate_per_minute=? WHERE pool_key=?",
+                (self.rate_per_minute, self.pool_key),
             )
         conn.executemany(
             "INSERT OR IGNORE INTO admission_slots(pool_key, slot_no) VALUES (?, ?)",

@@ -88,13 +88,24 @@ def test_exception_releases_and_pools_are_independent(tmp_path):
     assert second.release(second.acquire())
 
 
-def test_capacity_mismatch(tmp_path):
+def test_capacity_and_rate_updates_adapt_existing_pool(tmp_path):
     db, notify = paths(tmp_path)
-    ProviderAdmission("pool", 1, request_timeout=1, db_path=db, notify_path=notify)
-    with pytest.raises(AdmissionConfigurationError):
-        ProviderAdmission(
-            "pool", 2, request_timeout=1, db_path=db, notify_path=notify
-        )
+    ProviderAdmission("pool", 1, request_timeout=1, rate_per_minute=60, db_path=db, notify_path=notify)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT capacity, rate_per_minute FROM admission_pools WHERE pool_key='pool'").fetchone() == (1, 60.0)
+        assert conn.execute("SELECT COUNT(*) FROM admission_slots WHERE pool_key='pool'").fetchone()[0] == 1
+
+    # Increase capacity and change rate
+    expanded = ProviderAdmission("pool", 3, request_timeout=1, rate_per_minute=120, db_path=db, notify_path=notify)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT capacity, rate_per_minute FROM admission_pools WHERE pool_key='pool'").fetchone() == (3, 120.0)
+        assert conn.execute("SELECT COUNT(*) FROM admission_slots WHERE pool_key='pool'").fetchone()[0] == 3
+
+    # Shrink capacity
+    shrunk = ProviderAdmission("pool", 2, request_timeout=1, rate_per_minute=120, db_path=db, notify_path=notify)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT capacity, rate_per_minute FROM admission_pools WHERE pool_key='pool'").fetchone() == (2, 120.0)
+        assert conn.execute("SELECT COUNT(*) FROM admission_slots WHERE pool_key='pool'").fetchone()[0] == 2
 
 
 def test_initialization_prunes_terminal_waiters_only(tmp_path):
