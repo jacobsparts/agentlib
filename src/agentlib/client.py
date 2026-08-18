@@ -1,4 +1,5 @@
 import sys
+import contextlib
 assert sys.version_info >= (3, 8), "Requires Python 3.8+"
 import os
 import json
@@ -12,8 +13,9 @@ import base64
 import uuid
 from collections import defaultdict
 
-from .utils import throttle, JSON_INDENT, UsageTracker
+from .utils import JSON_INDENT, UsageTracker
 from .llm_registry import get_model_config
+from .provider_admission import ProviderAdmission
 from .conversation import Conversation
 from .streaming import wrap_chat_completions_streaming_response
 
@@ -340,7 +342,9 @@ class LLMClient:
         self.model_name = model_name
         self.model_config = get_model_config(model_name)
         self.timeout = self.model_config.get('timeout', 300)
-        self.concurrency_lock = threading.BoundedSemaphore(self.model_config.get('concurrency',10))
+        self.provider_admission = ProviderAdmission.from_model_config(
+            model_name, self.model_config
+        )
         self.native = self.model_config.get('tools') if native is None else native
         self.on_retry = None
         self._current_input_bytes = None
@@ -479,7 +483,6 @@ class LLMClient:
             body = json.dumps(req)
             request_path = self.model_config.get('request_path', self.model_config['path'])
             try:
-                throttle(self.model_config['host'], self.model_config.get('tpm', 5))
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug("----------- TO LLM -----------")
                     logger.debug(f"POST {request_path} {headers}")
@@ -623,7 +626,6 @@ class LLMClient:
         }
         body = json.dumps(req)
         try:
-            throttle(self.model_config['host'], self.model_config.get('tpm', 5))
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("----------- TO LLM -----------")
                 logger.debug(f"POST {self.model_config['path']} {headers}")
@@ -778,7 +780,6 @@ class LLMClient:
         }
         body = json.dumps(req)
         try:
-            throttle(self.model_config['host'], self.model_config.get('tpm', 5))
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("----------- TO LLM -----------")
                 logger.debug(f"POST {path} {headers}")
@@ -895,7 +896,11 @@ class LLMClient:
 
     def text_call(self, messages, retry=3, attempt=0):
         try:
-            with self.concurrency_lock:
+            with (
+                self.provider_admission.admitted()
+                if self.provider_admission is not None
+                else contextlib.nullcontext()
+            ):
                 return self._call(messages)
         except ContextOverflowError:
             raise
@@ -932,7 +937,11 @@ class LLMClient:
         for attempt in range(retry + 1):
             try:
                 resp_msg = {}
-                with self.concurrency_lock:
+                with (
+                    self.provider_admission.admitted()
+                    if self.provider_admission is not None
+                    else contextlib.nullcontext()
+                ):
                     resp_msg = self._call(messages + feedback, _tools)
                 if transform := self.model_config.get('response_transform'):
                     resp_msg = transform(resp_msg, tools)
@@ -1047,7 +1056,11 @@ class LLMClient:
         if self.model_config['api_type'] == "gemini":
             _messages = [self.prepare_message(msg) for msg in _messages]
         try:
-            with self.concurrency_lock:
+            with (
+                self.provider_admission.admitted()
+                if self.provider_admission is not None
+                else contextlib.nullcontext()
+            ):
                 resp_msg = self._call(_messages)
         except ContextOverflowError:
             raise

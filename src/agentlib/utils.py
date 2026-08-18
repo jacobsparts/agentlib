@@ -1,7 +1,6 @@
 import atexit
 import os
 import threading
-import time
 import logging
 from collections import defaultdict
 from .llm_registry import get_model_config
@@ -9,16 +8,6 @@ from .llm_registry import get_model_config
 logger = logging.getLogger('agentlib')
 
 JSON_INDENT = None
-
-throttle_lock = defaultdict(threading.BoundedSemaphore)
-throttle_last = defaultdict(float)
-def throttle(name='default', tps=5):
-    with throttle_lock[name]:
-        now = time.monotonic()
-        next_time = throttle_last[name] + 1 / tps
-        if sleep := max(next_time - now, 0):
-            time.sleep(sleep)
-        throttle_last[name] = time.monotonic()
 
 
 class UsageTracker:
