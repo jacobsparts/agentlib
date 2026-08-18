@@ -38,7 +38,6 @@ _WATCH_MASK = (
     | _IN_Q_OVERFLOW
 )
 _EVENT_HEADER = struct.Struct("iIII")
-_LEASE_GRACE_SECONDS = 30.0
 
 
 class AdmissionError(RuntimeError):
@@ -53,7 +52,7 @@ class AdmissionLease:
     lease_id: str
     queued_at: float
     acquired_at: float
-    expires_at: float
+    expires_at: Optional[float]
 
     @property
     def queue_wait_seconds(self) -> float:
@@ -247,7 +246,7 @@ class ProviderAdmission:
         return cls(
             quota_pool_key(model_name, config),
             int(concurrency),
-            request_timeout=config.get("timeout", 300),
+            request_timeout=config.get("timeout"),
             rate_per_minute=config.get("rpm"),
         )
 
@@ -334,13 +333,10 @@ class ProviderAdmission:
         except OSError:
             return False
 
-    def _lease_duration(self) -> float:
-        timeout = (
-            600.0
-            if self.request_timeout is None
-            else float(self.request_timeout)
-        )
-        return timeout + _LEASE_GRACE_SECONDS
+    def _lease_duration(self) -> Optional[float]:
+        if self.request_timeout is None:
+            return None
+        return float(self.request_timeout)
 
     def _enqueue(self) -> tuple[int, str, float]:
         queued_at = time.time()
@@ -449,7 +445,8 @@ class ProviderAdmission:
             ).fetchone()
             active_count = conn.execute(
                 "SELECT COUNT(*) FROM provider_waiters_v2 "
-                "WHERE pool_key=? AND state='active' AND expires_at>?",
+                "WHERE pool_key=? AND state='active' "
+                "AND (expires_at IS NULL OR expires_at>?)",
                 (self.pool_key, now),
             ).fetchone()[0]
 
@@ -475,7 +472,8 @@ class ProviderAdmission:
                 and rate_ready
             ):
                 lease_id = uuid.uuid4().hex
-                expires_at = now + self._lease_duration()
+                duration = self._lease_duration()
+                expires_at = None if duration is None else now + duration
                 updated = conn.execute(
                     "UPDATE provider_waiters_v2 "
                     "SET state='active',lease_id=?,acquired_at=?,expires_at=? "

@@ -27,56 +27,29 @@ def test_acquire_respects_current_concurrency_and_release(tmp_path):
     assert acquired.is_set()
 
 
-def test_configuration_is_not_persisted(tmp_path):
+
+
+def test_lease_timeout_has_no_grace_and_none_does_not_expire(tmp_path):
     db = tmp_path / "admission.sqlite3"
-    one = ProviderAdmission(
-        "pool", 1, request_timeout=1, rate_per_minute=10, db_path=db
+    timed = ProviderAdmission(
+        "timed", 1, request_timeout=1, db_path=db
     )
-    first = one.acquire()
+    lease = timed.acquire()
+    assert 0.9 <= lease.expires_at - lease.acquired_at <= 1.1
+    assert timed.release(lease)
 
-    two = ProviderAdmission(
-        "pool", 2, request_timeout=1, rate_per_minute=20, db_path=db
+    unlimited = ProviderAdmission(
+        "unlimited", 1, request_timeout=None, db_path=db
     )
-    second = two.acquire()
-
+    lease = unlimited.acquire()
+    assert lease.expires_at is None
     with sqlite3.connect(db) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        }
-        assert "admission_pools" not in tables
-        assert "admission_slots" not in tables
-        columns = {
-            row[1]
-            for table in ("provider_leases", "provider_admissions")
-            for row in conn.execute(f"PRAGMA table_info({table})")
-        }
-    assert "capacity" not in columns
-    assert "rate_per_minute" not in columns
-
-    assert one.release(first)
-    assert two.release(second)
-
-
-def test_existing_legacy_configuration_is_ignored(tmp_path):
-    db = tmp_path / "admission.sqlite3"
-    with sqlite3.connect(db) as conn:
-        conn.execute(
-            "CREATE TABLE admission_pools "
-            "(pool_key TEXT PRIMARY KEY, capacity INTEGER, "
-            "rate_per_minute REAL)"
-        )
-        conn.execute(
-            "INSERT INTO admission_pools VALUES ('pool', 5, 20)"
-        )
-
-    admission = ProviderAdmission(
-        "pool", 100, request_timeout=1, db_path=db
-    )
-    lease = admission.acquire()
-    assert admission.release(lease)
+        expires_at = conn.execute(
+            "SELECT expires_at FROM provider_waiters_v2 "
+            "WHERE pool_key='unlimited' AND state='active'"
+        ).fetchone()[0]
+    assert expires_at is None
+    assert unlimited.release(lease)
 
 
 def test_context_manager_releases_on_error(tmp_path):
@@ -113,8 +86,6 @@ def test_from_model_config_and_pool_identity(monkeypatch, tmp_path):
     admission = ProviderAdmission.from_model_config(
         "provider/model", config
     )
-    assert admission.capacity == 3
-    assert admission.rate_per_minute == 120
 
     same = quota_pool_key("provider/other", config)
     different = quota_pool_key(
@@ -122,7 +93,6 @@ def test_from_model_config_and_pool_identity(monkeypatch, tmp_path):
     )
     assert same == admission.pool_key
     assert different != same
-    assert "secret" not in same
 
 
 def test_client_wraps_each_retry_with_admission(monkeypatch):

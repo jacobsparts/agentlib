@@ -13,6 +13,87 @@ import base64
 import uuid
 from collections import defaultdict
 
+_NO_DEADLINE = object()
+
+
+class DeadlineHTTPResponse(http.client.HTTPResponse):
+    def __init__(self, sock, *, deadline, **kwargs):
+        self._deadline = deadline
+        self._deadline_socket = sock
+        super().__init__(sock, **kwargs)
+
+    def _apply_deadline(self):
+        timeout = self._deadline()
+        if timeout is not _NO_DEADLINE:
+            self._deadline_socket.settimeout(timeout)
+
+    def begin(self):
+        self._apply_deadline()
+        return super().begin()
+
+    def read1(self, amt=-1):
+        self._apply_deadline()
+        return super().read1(amt)
+
+    def read(self, amt=None):
+        if amt is not None and amt < 0:
+            amt = None
+        chunks = []
+        remaining = amt
+        while remaining is None or remaining:
+            size = 64 * 1024 if remaining is None else min(64 * 1024, remaining)
+            chunk = self.read1(size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if remaining is not None:
+                remaining -= len(chunk)
+        return b"".join(chunks)
+
+
+class _DeadlineConnectionMixin:
+    def __init__(self, *args, deadline=_NO_DEADLINE, **kwargs):
+        self._deadline = (
+            deadline
+            if deadline is _NO_DEADLINE or deadline is None
+            else time.monotonic() + deadline
+        )
+        if deadline is not _NO_DEADLINE:
+            kwargs["timeout"] = self._remaining()
+        super().__init__(*args, **kwargs)
+        self.response_class = lambda sock, **response_kwargs: DeadlineHTTPResponse(
+            sock, deadline=self._remaining, **response_kwargs
+        )
+
+    def _remaining(self):
+        if self._deadline is _NO_DEADLINE or self._deadline is None:
+            return self._deadline
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("request deadline exceeded")
+        return remaining
+
+    def connect(self):
+        timeout = self._remaining()
+        if timeout is not _NO_DEADLINE:
+            self.timeout = timeout
+        return super().connect()
+
+    def send(self, data):
+        timeout = self._remaining()
+        if timeout is not _NO_DEADLINE and self.sock is not None:
+            self.sock.settimeout(timeout)
+        return super().send(data)
+
+
+class DeadlineHTTPConnection(_DeadlineConnectionMixin, http.client.HTTPConnection):
+    pass
+
+
+class DeadlineHTTPSConnection(_DeadlineConnectionMixin, http.client.HTTPSConnection):
+    pass
+
+
 from .utils import JSON_INDENT, UsageTracker
 from .llm_registry import get_model_config
 from .provider_admission import ProviderAdmission
@@ -341,7 +422,7 @@ class LLMClient:
     def __init__(self, model_name, native=None):
         self.model_name = model_name
         self.model_config = get_model_config(model_name)
-        self.timeout = self.model_config.get('timeout', 300)
+        self.timeout = self.model_config.get('timeout')
         self.provider_admission = ProviderAdmission.from_model_config(
             model_name, self.model_config
         )
@@ -464,7 +545,7 @@ class LLMClient:
                     "tool_choice": "required",
                 })
             if self.model_config['port'] == 443:
-                conn = http.client.HTTPSConnection(self.model_config['host'], timeout=self.timeout)
+                conn = DeadlineHTTPSConnection(self.model_config['host'], timeout=self.timeout, deadline=self.timeout)
                 conn.connect()
                 sock = conn.sock
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
@@ -475,7 +556,7 @@ class LLMClient:
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)    # 10 sec between probes
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)       # 3 probes before giving up
             else:
-                conn = http.client.HTTPConnection(self.model_config['host'], self.model_config['port'], timeout=self.timeout)
+                conn = DeadlineHTTPConnection(self.model_config['host'], self.model_config['port'], timeout=self.timeout, deadline=self.timeout)
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.model_config['api_key']}",
@@ -618,7 +699,7 @@ class LLMClient:
                 } for t in tools],
                 "tool_choice": {"type": "any"},
             })
-        conn = http.client.HTTPSConnection(self.model_config['host'], timeout=self.timeout)
+        conn = DeadlineHTTPSConnection(self.model_config['host'], timeout=self.timeout, deadline=self.timeout)
         headers = {
             "Content-Type": "application/json",
             "x-api-key": self.model_config['api_key'],
@@ -766,7 +847,7 @@ class LLMClient:
                 "parameters": _gemini_transform_schema(t['function']['parameters']),
             } for t in tools]}]
             req["toolConfig"] = {"functionCallingConfig": {"mode": "ANY"}}
-        conn = http.client.HTTPSConnection(self.model_config['host'], timeout=self.timeout)
+        conn = DeadlineHTTPSConnection(self.model_config['host'], timeout=self.timeout, deadline=self.timeout)
         conn.connect()
         sock = conn.sock
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)

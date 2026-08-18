@@ -16,7 +16,7 @@ class ProviderConfig:
     port: int = 443
     rpm: float = None
     concurrency: int = None
-    timeout: int = 120
+    timeout: int = 900
     tools: bool = False
     api_type: str = "completions"
     token_transform: object = None    # callable(usage_dict) -> usage_dict
