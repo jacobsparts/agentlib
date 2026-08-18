@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from agentlib import provider_admission as admission_module
 from agentlib.provider_admission import (
     AdmissionConfigurationError,
-    AdmissionQueueTimeout,
     ProviderAdmission,
     quota_pool_key,
 )
@@ -24,7 +24,7 @@ def paths(root):
 def worker_acquire(root, hold, output):
     db, notify = paths(root)
     admission = ProviderAdmission(
-        "pool", 1, request_timeout=2, claim_window=1,
+        "pool", 1, request_timeout=2,
         db_path=db, notify_path=notify,
     )
     lease = admission.acquire()
@@ -34,10 +34,11 @@ def worker_acquire(root, hold, output):
 
 
 def worker_die_active(root, output):
+    admission_module._CLAIM_WINDOW_SECONDS = 0.05
+    admission_module._LEASE_GRACE_SECONDS = 0.0
     db, notify = paths(root)
     admission = ProviderAdmission(
-        "pool", 1, request_timeout=0.15, claim_window=0.05,
-        lease_grace=0, db_path=db, notify_path=notify,
+        "pool", 1, request_timeout=0.15, db_path=db, notify_path=notify,
     )
     output.put(admission.acquire().ticket)
     output.close()
@@ -142,13 +143,14 @@ def test_initialization_prunes_terminal_waiters_only(tmp_path):
 
 
 def test_pruned_expired_waiter_requeues_instead_of_failing(tmp_path, monkeypatch):
+    monkeypatch.setattr(admission_module, "_CLAIM_WINDOW_SECONDS", 0.05)
     db, notify = paths(tmp_path)
     first = ProviderAdmission(
-        "pool", 1, request_timeout=2, claim_window=0.05,
+        "pool", 1, request_timeout=2,
         db_path=db, notify_path=notify,
     )
     other = ProviderAdmission(
-        "pool", 1, request_timeout=2, claim_window=0.05,
+        "pool", 1, request_timeout=2,
         db_path=db, notify_path=notify,
     )
 
@@ -163,7 +165,7 @@ def test_pruned_expired_waiter_requeues_instead_of_failing(tmp_path, monkeypatch
     assert other_lease is not None
 
     ProviderAdmission(
-        "new-client", 1, request_timeout=2, claim_window=0.05,
+        "new-client", 1, request_timeout=2,
         db_path=db, notify_path=notify,
     )
     original_enqueue = first._enqueue
@@ -180,31 +182,13 @@ def test_pruned_expired_waiter_requeues_instead_of_failing(tmp_path, monkeypatch
     assert first.release(lease)
 
 
-def test_queue_timeout_cancels_waiter(tmp_path):
-    db, notify = paths(tmp_path)
-    owner = ProviderAdmission(
-        "pool", 1, request_timeout=2, db_path=db, notify_path=notify
-    )
-    lease = owner.acquire()
-    blocked = ProviderAdmission(
-        "pool", 1, request_timeout=2, queue_timeout=0.1,
-        db_path=db, notify_path=notify,
-    )
-    with pytest.raises(AdmissionQueueTimeout):
-        blocked.acquire()
-    owner.release(lease)
-    with sqlite3.connect(db) as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM admission_waiters WHERE state='cancelled'"
-        ).fetchone()[0] == 1
-
-
 @pytest.mark.skipif(os.name != "posix", reason="Linux inotify required")
-def test_cross_process_fifo(tmp_path):
+def test_cross_process_fifo(tmp_path, monkeypatch):
+    monkeypatch.setattr(admission_module, "_CLAIM_WINDOW_SECONDS", 1.0)
     ctx = multiprocessing.get_context("fork")
     db, notify = paths(tmp_path)
     owner = ProviderAdmission(
-        "pool", 1, request_timeout=2, claim_window=1,
+        "pool", 1, request_timeout=2,
         db_path=db, notify_path=notify,
     )
     owner_lease = owner.acquire()
@@ -224,11 +208,12 @@ def test_cross_process_fifo(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Linux inotify required")
-def test_dead_waiting_head_expires(tmp_path):
+def test_dead_waiting_head_expires(tmp_path, monkeypatch):
+    monkeypatch.setattr(admission_module, "_CLAIM_WINDOW_SECONDS", 0.2)
     ctx = multiprocessing.get_context("fork")
     db, notify = paths(tmp_path)
     owner = ProviderAdmission(
-        "pool", 1, request_timeout=2, claim_window=0.2,
+        "pool", 1, request_timeout=2,
         db_path=db, notify_path=notify,
     )
     owner_lease = owner.acquire()
@@ -253,7 +238,9 @@ def test_dead_waiting_head_expires(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Linux inotify required")
-def test_dead_active_owner_reclaimed_at_expiration(tmp_path):
+def test_dead_active_owner_reclaimed_at_expiration(tmp_path, monkeypatch):
+    monkeypatch.setattr(admission_module, "_CLAIM_WINDOW_SECONDS", 0.05)
+    monkeypatch.setattr(admission_module, "_LEASE_GRACE_SECONDS", 0.0)
     ctx = multiprocessing.get_context("fork")
     db, notify = paths(tmp_path)
     output = ctx.Queue()
@@ -262,8 +249,7 @@ def test_dead_active_owner_reclaimed_at_expiration(tmp_path):
     assert output.get(timeout=3) == 1
     dead.join(3)
     admission = ProviderAdmission(
-        "pool", 1, request_timeout=0.15, claim_window=0.05,
-        lease_grace=0, db_path=db, notify_path=notify,
+        "pool", 1, request_timeout=0.15, db_path=db, notify_path=notify,
     )
     started = time.monotonic()
     lease = admission.acquire()
@@ -275,8 +261,7 @@ def test_dead_active_owner_reclaimed_at_expiration(tmp_path):
 def test_rate_limit_waits_without_holding_a_slot(tmp_path):
     db, notify = paths(tmp_path)
     admission = ProviderAdmission(
-        "pool", 2, request_timeout=1, rate_per_minute=600,
-        burst_capacity=1, db_path=db, notify_path=notify,
+        "pool", 1, request_timeout=1, rate_per_minute=600, db_path=db, notify_path=notify,
     )
     first = admission.acquire()
     admission.release(first)
@@ -297,8 +282,7 @@ def test_rate_and_slot_are_claimed_atomically_across_processes(tmp_path):
     def rate_worker(root, result):
         worker_db, worker_notify = paths(root)
         admission = ProviderAdmission(
-            "pool", 4, request_timeout=1, rate_per_minute=600,
-            burst_capacity=1, db_path=worker_db, notify_path=worker_notify,
+            "pool", 1, request_timeout=1, rate_per_minute=600, db_path=worker_db, notify_path=worker_notify,
         )
         lease = admission.acquire()
         result.put((lease.ticket, time.time()))
@@ -341,13 +325,11 @@ def test_from_model_config_is_enabled_only_by_concurrency(monkeypatch, tmp_path)
     admission = ProviderAdmission.from_model_config(
         "camelai/model", {
             "timeout": 1, "concurrency": 3, "rpm": 120,
-            "admission_burst": 2,
         }
     )
     assert admission is not None
     assert admission.capacity == 3
     assert admission.rate_per_minute == 120
-    assert admission.burst_capacity == 2
 
 
 def test_pool_key_hides_secret_and_shares_models():
@@ -357,9 +339,6 @@ def test_pool_key_hides_secret_and_shares_models():
     assert one == two
     assert one != other
     assert "secret" not in one
-    assert quota_pool_key(
-        "camelai/a", {"api_key": "x", "admission_pool": "shared"}
-    ) == "shared"
 
 
 def test_client_wraps_call_and_retry_reacquires(monkeypatch):
@@ -412,7 +391,7 @@ def test_http_call_starts_only_after_admission(tmp_path, monkeypatch):
 
     db, notify = paths(tmp_path)
     admission = ProviderAdmission(
-        "pool", 1, request_timeout=2, claim_window=0.5,
+        "pool", 1, request_timeout=2,
         db_path=db, notify_path=notify,
     )
     owner = admission.acquire()

@@ -33,6 +33,8 @@ _WATCH_MASK = (
     | _IN_IGNORED | _IN_Q_OVERFLOW
 )
 _EVENT_HEADER = struct.Struct("iIII")
+_CLAIM_WINDOW_SECONDS = 0.1
+_LEASE_GRACE_SECONDS = 30.0
 
 
 class AdmissionError(RuntimeError):
@@ -40,10 +42,6 @@ class AdmissionError(RuntimeError):
 
 
 class AdmissionConfigurationError(AdmissionError):
-    pass
-
-
-class AdmissionQueueTimeout(AdmissionError, TimeoutError):
     pass
 
 
@@ -81,9 +79,6 @@ def admission_paths() -> tuple[Path, Path]:
 
 
 def quota_pool_key(model_name: str, config: Mapping[str, object]) -> str:
-    explicit = config.get("admission_pool")
-    if explicit:
-        return str(explicit)
     provider = model_name.split("/", 1)[0]
     credential_parts = []
     for key in sorted(config):
@@ -180,10 +175,6 @@ class ProviderAdmission:
         *,
         request_timeout: Optional[float],
         rate_per_minute: Optional[float] = None,
-        burst_capacity: Optional[float] = None,
-        claim_window: float = 0.1,
-        lease_grace: float = 30.0,
-        queue_timeout: Optional[float] = None,
         db_path: Optional[Union[Path, str]] = None,
         notify_path: Optional[Union[Path, str]] = None,
     ):
@@ -195,19 +186,6 @@ class ProviderAdmission:
             isinstance(rate_per_minute, bool) or float(rate_per_minute) <= 0
         ):
             raise ValueError("rate_per_minute must be positive")
-        if burst_capacity is None:
-            burst_capacity = capacity
-        if (
-            isinstance(burst_capacity, bool)
-            or float(burst_capacity) < 1
-        ):
-            raise ValueError("burst_capacity must be at least one")
-        if rate_per_minute is None and burst_capacity != capacity:
-            raise ValueError("burst_capacity requires rate_per_minute")
-        if claim_window <= 0 or lease_grace < 0:
-            raise ValueError("invalid claim window or lease grace")
-        if queue_timeout is not None and queue_timeout <= 0:
-            raise ValueError("queue_timeout must be positive")
         default_db, default_notify = admission_paths()
         self.pool_key = pool_key
         self.capacity = int(capacity)
@@ -215,10 +193,6 @@ class ProviderAdmission:
         self.rate_per_minute = (
             None if rate_per_minute is None else float(rate_per_minute)
         )
-        self.burst_capacity = float(burst_capacity)
-        self.claim_window = float(claim_window)
-        self.lease_grace = float(lease_grace)
-        self.queue_timeout = queue_timeout
         self.db_path = Path(db_path or default_db).expanduser()
         self.notify_path = Path(notify_path or default_notify).expanduser()
         self._initialize_lock = threading.Lock()
@@ -235,10 +209,6 @@ class ProviderAdmission:
             int(config["concurrency"]),
             request_timeout=config.get("timeout", 300),
             rate_per_minute=config.get("rpm"),
-            burst_capacity=config.get("admission_burst", config["concurrency"]),
-            claim_window=float(config.get("admission_claim_window", 0.1)),
-            lease_grace=float(config.get("admission_lease_grace", 30.0)),
-            queue_timeout=config.get("admission_queue_timeout"),
         )
 
     def _secure_file(self, path: Path) -> None:
@@ -295,7 +265,6 @@ class ProviderAdmission:
                         }
                         for name, declaration in (
                             ("rate_per_minute", "REAL"),
-                            ("burst_capacity", "REAL"),
                             ("available_tokens", "REAL"),
                             ("tokens_updated_at", "REAL"),
                         ):
@@ -353,25 +322,27 @@ class ProviderAdmission:
 
     def _lease_duration(self) -> float:
         base = 600.0 if self.request_timeout is None else float(self.request_timeout)
-        return max(base + self.lease_grace, self.claim_window * 2)
+        return max(
+            base + _LEASE_GRACE_SECONDS,
+            _CLAIM_WINDOW_SECONDS * 2,
+        )
 
     def _ensure_pool(self, conn) -> None:
         now = time.time()
         conn.execute(
             "INSERT OR IGNORE INTO admission_pools"
-            "(pool_key,capacity,next_ticket,rate_per_minute,burst_capacity,"
-            "available_tokens,tokens_updated_at) VALUES (?,?,1,?,?,?,?)",
+            "(pool_key,capacity,next_ticket,rate_per_minute,"
+            "available_tokens,tokens_updated_at) VALUES (?,?,1,?,?,?)",
             (
                 self.pool_key,
                 self.capacity,
                 self.rate_per_minute,
-                self.burst_capacity if self.rate_per_minute is not None else None,
-                self.burst_capacity if self.rate_per_minute is not None else None,
+                float(self.capacity) if self.rate_per_minute is not None else None,
                 now if self.rate_per_minute is not None else None,
             ),
         )
         actual = conn.execute(
-            "SELECT capacity,rate_per_minute,burst_capacity "
+            "SELECT capacity,rate_per_minute "
             "FROM admission_pools WHERE pool_key=?",
             (self.pool_key,),
         ).fetchone()
@@ -382,38 +353,30 @@ class ProviderAdmission:
             )
         if actual["rate_per_minute"] is None and self.rate_per_minute is not None:
             conn.execute(
-                "UPDATE admission_pools SET rate_per_minute=?,burst_capacity=?,"
+                "UPDATE admission_pools SET rate_per_minute=?,"
                 "available_tokens=?,tokens_updated_at=? WHERE pool_key=? "
                 "AND rate_per_minute IS NULL",
                 (
-                    self.rate_per_minute, self.burst_capacity,
-                    self.burst_capacity, now, self.pool_key,
+                    self.rate_per_minute, float(self.capacity),
+                    now, self.pool_key,
                 ),
             )
             actual = conn.execute(
-                "SELECT capacity,rate_per_minute,burst_capacity "
+                "SELECT capacity,rate_per_minute "
                 "FROM admission_pools WHERE pool_key=?",
                 (self.pool_key,),
             ).fetchone()
         actual_rate = actual["rate_per_minute"]
-        actual_burst = actual["burst_capacity"]
         rate_matches = (
             actual_rate is None and self.rate_per_minute is None
         ) or (
             actual_rate is not None and self.rate_per_minute is not None
             and math.isclose(actual_rate, self.rate_per_minute)
         )
-        burst_matches = (
-            actual_burst is None and self.rate_per_minute is None
-        ) or (
-            actual_burst is not None and self.rate_per_minute is not None
-            and math.isclose(actual_burst, self.burst_capacity)
-        )
-        if not rate_matches or not burst_matches:
+        if not rate_matches:
             raise AdmissionConfigurationError(
-                f"pool {self.pool_key!r} has rate/burst "
-                f"{actual_rate}/{actual_burst}, not "
-                f"{self.rate_per_minute}/{self.burst_capacity}"
+                f"pool {self.pool_key!r} has rate {actual_rate}, "
+                f"not {self.rate_per_minute}"
             )
         conn.executemany(
             "INSERT OR IGNORE INTO admission_slots(pool_key, slot_no) VALUES (?, ?)",
@@ -458,7 +421,7 @@ class ProviderAdmission:
             (self.pool_key,),
         ).fetchone()
         available = min(
-            self.burst_capacity,
+            float(self.capacity),
             float(row["available_tokens"])
             + max(0.0, now - float(row["tokens_updated_at"]))
             * self.rate_per_minute / 60.0,
@@ -528,7 +491,7 @@ class ProviderAdmission:
                 changed = True
                 continue
             if deadline is None:
-                deadline = now + self.claim_window
+                deadline = now + _CLAIM_WINDOW_SECONDS
                 conn.execute(
                     "UPDATE admission_waiters SET head_claim_expires_at=? "
                     "WHERE pool_key=? AND ticket=? AND state='waiting'",
@@ -638,12 +601,7 @@ class ProviderAdmission:
             self._broadcast()
 
     def acquire(self):
-        started_mono = time.monotonic()
         queued_at = time.time()
-        queue_deadline = (
-            None if self.queue_timeout is None
-            else started_mono + float(self.queue_timeout)
-        )
         watch = _InotifyWatch(self.notify_path)
         ticket = -1
         waiter_id = ""
@@ -671,16 +629,9 @@ class ProviderAdmission:
                     continue
                 if result.state != "waiting":
                     raise AdmissionError(f"unexpected waiter state {result.state!r}")
-                now_mono = time.monotonic()
-                if queue_deadline is not None and now_mono >= queue_deadline:
-                    raise AdmissionQueueTimeout(
-                        f"timed out waiting for {self.pool_key!r}"
-                    )
                 waits = []
                 if result.next_wall_deadline is not None:
                     waits.append(max(0, result.next_wall_deadline - time.time()))
-                if queue_deadline is not None:
-                    waits.append(max(0, queue_deadline - now_mono))
                 watch.wait(min(waits) if waits else None)
         except BaseException:
             if ticket >= 0 and waiter_id:
@@ -736,7 +687,6 @@ CREATE TABLE IF NOT EXISTS admission_pools (
     capacity INTEGER NOT NULL CHECK(capacity>0),
     next_ticket INTEGER NOT NULL CHECK(next_ticket>0),
     rate_per_minute REAL CHECK(rate_per_minute>0),
-    burst_capacity REAL CHECK(burst_capacity>=1),
     available_tokens REAL CHECK(available_tokens>=0),
     tokens_updated_at REAL
 );

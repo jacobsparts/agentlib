@@ -21,9 +21,8 @@ SQLite is authoritative. The notification file is only a wake-all hint.
 ## Pool identity and configuration
 
 Normalized tables are keyed by a quota-pool key rather than creating dynamic
-tables. By default the key is the provider name plus a SHA-256 fingerprint of
-the provider host and credential. Secrets are never stored. `admission_pool`
-may explicitly identify a shared quota.
+tables. The key is the provider name plus a SHA-256 fingerprint of the provider
+host and credential. Secrets are never stored.
 
 Provider admission is enabled if and only if `concurrency` is configured for
 the provider/model. Its value is the strict host-wide active-request capacity;
@@ -31,20 +30,12 @@ without it, Agentlib does not create or use an admission pool.
 
 When `rpm` is configured, the same admission transaction also enforces a
 host-wide request-rate allowance. The allowance replenishes at `rpm / 60`
-requests per second. `admission_burst` controls how many requests may accumulate
-for a burst and defaults to `concurrency`. Completing a request does not add
-capacity back to the rate allowance.
+requests per second and accumulates up to the provider concurrency. Completing
+a request does not add capacity back to the rate allowance.
 
-Optional settings:
-
-- `admission_pool`
-- `admission_burst` (default `concurrency`)
-- `admission_claim_window` (default 0.1 seconds)
-- `admission_lease_grace` (default 30 seconds)
-- `admission_queue_timeout` (default unlimited)
-
-Callers that configure different concurrency, RPM, or burst values for the
-same pool fail clearly.
+The internal claim interval and active-lease recovery grace are fixed module
+policies, not provider or model configuration. Callers that configure different
+concurrency or RPM values for the same derived pool fail clearly.
 Whenever a `ProviderAdmission` instance initializes, it deletes all terminal
 waiter rows (`finished`, `expired`, and `cancelled`) across every pool. Waiting
 and active rows are never pruned.
@@ -57,7 +48,6 @@ CREATE TABLE admission_pools (
     capacity INTEGER NOT NULL,
     next_ticket INTEGER NOT NULL,
     rate_per_minute REAL,
-    burst_capacity REAL,
     available_tokens REAL,
     tokens_updated_at REAL
 );
@@ -123,7 +113,6 @@ A waiter blocks until the earliest of:
 - the current head-claim deadline;
 - the earliest active lease expiration;
 - the exact time at which the request-rate allowance next permits a call;
-- its absolute queue deadline.
 
 These are scheduled failure-recovery wakes, not periodic polling.
 
@@ -152,7 +141,7 @@ credential identify the same quota pool.
 ## Verification requirements
 
 Tests cover cross-process capacity and RPM, atomic rate/slot claims, FIFO
-ordering, exact rate-deadline wake-up, wake-all behavior, queue timeout,
-dead-head advancement, dead-active lease reclamation, conditional release,
+ordering, exact rate-deadline wake-up, wake-all behavior, dead-head advancement,
+dead-active lease reclamation, conditional release,
 pool isolation, configuration mismatch, exception cleanup, retries, and proof
 that provider work starts only after admission.

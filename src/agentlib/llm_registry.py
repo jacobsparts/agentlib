@@ -16,11 +16,6 @@ class ProviderConfig:
     port: int = 443
     rpm: float = None
     concurrency: int = None
-    admission_pool: str = None
-    admission_burst: float = None
-    admission_claim_window: float = 0.1
-    admission_lease_grace: float = 30.0
-    admission_queue_timeout: float = None
     timeout: int = 120
     tools: bool = False
     api_type: str = "completions"
