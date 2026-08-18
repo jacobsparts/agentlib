@@ -26,10 +26,12 @@ import signal
 import subprocess
 import threading
 import time
-from multiprocessing import Process, Queue
+import multiprocessing as mp
 from pathlib import Path
 from queue import Empty
 from typing import Any, Optional
+
+from agentlib.process_safety import assert_safe_process_context
 
 
 STILL_RUNNING = "[still running]\n"
@@ -62,7 +64,7 @@ def _with_still_running(output: str) -> str:
     return output + STILL_RUNNING
 
 
-def _worker_main(cmd_queue: Queue, output_queue: Queue) -> None:
+def _worker_main(cmd_queue: Any, output_queue: Any) -> None:
     """Worker process that executes commands in a persistent bash shell."""
     ensure_python_on_path()
 
@@ -79,7 +81,7 @@ def _worker_main(cmd_queue: Queue, output_queue: Queue) -> None:
     # Unique marker for command completion
     marker = "__SUBSHELL_DONE_a7b3f9__"
 
-    def read_output_thread(proc: subprocess.Popen, output_queue: Queue, stop_event: threading.Event):
+    def read_output_thread(proc: subprocess.Popen, output_queue: Any, stop_event: threading.Event):
         """Thread to read stdout and push to queue."""
         try:
             while not stop_event.is_set():
@@ -148,9 +150,9 @@ class SubShell:
         Args:
             echo: If True, prefix output with "$ command" echo (default True)
         """
-        self._cmd_queue: Optional[Queue] = None
-        self._output_queue: Optional[Queue] = None
-        self._worker: Optional[Process] = None
+        self._cmd_queue: Optional[Any] = None
+        self._output_queue: Optional[Any] = None
+        self._worker: Optional[Any] = None
         self._running: bool = False
         self._marker = "__SUBSHELL_DONE_a7b3f9__"
         self._echo: bool = echo
@@ -164,9 +166,11 @@ class SubShell:
     def _ensure_session(self) -> None:
         """Start worker if needed."""
         if self._worker is None or not self._worker.is_alive():
-            self._cmd_queue = Queue(maxsize=1)
-            self._output_queue = Queue(maxsize=1)
-            self._worker = Process(
+            assert_safe_process_context()
+            ctx = mp.get_context("spawn")
+            self._cmd_queue = ctx.Queue(maxsize=1)
+            self._output_queue = ctx.Queue(maxsize=1)
+            self._worker = ctx.Process(
                 target=_worker_main,
                 args=(self._cmd_queue, self._output_queue),
                 daemon=True

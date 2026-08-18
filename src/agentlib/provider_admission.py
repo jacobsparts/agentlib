@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping, Optional, Union
 
+from .process_safety import assert_safe_process_context
+
 _DEFAULT_DB = Path("~/.agentlib/.provider_admission.sqlite3").expanduser()
 _DEFAULT_NOTIFY = Path("~/.agentlib/.provider_admission.notify").expanduser()
 _IN_MODIFY = 0x00000002
@@ -211,6 +213,7 @@ class ProviderAdmission:
         db_path: Optional[Union[Path, str]] = None,
         notify_path: Optional[Union[Path, str]] = None,
     ):
+        assert_safe_process_context()
         if not pool_key:
             raise ValueError("pool_key must not be empty")
         if isinstance(capacity, bool) or int(capacity) != capacity or capacity < 1:

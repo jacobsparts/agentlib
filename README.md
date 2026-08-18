@@ -187,7 +187,19 @@ Yes—agents are normal Python classes, so you can instantiate or subclass them 
 You don't need to import it directly; AgentLib uses it internally for validation generated from your function signatures.  However, you can use Pydantic models directly by passing them to the tool decorator, or you can pass a model generator function.
 
 **What about concurrency?**  
-AgentLib uses traditional concurrency internally—multiprocessing for isolated execution environments (shell, REPL) and threading with select-based I/O for the MCP client. Public APIs are thread-safe, so you can safely call agents from multiple threads—which is exactly what we do in production. The select-based I/O is gevent-compatible when monkey-patched.
+AgentLib uses traditional concurrency internally—spawned processes for isolated execution environments (shell, REPL) and threading with select-based I/O for the MCP client. Public APIs are thread-safe, so you can safely call agents from multiple threads—which is exactly what we do in production. The select-based I/O is gevent-compatible when monkey-patched.
+
+AgentLib never uses the ambient `multiprocessing` start method for workers it owns; it explicitly uses `spawn`. Do the same for application-owned workers that will create agents or call providers:
+
+```python
+import multiprocessing as mp
+
+ctx = mp.get_context("spawn")
+process = ctx.Process(target=run_agent)
+process.start()
+```
+
+Do not use `fork` for agent workers. If AgentLib was imported before an external `fork`, creating provider-admission, shell, or REPL resources in that child fails fast with an actionable error rather than risking inherited locks, threads, queues, HTTP state, or SQLite locking failures.
 
 
 ---

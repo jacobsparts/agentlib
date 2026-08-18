@@ -10,9 +10,11 @@ from __future__ import annotations
 import os
 import signal
 import sys
-from multiprocessing import Process, Queue
+import multiprocessing as mp
 from queue import Empty
 from typing import Any, Callable, Optional, Tuple
+
+from agentlib.process_safety import assert_safe_process_context
 
 
 # Transport compatibility contract:
@@ -68,12 +70,16 @@ class MultiprocessingTransport:
         self._args = args
         self._queue_count = queue_count
         self._maxsize = maxsize
-        self.queues: Tuple[Queue, ...] = ()
-        self.worker: Optional[Process] = None
+        self.queues: Tuple[Any, ...] = ()
+        self.worker: Optional[Any] = None
 
     def start(self) -> None:
-        self.queues = tuple(Queue(maxsize=self._maxsize) for _ in range(self._queue_count))
-        self.worker = Process(
+        assert_safe_process_context()
+        ctx = mp.get_context("spawn")
+        self.queues = tuple(
+            ctx.Queue(maxsize=self._maxsize) for _ in range(self._queue_count)
+        )
+        self.worker = ctx.Process(
             target=self._target,
             args=(*self.queues, *self._args),
             daemon=True,

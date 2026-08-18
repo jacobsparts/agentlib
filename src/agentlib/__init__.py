@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+from . import process_safety as _process_safety
+
 _user_mixins = Path.home() / ".agentlib" / "mixins"
 if _user_mixins.is_dir() and str(_user_mixins) not in sys.path:
     sys.path.append(str(_user_mixins))
