@@ -138,6 +138,76 @@ def test_native_tool_validation_retry_uses_temporary_feedback(monkeypatch):
     assert "valid tool call only" in calls[1][2]["content"]
 
 
+def _container_tool():
+    from pydantic import BaseModel, create_model
+
+    class Fact(BaseModel):
+        sources: list[str]
+
+    tool = create_model(
+        "Submit",
+        fact=(Fact, ...),
+        tags=(list[str], ...),
+        note=(str, ...),
+    )
+    tool.__doc__ = "Submit structured facts."
+    return tool
+
+
+def _stringified_containers():
+    return {
+        "fact": json.dumps({"sources": ["source"]}),
+        "tags": json.dumps(["tag"]),
+        "note": "{}",
+    }
+
+
+@pytest.mark.parametrize("native", [True, False])
+def test_tool_call_normalizes_json_stringified_containers(monkeypatch, native):
+    from agentlib.client import LLMClient
+
+    client = LLMClient("sonnet")
+    tool = _container_tool()
+    arguments = _stringified_containers()
+    if native:
+        monkeypatch.setattr(client, "_call", lambda messages, tools: {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "function": {
+                    "name": "submit",
+                    "arguments": json.dumps(arguments),
+                }
+            }],
+        })
+        result = client.tool_call_native(
+            [{"role": "user", "content": "submit"}],
+            {"submit": tool},
+            retry=0,
+        )
+    else:
+        monkeypatch.setattr(client, "_call", lambda messages: {
+            "role": "assistant",
+            "content": json.dumps({
+                "function_calls": [{
+                    "name": "submit",
+                    "arguments": arguments,
+                }]
+            }),
+        })
+        result = client.tool_call_shim(
+            [{"role": "user", "content": "submit"}],
+            {"submit": tool},
+            retry=0,
+        )
+
+    normalized = json.loads(result["tool_calls"][0]["function"]["arguments"])
+    tool.model_validate(normalized)
+    assert isinstance(normalized["fact"], dict)
+    assert isinstance(normalized["tags"], list)
+    assert isinstance(normalized["note"], str)
+
+
 def test_emulated_tool_calls_receive_unique_ids_and_ids_stay_off_wire(monkeypatch):
     from pydantic import create_model
 

@@ -260,6 +260,55 @@ def _preprocess_tool_call_response(content):
     return content
 
 
+def _normalize_json_containers(value, schema, root):
+    if '$ref' in schema:
+        target = root
+        for part in schema['$ref'].removeprefix('#/').split('/'):
+            target = target[part]
+        schema = target
+
+    if 'anyOf' in schema:
+        variants = [item for item in schema['anyOf'] if item.get('type') != 'null']
+        if len(variants) == 1:
+            schema = variants[0]
+            if '$ref' in schema:
+                target = root
+                for part in schema['$ref'].removeprefix('#/').split('/'):
+                    target = target[part]
+                schema = target
+
+    expected = schema.get('type')
+    if isinstance(value, str) and expected in ('object', 'array'):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            decoded = None
+        if (
+            expected == 'object' and isinstance(decoded, dict)
+            or expected == 'array' and isinstance(decoded, list)
+        ):
+            value = decoded
+
+    if isinstance(value, dict):
+        properties = schema.get('properties', {})
+        return {
+            key: _normalize_json_containers(item, properties.get(key, {}), root)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        item_schema = schema.get('items', {})
+        return [
+            _normalize_json_containers(item, item_schema, root)
+            for item in value
+        ]
+    return value
+
+
+def _normalize_tool_arguments(arguments, tool):
+    schema = tool.model_json_schema()
+    return _normalize_json_containers(arguments, schema, schema)
+
+
 def _extract_tool_calls_json(content):
     for obj, json_start_index, json_end_index in _iter_json_dicts(content):
         function_calls = obj.get("function_calls")
@@ -626,6 +675,204 @@ class LLMClient:
             finally:
                 conn.close()
 
+
+    def _responses_request(self, messages, tools):
+        config = dict(self.model_config.get('config', {}))
+        if 'reasoning_effort' in config:
+            config['reasoning'] = {'effort': config.pop('reasoning_effort')}
+        if 'max_tokens' in config:
+            config['max_output_tokens'] = config.pop('max_tokens')
+
+        input_items = []
+        has_cache_breakpoint = False
+        for original in messages:
+            message = dict(original)
+            images = message.pop('images', None) or []
+            if message.pop('audio', None):
+                raise BadRequestError("Audio input is not supported by OpenAI Responses API")
+
+            role = message.get('role')
+            cache_breakpoint = (
+                bool(message.get('_prompt_cache_breakpoint'))
+                and self.model_config.get('explicit_prompt_cache')
+            )
+            if role == 'tool':
+                input_items.append({
+                    'type': 'function_call_output',
+                    'call_id': message.get('tool_call_id'),
+                    'output': message.get('content', ''),
+                })
+                continue
+
+            content = message.get('content')
+            if isinstance(content, str):
+                content = [{'type': 'text', 'text': content}]
+            elif not isinstance(content, list):
+                content = []
+
+            blocks = []
+            for block in content:
+                if not isinstance(block, dict) or block.get('type') == 'reasoning':
+                    continue
+                kind = block.get('type')
+                if kind == 'text':
+                    blocks.append({
+                        'type': 'output_text' if role == 'assistant' else 'input_text',
+                        'text': block.get('text', ''),
+                    })
+                elif kind == 'image_url':
+                    image_url = block.get('image_url')
+                    if isinstance(image_url, dict):
+                        image_url = image_url.get('url')
+                    blocks.append({'type': 'input_image', 'image_url': image_url})
+                elif kind == 'output_text' and role != 'assistant':
+                    blocks.append({'type': 'input_text', 'text': block.get('text', '')})
+                else:
+                    blocks.append(dict(block))
+
+            for image in images:
+                try:
+                    media_type = MEDIA_TYPES[image[:3]]
+                except (KeyError, TypeError):
+                    raise BadRequestError("Unsupported image format for OpenAI Responses API")
+                blocks.append({
+                    'type': 'input_image',
+                    'image_url': (
+                        f"data:{media_type};base64,"
+                        f"{base64.b64encode(image).decode()}"
+                    ),
+                })
+
+            if cache_breakpoint and blocks:
+                blocks[-1] = {
+                    **blocks[-1],
+                    'prompt_cache_breakpoint': {'mode': 'explicit'},
+                }
+                has_cache_breakpoint = True
+            if blocks:
+                input_items.append({'role': role, 'content': blocks})
+
+            for call in message.get('tool_calls') or []:
+                function = call.get('function') or {}
+                input_items.append({
+                    'type': 'function_call',
+                    'call_id': call.get('id'),
+                    'name': function.get('name'),
+                    'arguments': function.get('arguments', ''),
+                })
+
+        req = {
+            'model': self.model_config['model'],
+            'input': input_items,
+            **config,
+        }
+        if has_cache_breakpoint:
+            req.setdefault('prompt_cache_options', {'mode': 'explicit'})
+        if tools:
+            req['tools'] = [
+                {'type': 'function', **tool.get('function', tool)}
+                for tool in tools
+            ]
+        return req
+
+    def _parse_responses_result(self, response_json):
+        output = response_json.get('output')
+        if not isinstance(output, list):
+            raise Exception(f"output missing from response: {response_json}")
+
+        text = []
+        calls = []
+        for item in output:
+            if item.get('type') == 'message':
+                msg_text = '\n'.join(
+                    block['text']
+                    for block in item.get('content', [])
+                    if block.get('type') in ('output_text', 'text') and block.get('text')
+                )
+                phase = item.get('phase')
+                if phase not in (None, 'final'):
+                    if phase != 'commentary':
+                        sys.stderr.write(f"Warning: unrecognized Responses API message phase: {phase!r}\n")
+                    if msg_text:
+                        msg_text = '# ' + '\n# '.join(msg_text.split('\n'))
+                if msg_text:
+                    text.append(msg_text)
+            elif item.get('type') == 'output_text' and item.get('text'):
+                text.append(item['text'])
+            elif item.get('type') == 'function_call':
+                calls.append({
+                    'id': item.get('call_id') or item.get('id'),
+                    'type': 'function',
+                    'function': {
+                        'name': item.get('name'),
+                        'arguments': item.get('arguments', ''),
+                    },
+                })
+
+        if not text and isinstance(response_json.get('output_text'), str):
+            text.append(response_json['output_text'])
+        message = {'role': 'assistant', 'content': '\n'.join(part for part in text if part)}
+        if calls:
+            message['tool_calls'] = calls
+
+        if usage := response_json.get('usage'):
+            self.usage_tracker.log(self.model_name, usage)
+            self._update_input_tokens_per_byte(self._current_input_bytes, usage)
+
+        incomplete = response_json.get('incomplete_details') or {}
+        message['_stop_reason'] = incomplete.get('reason')
+        if message['_stop_reason'] is None:
+            message['_stop_reason'] = (
+                'tool_calls' if calls
+                else 'stop' if response_json.get('status') == 'completed'
+                else response_json.get('status')
+            )
+        return message
+
+    def _call_responses(self, messages, tools):
+        req = self._responses_request(messages, tools)
+        if self.model_config['port'] == 443:
+            conn = DeadlineHTTPSConnection(
+                self.model_config['host'],
+                timeout=self.timeout,
+                deadline=self.timeout,
+            )
+            conn.connect()
+        else:
+            conn = DeadlineHTTPConnection(
+                self.model_config['host'],
+                self.model_config['port'],
+                timeout=self.timeout,
+                deadline=self.timeout,
+            )
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f"Bearer {self.model_config['api_key']}",
+        }
+        try:
+            request_path = self.model_config.get(
+                'request_path', self.model_config['path']
+            )
+            body = json.dumps(req)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("----------- TO LLM -----------")
+                logger.debug(f"POST {request_path} {headers}")
+                logger.debug(body)
+            conn.request('POST', request_path, body, headers)
+            response = conn.getresponse()
+            response_data = response.read().decode()
+            if logger.isEnabledFor(logging.INFO):
+                logger.info("---------- FROM LLM ----------")
+                logger.info(response_data)
+            if response.status == 400:
+                logger.debug(req)
+                raise BadRequestError(response_data.strip())
+            if response.status != 200:
+                raise Exception(f"API Error {response.status}: {response_data}")
+            return self._parse_responses_result(json.loads(response_data))
+        finally:
+            conn.close()
+
     def _call_messages(self, messages, tools):
         """
         Call Anthropic Messages API.
@@ -730,11 +977,11 @@ class LLMClient:
             if usage := response_json.get('usage'):
                 self.usage_tracker.log(self.model_name, usage)
                 self._update_input_tokens_per_byte(self._current_input_bytes, usage)
-            content = ""
+            text = []
             tool_calls = []
             for content_block in response_json.get('content', []):
                 if content_block['type'] == 'text':
-                    content += content_block['text']
+                    text.append(content_block['text'])
                 elif content_block['type'] == 'tool_use':
                     tool_calls.append({
                         'id': content_block['id'],
@@ -745,7 +992,7 @@ class LLMClient:
                     })
             message = {
                 'role': 'assistant',
-                'content': content
+                'content': '\n'.join(part for part in text if part)
             }
             message['_stop_reason'] = response_json.get('stop_reason')
             if tool_calls:
@@ -887,11 +1134,11 @@ class LLMClient:
             if not response_json.get('candidates'):
                 raise Exception(f"candidates missing from response: {response_json}")
             candidate = response_json['candidates'][0]
-            content = ""
+            text = []
             tool_calls = []
             for part in candidate.get('content', {}).get('parts', []):
                 if 'text' in part:
-                    content += part['text']
+                    text.append(part['text'])
                 elif 'functionCall' in part:
                     fc = part['functionCall']
                     tc = {
@@ -904,7 +1151,7 @@ class LLMClient:
                     if sig := part.get('thoughtSignature'):
                         tc['thoughtSignature'] = sig
                     tool_calls.append(tc)
-            message = {'role': 'assistant', 'content': content}
+            message = {'role': 'assistant', 'content': '\n'.join(part for part in text if part)}
             message['_stop_reason'] = candidate.get('finishReason')
             if tool_calls:
                 message['tool_calls'] = tool_calls
@@ -961,6 +1208,8 @@ class LLMClient:
         self._validate_context_budget(self._input_bytes(messages, tools))
         if self.model_config['api_type'] == "completions":
             return self._call_completions(messages, tools)
+        elif self.model_config['api_type'] == "responses":
+            return self._call_responses(messages, tools)
         elif self.model_config['api_type'] == "messages":
             return self._call_messages(messages, tools)
         elif self.model_config['api_type'] == "gemini":
@@ -1049,7 +1298,9 @@ class LLMClient:
                     tool = tools[name]
                     if not isinstance(arguments, dict):
                         raise ValidationError(f"Arguments for '{name}' are not a dict")
-                    
+
+                    arguments = _normalize_tool_arguments(arguments, tool)
+                    tool_call["function"]["arguments"] = json.dumps(arguments)
                     try:
                         tool.model_validate(arguments)
                     except Exception as ve:
@@ -1165,6 +1416,8 @@ class LLMClient:
                 if not isinstance(arguments, dict):
                     logger.debug(json.dumps(tool_calls, indent=4))
                     raise ValidationError(f"Arguments for '{name}' are not a dict")
+                arguments = _normalize_tool_arguments(arguments, tool)
+                call["arguments"] = arguments
                 try:
                     tool.model_validate(arguments)
                 except Exception as ve:
