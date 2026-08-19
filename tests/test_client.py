@@ -349,7 +349,7 @@ def test_usage_normalization_handles_uncached_input_with_separate_cache_tokens()
     ],
 )
 def test_client_preserves_private_message_metadata_until_transport(monkeypatch, api_type, method_name):
-    from agentlib.client import LLMClient
+    from agentlib.client import LLMClient, legacy_to_transport_messages
 
     client = LLMClient("sonnet")
     client.model_config = {
@@ -374,7 +374,7 @@ def test_client_preserves_private_message_metadata_until_transport(monkeypatch, 
     def fake_provider_call(messages, tools):
         captured["messages"] = messages
         captured["tools"] = tools
-        return {"role": "assistant", "content": "ok"}
+        return {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}
 
     monkeypatch.setattr(client, "_validate_context_budget", fake_validate)
     monkeypatch.setattr(client, method_name, fake_provider_call)
@@ -382,15 +382,15 @@ def test_client_preserves_private_message_metadata_until_transport(monkeypatch, 
     client._call([private_message])
 
     # Dispatch preserves private metadata so transports can consume it.
-    assert captured["messages"] == [private_message]
+    assert captured["messages"] == legacy_to_transport_messages([private_message])
     assert captured["tools"] is None
     # Sizing ignores private metadata.
     assert captured["input_bytes"] == client._input_bytes(
-        [{"role": "user", "content": "visible"}],
+        legacy_to_transport_messages([{"role": "user", "content": "visible"}]),
         None,
     )
-    assert client._public_messages([private_message]) == [
-        {"role": "user", "content": "visible"}
+    assert client._public_messages(captured["messages"]) == [
+        {"role": "user", "content": [{"type": "text", "text": "visible"}]}
     ]
 
 
@@ -406,4 +406,314 @@ def test_public_messages_helper_strips_underscore_keys():
         }
     ]) == [{"role": "user", "content": "visible"}]
 
+
+
+def test_canonical_transport_adapters_and_block_types():
+    from agentlib.client import legacy_to_transport_messages, transport_to_legacy_message
+
+    legacy_messages = [
+        {"role": "system", "content": "system prompt"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hello"},
+                {"type": "input_file", "file_id": "file_abc", "media_type": "application/pdf"},
+                {"type": "image_url", "image_url": "https://example.com/pic.png", "media_type": "image/png"},
+            ],
+            "_trace_id": "trace-123",
+        },
+        {
+            "role": "assistant",
+            "content": "working on it",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "run", "arguments": '{"cmd": "ls", "count": 2}'},
+            }],
+        },
+        {
+            "role": "tool",
+            "name": "run",
+            "tool_call_id": "call_1",
+            "content": "file1\nfile2",
+        },
+    ]
+
+    transport = legacy_to_transport_messages(legacy_messages)
+    assert len(transport) == 4
+    assert transport[0]["role"] == "system"
+    assert transport[0]["content"] == [{"type": "text", "text": "system prompt"}]
+
+    assert transport[1]["role"] == "user"
+    assert transport[1]["_trace_id"] == "trace-123"
+    assert transport[1]["content"] == [
+        {"type": "text", "text": "hello"},
+        {"type": "attachment", "media_type": "application/pdf", "data_type": "provider_id", "data": "file_abc"},
+        {"type": "attachment", "media_type": "image/png", "data_type": "url", "data": "https://example.com/pic.png"},
+    ]
+
+    assert transport[2]["role"] == "assistant"
+    assert transport[2]["content"] == [
+        {"type": "text", "text": "working on it"},
+        {"type": "tool_call", "id": "call_1", "name": "run", "args": {"cmd": "ls", "count": 2}},
+    ]
+    # Check native decoded args
+    assert transport[2]["content"][1]["args"] == {"cmd": "ls", "count": 2}
+
+    # Test transport_to_legacy_message lossy projection
+    canonical_response = {
+        "role": "assistant",
+        "content": [
+            {"type": "commentary", "text": "thought step\nline 2"},
+            {"type": "reasoning", "text": "hidden reasoning", "provider_metadata": {"encrypted": "abc"}},
+            {"type": "tool_call", "id": "call_2", "name": "read", "args": {"file": "a.txt"}},
+            {"type": "text", "text": "done"},
+        ],
+        "provider_metadata": {"stop_reason": "tool_calls"},
+    }
+    legacy_resp = transport_to_legacy_message(canonical_response)
+    assert legacy_resp["role"] == "assistant"
+    assert legacy_resp["_stop_reason"] == "tool_calls"
+    assert legacy_resp["content"] == "# thought step\n# line 2\ndone"
+    assert legacy_resp["tool_calls"] == [{
+        "id": "call_2",
+        "type": "function",
+        "function": {"name": "read", "arguments": '{"file": "a.txt"}'},
+    }]
+
+    # Returned attachments must raise NotImplementedError
+    with pytest.raises(NotImplementedError, match="Legacy Conversation cannot represent returned attachments"):
+        transport_to_legacy_message({
+            "role": "assistant",
+            "content": [{"type": "attachment", "media_type": "image/png", "data_type": "bytes", "data": b"png"}],
+        })
+
+
+def test_unknown_types_raise_not_implemented():
+    from agentlib.client import LLMClient, legacy_to_transport_messages, transport_to_legacy_message
+
+    with pytest.raises(NotImplementedError, match="Unknown legacy content type"):
+        legacy_to_transport_messages([{
+            "role": "user",
+            "content": [{"type": "unsupported_legacy_type"}],
+        }])
+
+    with pytest.raises(NotImplementedError, match="Unknown transport content type"):
+        transport_to_legacy_message({
+            "role": "assistant",
+            "content": [{"type": "unsupported_transport_type"}],
+        })
+
+    client = LLMClient("sonnet")
+    client.model_config["api_type"] = "completions"
+    with pytest.raises(NotImplementedError, match="Unknown transport content type"):
+        client._completions_messages([{
+            "role": "user",
+            "content": [{"type": "unsupported_transport_type"}],
+        }])
+
+    with pytest.raises(NotImplementedError, match="Unknown Responses output type"):
+        client._parse_responses_result({
+            "output": [{"type": "future_responses_type"}],
+        })
+
+
+def test_attachment_ingress_from_images_and_audio(tmp_path):
+    from agentlib.client import BadRequestError, LLMClient, legacy_to_transport_messages
+
+    png_bytes = b"\x89PNG\r\n\x1a\nfake_png_data"
+    jpeg_bytes = b"\xff\xd8\xfffake_jpeg_data"
+    wav_bytes = b"RIFFfake_wav_data"
+
+    messages = legacy_to_transport_messages([
+        {
+            "role": "user",
+            "content": "analyze files",
+            "images": [png_bytes, jpeg_bytes],
+            "audio": [wav_bytes],
+        }
+    ])
+
+    assert len(messages[0]["content"]) == 4
+    assert messages[0]["content"][0] == {"type": "text", "text": "analyze files"}
+    assert messages[0]["content"][1] == {"type": "attachment", "media_type": "image/png", "data_type": "bytes", "data": png_bytes}
+    assert messages[0]["content"][2] == {"type": "attachment", "media_type": "image/jpeg", "data_type": "bytes", "data": jpeg_bytes}
+    assert messages[0]["content"][3] == {"type": "attachment", "media_type": "audio/wav", "data_type": "bytes", "data": wav_bytes}
+
+    # Invalid image format
+    with pytest.raises(BadRequestError, match="Unsupported image format"):
+        legacy_to_transport_messages([{"role": "user", "content": "x", "images": [b"bad_image_data"]}])
+
+    # Invalid audio format
+    with pytest.raises(BadRequestError, match="Unsupported audio format"):
+        legacy_to_transport_messages([{"role": "user", "content": "x", "audio": [b"bad_audio_data"]}])
+
+    # Provider media validation
+    completions_client = LLMClient("sonnet")
+    completions_client.model_config["api_type"] = "completions"
+    with pytest.raises(BadRequestError, match="Audio input is not supported by OpenAI completions API"):
+        completions_client.validate_media_type("audio/wav")
+
+    anthropic_client = LLMClient("sonnet")
+    anthropic_client.model_config["api_type"] = "messages"
+    with pytest.raises(BadRequestError, match="Audio input is not supported by Anthropic Messages API"):
+        anthropic_client.validate_media_type("audio/wav")
+
+    responses_client = LLMClient("sonnet")
+    responses_client.model_config["api_type"] = "responses"
+    with pytest.raises(BadRequestError, match="Audio input is not supported by OpenAI Responses API"):
+        responses_client.validate_media_type("audio/wav")
+
+    gemini_client = LLMClient("gemini-3.6-flash")
+    gemini_client.model_config["api_type"] = "gemini"
+    # Gemini accepts audio
+    gemini_client.validate_media_type("audio/wav")
+
+    # Filepath data projection
+    fpath = tmp_path / "test.png"
+    fpath.write_bytes(png_bytes)
+    fattachment = {"type": "attachment", "media_type": "image/png", "data_type": "filepath", "data": str(fpath)}
+    projected = gemini_client._gemini_attachment(fattachment)
+    assert projected["inlineData"]["mimeType"] == "image/png"
+
+
+def test_gemini_thought_signatures_and_shim_fallback():
+    from pydantic import BaseModel
+    from agentlib.client import LLMClient
+
+    class Calc(BaseModel):
+        num: int
+
+    client = LLMClient("gemini-3.6-flash", native=True)
+    client.model_config["api_type"] = "gemini"
+
+    # Response with thoughtSignature decodes to canonical provider_metadata and legacy tool_calls
+    gemini_response = {
+        "candidates": [{
+            "content": {
+                "parts": [
+                    {"thought": True, "text": "thinking step", "thoughtSignature": "sig-123"},
+                    {
+                        "functionCall": {"name": "calc", "args": {"num": 42}},
+                        "thoughtSignature": "sig-456",
+                    },
+                ]
+            },
+            "finishReason": "STOP",
+        }]
+    }
+
+    # Simulate parse_gemini_response via _call_gemini response parser
+    # We can inspect _call_gemini parts parsing
+    parts = gemini_response["candidates"][0]["content"]["parts"]
+    blocks = []
+    for part in parts:
+        if "text" in part and part.get("thought"):
+            item = {"type": "reasoning", "text": part["text"]}
+            if "thoughtSignature" in part:
+                item["provider_metadata"] = {"thought_signature": part["thoughtSignature"]}
+            blocks.append(item)
+        elif "functionCall" in part:
+            fc = part["functionCall"]
+            call = {"type": "tool_call", "id": f"gemini_{fc['name']}", "name": fc["name"], "args": fc["args"]}
+            if "thoughtSignature" in part:
+                call["provider_metadata"] = {"thought_signature": part["thoughtSignature"]}
+            blocks.append(call)
+
+    from agentlib.client import transport_to_legacy_message
+    legacy = transport_to_legacy_message({"role": "assistant", "content": blocks})
+    assert legacy["tool_calls"][0]["thoughtSignature"] == "sig-456"
+
+    # History lacking thoughtSignature triggers shim fallback in call()
+    historical_messages = [
+        {"role": "user", "content": "run"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_1",
+                "function": {"name": "calc", "arguments": '{"num": 1}'},
+            }],
+        },
+    ]
+    shim_called = []
+    client.tool_call_shim = lambda msgs, tools, **kw: shim_called.append(True) or {"role": "assistant", "content": "shim"}
+    client.call(historical_messages, {"calc": Calc})
+    assert shim_called == [True]
+
+
+def test_orphaned_tool_use_cleaned_up_before_transport():
+    from agentlib.client import LLMClient
+
+    client = LLMClient("sonnet")
+    messages = [
+        {
+            "role": "assistant",
+            "content": "calling tool",
+            "tool_calls": [
+                {"id": "call_orphaned", "function": {"name": "foo", "arguments": "{}"}},
+                {"id": "call_answered", "function": {"name": "bar", "arguments": "{}"}},
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_answered",
+            "name": "bar",
+            "content": "bar result",
+        },
+    ]
+
+    cleaned = client._strip_orphaned_tool_use(messages)
+    assert len(cleaned[0]["tool_calls"]) == 1
+    assert cleaned[0]["tool_calls"][0]["id"] == "call_answered"
+
+
+def test_responses_api_output_validation_and_reasoning():
+    from agentlib.client import LLMClient
+
+    client = LLMClient("sonnet")
+    client.model_config["api_type"] = "responses"
+
+    # Missing output field raises Exception
+    with pytest.raises(Exception, match="output missing from response"):
+        client._parse_responses_result({})
+
+    # Non-list output raises Exception
+    with pytest.raises(Exception, match="output missing from response"):
+        client._parse_responses_result({"output": "not a list"})
+
+    # Reasoning item with and without encrypted_content
+    parsed = client._parse_responses_result({
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "text", "text": "unencrypted reasoning"}],
+            },
+            {
+                "type": "reasoning",
+                "summary": [{"type": "text", "text": "encrypted reasoning"}],
+                "encrypted_content": "enc-blob-123",
+            },
+            {
+                "type": "output_text",
+                "text": "final answer",
+            },
+        ],
+        "status": "completed",
+    })
+
+    assert len(parsed["content"]) == 3
+    assert parsed["content"][0] == {
+        "type": "reasoning",
+        "text": "unencrypted reasoning",
+    }
+    assert parsed["content"][1] == {
+        "type": "reasoning",
+        "text": "encrypted reasoning",
+        "provider_metadata": {"encrypted_content": "enc-blob-123"},
+    }
+    assert parsed["content"][2] == {
+        "type": "text",
+        "text": "final answer",
+    }
 
