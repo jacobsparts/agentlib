@@ -165,219 +165,7 @@ def _parse_completions_response(response_json):
     return choice.get('message', {}), choice.get('finish_reason'), response_json.get('usage')
 
 
-# Transitional compatibility projections. Remove with the legacy Conversation shape.
-def _attachment(media_type, data_type, data):
-    return {
-        'type': 'attachment',
-        'media_type': media_type,
-        'data_type': data_type,
-        'data': data,
-    }
 
-
-def _legacy_content_block(block):
-    kind = block['type']
-    if kind in ('text', 'input_text', 'output_text'):
-        return {'type': 'text', 'text': block['text']}
-    if kind == 'commentary':
-        return {'type': 'commentary', 'text': block['text']}
-    if kind == 'reasoning':
-        res = {'type': 'reasoning', 'text': block.get('text', '')}
-        if 'provider_metadata' in block:
-            res['provider_metadata'] = block['provider_metadata']
-        return res
-    if kind == 'tool_call':
-        return dict(block)
-    if kind == 'attachment':
-        return dict(block)
-    if kind == 'input_file':
-        return _attachment(
-            block.get('media_type'),
-            'provider_id',
-            block['file_id'],
-        )
-    if kind == 'image_url':
-        image_url = block['image_url']
-        return _attachment(
-            block.get('media_type') or 'image/jpeg',
-            'url',
-            image_url['url'] if isinstance(image_url, dict) else image_url,
-        )
-    if kind == 'input_audio':
-        audio = block['input_audio']
-        media_type = {
-            'wav': 'audio/wav',
-            'mp3': 'audio/mp3',
-            'mpeg': 'audio/mp3',
-        }.get(audio.get('format'))
-        if media_type is None:
-            raise NotImplementedError(
-                f"Unknown input_audio format: {audio.get('format')!r}"
-            )
-        return _attachment(
-            media_type,
-            'bytes',
-            base64.b64decode(audio['data']),
-        )
-    if kind == 'image' and 'source' in block:
-        source = block['source']
-        if source.get('type') == 'base64':
-            return _attachment(
-                source.get('media_type'),
-                'bytes',
-                base64.b64decode(source['data']),
-            )
-    if kind == 'tool_use':
-        return {
-            'type': 'tool_call',
-            'id': block['id'],
-            'name': block['name'],
-            'args': block['input'],
-        }
-    raise NotImplementedError(f"Unknown legacy content type: {kind!r}")
-
-
-def legacy_to_transport_messages(messages):
-    projected = []
-    for message in messages:
-        blocks = []
-        content = message.get('content')
-        if isinstance(content, str):
-            if content:
-                blocks.append({'type': 'text', 'text': content})
-        elif isinstance(content, list):
-            for block in content:
-                blocks.append(_legacy_content_block(block))
-        elif content is not None:
-            raise NotImplementedError(
-                f"Unsupported message content type: {type(content)!r}"
-            )
-        for img in message.get('images') or []:
-            if not isinstance(img, bytes):
-                raise BadRequestError("Image attachment must be bytes")
-            mime = MEDIA_TYPES.get(img[:3])
-            if mime is None:
-                raise BadRequestError("Unsupported image format")
-            blocks.append(_attachment(mime, 'bytes', img))
-        for aud in message.get('audio') or []:
-            if not isinstance(aud, bytes):
-                raise BadRequestError("Audio attachment must be bytes")
-            try:
-                mime = _detect_audio_type(aud)
-            except ValueError as e:
-                raise BadRequestError(str(e))
-            blocks.append(_attachment(mime, 'bytes', aud))
-        if message.get('role') == 'assistant' and 'tool_calls' in message:
-            for call in message.get('tool_calls') or []:
-                function = call.get('function') or {}
-                raw_args = function.get('arguments', {})
-                args = (
-                    json.loads(raw_args)
-                    if isinstance(raw_args, str)
-                    else raw_args
-                )
-                tc_block = {
-                    'type': 'tool_call',
-                    'id': call.get('id'),
-                    'name': function.get('name'),
-                    'args': args,
-                }
-                if 'thoughtSignature' in call:
-                    tc_block['provider_metadata'] = {
-                        'thought_signature': call['thoughtSignature']
-                    }
-                elif 'provider_metadata' in call:
-                    tc_block['provider_metadata'] = call['provider_metadata']
-                blocks.append(tc_block)
-        out = {
-            'role': message['role'],
-            'content': blocks,
-        }
-        for key in ('tool_call_id', 'name'):
-            if key in message:
-                out[key] = message[key]
-        out.update({
-            key: value
-            for key, value in message.items()
-            if key.startswith('_')
-        })
-        projected.append(out)
-    return projected
-
-
-def transport_to_legacy_message(message):
-    text_parts = []
-    tool_calls = []
-    raw_content = message.get('content')
-    if isinstance(raw_content, str):
-        content = raw_content
-    else:
-        for block in raw_content or []:
-            kind = block['type']
-            if kind == 'text':
-                if block.get('text'):
-                    text_parts.append(block['text'])
-            elif kind == 'commentary':
-                lines = (block.get('text') or '').split("\n")
-                text_parts.append('# ' + '\n# '.join(lines))
-            elif kind == 'reasoning':
-                continue
-            elif kind == 'tool_call':
-                raw_args = block['args']
-                args = (
-                    raw_args
-                    if isinstance(raw_args, str)
-                    else json.dumps(raw_args)
-                )
-                tc = {
-                    'id': block['id'],
-                    'type': 'function',
-                    'function': {
-                        'name': block['name'],
-                        'arguments': args,
-                    },
-                }
-                metadata = block.get('provider_metadata') or {}
-                if 'thought_signature' in metadata:
-                    tc['thoughtSignature'] = metadata['thought_signature']
-                elif 'thoughtSignature' in metadata:
-                    tc['thoughtSignature'] = metadata['thoughtSignature']
-                elif 'thoughtSignature' in block:
-                    tc['thoughtSignature'] = block['thoughtSignature']
-                elif 'thought_signature' in block:
-                    tc['thoughtSignature'] = block['thought_signature']
-                tool_calls.append(tc)
-            elif kind == 'attachment':
-                raise NotImplementedError(
-                    "Legacy Conversation cannot represent returned attachments"
-                )
-            else:
-                raise NotImplementedError(
-                    f"Unknown transport content type: {kind!r}"
-                )
-        content = "\n".join(text_parts)
-    out = {
-        'role': message.get('role', 'assistant'),
-        'content': content,
-    }
-    if tool_calls:
-        out['tool_calls'] = tool_calls
-    elif 'tool_calls' in message:
-        out['tool_calls'] = message['tool_calls']
-    for key in ('tool_call_id', 'name'):
-        if key in message:
-            out[key] = message[key]
-    out.update({
-        key: value
-        for key, value in message.items()
-        if key.startswith('_')
-    })
-    provider_metadata = message.get('provider_metadata') or {}
-    if 'stop_reason' in provider_metadata:
-        out['_stop_reason'] = provider_metadata['stop_reason']
-    elif '_stop_reason' in message:
-        out['_stop_reason'] = message['_stop_reason']
-    return out
 
 
 def _openai_compatible_message_to_transport_blocks(message):
@@ -387,7 +175,26 @@ def _openai_compatible_message_to_transport_blocks(message):
         blocks.append({'type': 'text', 'text': text})
     elif isinstance(text, list):
         for item in text:
-            blocks.append(_legacy_content_block(item))
+            kind = item['type']
+            if kind in ('text', 'input_text', 'output_text'):
+                blocks.append({'type': 'text', 'text': item['text']})
+            elif kind == 'image_url':
+                image_url = item['image_url']
+                blocks.append({
+                    'type': 'attachment',
+                    'media_type': item.get('media_type'),
+                    'data_type': 'url',
+                    'data': image_url['url'] if isinstance(image_url, dict) else image_url,
+                })
+            elif kind == 'input_file':
+                blocks.append({
+                    'type': 'attachment',
+                    'media_type': item.get('media_type'),
+                    'data_type': 'provider_id',
+                    'data': item['file_id'],
+                })
+            else:
+                raise NotImplementedError(f"Unknown legacy block in completions: {kind!r}")
     reasoning = (
         message.get('reasoning_content')
         or message.get('reasoning')
@@ -1712,53 +1519,80 @@ class LLMClient:
         finally:
             conn.close()
 
-    def prepare_message(self, m):
-        # Tool call emulation
-        if 'tool_calls' in m:
-            tool_calls_str = json.dumps({ "function_calls": [ {
-                "name": tc['function']['name'],
-                "arguments": json.loads(tc['function']['arguments']) if isinstance(tc['function']['arguments'], str) else tc['function']['arguments'],
-            } for tc in m['tool_calls'] ] }, indent=JSON_INDENT)
-            return {
-                'role': 'assistant',
-                'content': f"{m.get('content') or ''}\n{tool_calls_str}".strip(),
-                **{k: v for k, v in m.items() if k in EXTRA_KEYS}
-            }
-        elif m['role'] == 'tool':
+    def prepare_message(self, message):
+        content = []
+        tool_calls = []
+        for block in message.get('content', []):
+            if block.get('type') == 'tool_call':
+                tool_calls.append({
+                    'name': block['name'],
+                    'arguments': block['args'],
+                })
+            else:
+                content.append(block)
+
+        if tool_calls:
+            content.append({
+                'type': 'text',
+                'text': json.dumps(
+                    {'function_calls': tool_calls},
+                    indent=JSON_INDENT,
+                ),
+            })
+
+        if message.get('role') == 'tool':
+            text = '\n'.join(
+                block.get('text', '')
+                for block in content
+                if block.get('type') == 'text'
+            )
             return {
                 'role': 'user',
-                'content': f"{m['name']}: {m['content']}",
-                **{k: v for k, v in m.items() if k in EXTRA_KEYS}
+                'content': [{
+                    'type': 'text',
+                    'text': f"{message.get('name', 'tool')}: {text}",
+                }],
             }
-        else:
-            return m
+
+        return {
+            **message,
+            'content': content,
+        }
 
     @staticmethod
     def _strip_orphaned_tool_use(messages):
-        """Remove tool_use blocks that have no matching tool_result, and drop
-        any assistant messages that become empty as a result.  This prevents
-        API errors when a prior tool-call loop was interrupted mid-execution."""
-        tool_result_ids = {m['tool_call_id'] for m in messages
-                          if m.get('role') == 'tool' and 'tool_call_id' in m}
+        """Remove canonical tool-call blocks with no matching tool result."""
+        tool_result_ids = {
+            message['tool_call_id']
+            for message in messages
+            if (
+                message.get('role') == 'tool'
+                and 'tool_call_id' in message
+            )
+        }
         out = []
-        for msg in messages:
-            if msg.get('role') == 'assistant' and 'tool_calls' in msg:
-                kept = [tc for tc in msg['tool_calls']
-                        if tc.get('id', '') in tool_result_ids]
-                if kept or msg.get('content'):
-                    msg = {**msg, 'tool_calls': kept} if kept else \
-                          {k: v for k, v in msg.items() if k != 'tool_calls'}
-                    out.append(msg)
-            else:
-                out.append(msg)
+        for message in messages:
+            if message.get('role') != 'assistant':
+                out.append(message)
+                continue
+            content = message.get('content', [])
+            kept = [
+                block
+                for block in content
+                if (
+                    block.get('type') != 'tool_call'
+                    or block.get('id', '') in tool_result_ids
+                )
+            ]
+            if kept:
+                out.append({**message, 'content': kept})
         return out
 
     def _call(self, messages, tools=None):
         if not self.native:
             messages = [ self.prepare_message(msg) for msg in messages ]
         # Drop orphaned tool_use blocks (from interrupted tool-call loops)
-        messages = self._strip_orphaned_tool_use(messages)
-        transport_messages = legacy_to_transport_messages(messages)
+        transport_messages = self._strip_orphaned_tool_use(messages)
         self._validate_context_budget(self._input_bytes(transport_messages, tools))
         api_type = self.model_config['api_type']
         callers = {
@@ -1771,8 +1605,7 @@ class LLMClient:
             caller = callers[api_type]
         except KeyError:
             raise NotImplementedError(api_type)
-        response = self._strip_response_media(caller(transport_messages, tools))
-        return transport_to_legacy_message(response)
+        return self._strip_response_media(caller(transport_messages, tools))
 
     @staticmethod
     def _sleep_backoff(attempt, base=15):
@@ -1781,7 +1614,26 @@ class LLMClient:
         """
         time.sleep(base * (2 ** attempt))
 
-    def text_call(self, messages, retry=3, attempt=0):
+    def call(self, messages, tools=None, retry=3, attempt=0):
+        if tools is not None:
+            if self.native:
+                if (
+                    self.model_config.get('api_type') == 'gemini'
+                    and any(
+                        message.get('role') == 'assistant'
+                        and any(
+                            block.get('type') == 'tool_call'
+                            and not (
+                                block.get('provider_metadata') or {}
+                            ).get('thought_signature')
+                            for block in message.get('content', [])
+                        )
+                        for message in messages
+                    )
+                ):
+                    return self.tool_call_shim(messages, tools, retry=retry)
+                return self.tool_call_native(messages, tools, retry=retry)
+            return self.tool_call_shim(messages, tools, retry=retry)
         try:
             with (
                 self.provider_admission.admitted()
@@ -1793,10 +1645,10 @@ class LLMClient:
             raise
         except Exception as e:
             err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
-            logger.error(f"text_call {type(e).__name__}: {err}", exc_info=True)
+            logger.error(f"call {type(e).__name__}: {err}", exc_info=True)
             if retry:
                 self._sleep_backoff(attempt)
-                return self.text_call(messages, retry-1, attempt+1)
+                return self.call(messages, retry=retry-1, attempt=attempt+1)
             raise
 
     def tool_call_native(self, messages, tools, retry=5):
@@ -1807,224 +1659,260 @@ class LLMClient:
                     logger.info("Gemini native tool calling fallback to shim mode due to unsupported schema field types")
                     return self.tool_call_shim(messages, tools, retry=retry)
 
-        _tools = []
+        provider_tools = []
         for name, tool in tools.items():
             schema = tool.model_json_schema()
             schema.pop('title', None)
-            _tools.append({
+            provider_tools.append({
                 'type': 'function',
                 'function': {
-                    'description': schema.pop('description'),
+                    'description': schema.pop('description', ''),
                     'name': name,
-                    'parameters': schema
-                }
+                    'parameters': schema,
+                },
             })
-        
+
         feedback = []
         for attempt in range(retry + 1):
+            resp_msg = {}
             try:
-                resp_msg = {}
                 with (
                     self.provider_admission.admitted()
                     if self.provider_admission is not None
                     else contextlib.nullcontext()
                 ):
-                    resp_msg = self._call(messages + feedback, _tools)
+                    resp_msg = self._call(messages + feedback, provider_tools)
                 if transform := self.model_config.get('response_transform'):
                     resp_msg = transform(resp_msg, tools)
-                stop = resp_msg.get('_stop_reason')
-                if stop in ('max_tokens', 'length', 'MAX_TOKENS'):
-                    content = resp_msg.get('content', '')
-                    raise MaxTokensError(f"stop_reason={stop}, content={content[:500]}")
-                if not resp_msg.get("tool_calls"):
-                    content = resp_msg.get('content', '')
-                    err = f"tool_calls missing (stop_reason={stop}): {content[:1000]}{'...' if len(content) > 1000 else ''}"
-                    raise ValidationError(err)
-                
-                # Validate tool calls against schemas
-                for tool_call in resp_msg.get("tool_calls", []):
-                    name = tool_call["function"]["name"]
-                    try:
-                        arguments = json.loads(tool_call["function"]["arguments"])
-                    except json.JSONDecodeError as e:
-                        raise ValidationError(f"Failed to decode arguments JSON for tool '{name}': {e}")
-                    
-                    if not name in tools:
-                        raise ValidationError(f"Unknown tool '{name}'")
-                    
-                    tool = tools[name]
-                    if not isinstance(arguments, dict):
-                        raise ValidationError(f"Arguments for '{name}' are not a dict")
 
+                metadata = resp_msg.get('provider_metadata') or {}
+                stop = metadata.get('stop_reason')
+                text = '\n'.join(
+                    block.get('text', '')
+                    for block in resp_msg.get('content', [])
+                    if block.get('type') in ('text', 'commentary')
+                )
+                if stop in ('max_tokens', 'length', 'MAX_TOKENS'):
+                    raise MaxTokensError(
+                        f"stop_reason={stop}, content={text[:500]}"
+                    )
+
+                tool_calls = [
+                    block
+                    for block in resp_msg.get('content', [])
+                    if block.get('type') == 'tool_call'
+                ]
+                if not tool_calls:
+                    raise ValidationError(
+                        f"tool_calls missing (stop_reason={stop}): "
+                        f"{text[:1000]}{'...' if len(text) > 1000 else ''}"
+                    )
+
+                for tool_call in tool_calls:
+                    name = tool_call['name']
+                    if name not in tools:
+                        raise ValidationError(f"Unknown tool '{name}'")
+                    arguments = tool_call.get('args')
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except json.JSONDecodeError as e:
+                            raise ValidationError(
+                                f"Failed to decode arguments JSON for tool "
+                                f"'{name}': {e}"
+                            )
+                    if not isinstance(arguments, dict):
+                        raise ValidationError(
+                            f"Arguments for '{name}' are not a dict"
+                        )
+                    tool = tools[name]
                     arguments = _normalize_tool_arguments(arguments, tool)
-                    tool_call["function"]["arguments"] = json.dumps(arguments)
+                    tool_call['args'] = arguments
                     try:
                         tool.model_validate(arguments)
-                    except Exception as ve:
-                        error_msg = f"Invalid arguments for tool '{name}': {ve}"
-                        if attempt < retry:
-                            if logger.isEnabledFor(logging.INFO):
-                                logger.info(f"ValidationError: {ve}, retry {attempt+1}/{retry}")
-                            raise ValidationError(error_msg)
-                        else:
-                            raise ValidationError(error_msg)
-                
+                    except Exception as e:
+                        raise ValidationError(
+                            f"Invalid arguments for tool '{name}': {e}"
+                        )
+
                 return resp_msg
-                
+
             except ValidationError as e:
-                if attempt < retry:
-                    logger.info(f"ValidationError: {e}, retry {attempt+1}/{retry}")
-                    failed_content = resp_msg.get('content') or ''
-                    if resp_msg.get('tool_calls'):
-                        failed_content = f"{failed_content}\n{json.dumps({ 'function_calls': [ { 'name': tc['function']['name'], 'arguments': json.loads(tc['function']['arguments']) } for tc in resp_msg['tool_calls'] ] }, indent=JSON_INDENT)}".strip()
-                    if failed_content:
-                        feedback.append({"role": "assistant", "content": failed_content})
-                    feedback.append({
-                        "role": "user",
-                        "content": f"ERROR: {e}. Your previous tool call did not match the tool schema. Reply again with a valid tool call only."
-                    })
-                    continue
-                raise
-                
+                if attempt >= retry:
+                    raise
+                logger.info(
+                    f"ValidationError: {e}, retry {attempt + 1}/{retry}"
+                )
+                if resp_msg.get('content'):
+                    feedback.append(resp_msg)
+                feedback.append({
+                    'role': 'user',
+                    'content': [{
+                        'type': 'text',
+                        'text': (
+                            f"ERROR: {e}. Your previous tool call did not "
+                            "match the tool schema. Reply again with a valid "
+                            "tool call only."
+                        ),
+                    }],
+                })
             except (BadRequestError, MaxTokensError, ContextOverflowError):
                 raise
             except Exception as e:
-                err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
-                logger.error(f"tool_call_native {type(e).__name__}: {err}")
-                if attempt < retry:
-                    self._sleep_backoff(attempt)
-                    continue
-                raise
+                err = (
+                    str(e)
+                    if len(str(e)) < 1000
+                    else str(e)[:1000] + '...'
+                ).replace("\n", " ")
+                logger.error(
+                    f"tool_call_native {type(e).__name__}: {err}"
+                )
+                if attempt >= retry:
+                    raise
+                self._sleep_backoff(attempt)
 
-    def tool_call_shim(self, messages, tools, retry=3, attempt=0, _feedback=None):
-        _tools = []
+    def tool_call_shim(
+        self, messages, tools, retry=3, attempt=0, _feedback=None
+    ):
+        provider_tools = []
         for name, tool in tools.items():
             schema = tool.model_json_schema()
-            _tools.append({
+            provider_tools.append({
                 'type': 'function',
                 'function': {
-                    'description': schema.pop('description'),
+                    'description': schema.pop('description', ''),
                     'name': name,
-                    'parameters': schema
-                }
+                    'parameters': schema,
+                },
             })
         instructions = (
             "### SYSTEM NOTICE ###\n"
             "Available functions:\n"
-            f"{json.dumps(_tools, indent=JSON_INDENT)}\n\n"
-            'You MUST respond ONLY with a JSON object containing a key "function_calls" which'
-            ' is an ARRAY of one or more function calls needed to fulfill the request. Each element in'
-            ' the array should be a JSON object with "name" and "arguments" keys. If multiple'
-            ' calls are needed, include multiple objects in the array.\n\n'
-            'Example Response Format:'
-            '{\n'
+            f"{json.dumps(provider_tools, indent=JSON_INDENT)}\n\n"
+            'You MUST respond ONLY with a JSON object containing a key '
+            '"function_calls" which is an ARRAY of one or more function calls '
+            'needed to fulfill the request. Each element in the array should '
+            'be a JSON object with "name" and "arguments" keys. If multiple '
+            'calls are needed, include multiple objects in the array.\n\n'
+            'Example Response Format:{\n'
             '  "function_calls": [\n'
             '    {\n'
             '      "name": "function_name_1",\n'
-            '      "arguments": { "arg1": "value1", ... }\n'
-            '    },\n'
-            '    {\n'
-            '      "name": "function_name_2",\n'
-            '      "arguments": { "arg1": "value1", ... }\n'
+            '      "arguments": { "arg1": "value1" }\n'
             '    }\n'
-            '    // ... more calls if needed\n'
             '  ]\n'
-            '}"\n'
+            '}\n'
         )
         if JSON_INDENT is None:
-            instructions = instructions.replace('\n',' ')
+            instructions = instructions.replace('\n', ' ')
             while '  ' in instructions:
-                instructions = instructions.replace('  ',' ')
-        _messages = messages.copy()
-        if _messages[-1]['role'] == "user":
-            _messages[-1]['content']+= f"\n\n{instructions}"
+                instructions = instructions.replace('  ', ' ')
+
+        request_messages = [
+            {**message, 'content': list(message.get('content', []))}
+            for message in messages
+        ]
+        instruction_block = {'type': 'text', 'text': instructions}
+        if request_messages[-1]['role'] == 'user':
+            request_messages[-1]['content'].append(instruction_block)
         else:
-            _messages.append({"role": "user", "content": instructions})
+            request_messages.append({
+                'role': 'user',
+                'content': [instruction_block],
+            })
         if _feedback:
-            _messages.extend(_feedback)
-        if self.model_config['api_type'] == "gemini":
-            _messages = [self.prepare_message(msg) for msg in _messages]
+            request_messages.extend(_feedback)
+
         try:
             with (
                 self.provider_admission.admitted()
                 if self.provider_admission is not None
                 else contextlib.nullcontext()
             ):
-                resp_msg = self._call(_messages)
+                resp_msg = self._call(request_messages)
         except ContextOverflowError:
             raise
         except Exception as e:
-            err = (str(e) if len(str(e)) < 1000 else str(e)[:1000]+'...').replace("\n"," ")
+            err = (
+                str(e)
+                if len(str(e)) < 1000
+                else str(e)[:1000] + '...'
+            ).replace("\n", " ")
             logger.error(f"tool_call_shim {type(e).__name__}: {err}")
             if retry:
                 self._sleep_backoff(attempt)
-                return self.tool_call_shim(messages, tools, retry-1, attempt+1)
+                return self.tool_call_shim(
+                    messages, tools, retry - 1, attempt + 1, _feedback
+                )
             raise
+
         try:
-            content = resp_msg.get('content') or resp_msg.get('reasoning_content') or ''
+            content = '\n'.join(
+                block.get('text', '')
+                for block in resp_msg.get('content', [])
+                if block.get('type') in ('text', 'commentary', 'reasoning')
+            )
             content = _preprocess_tool_call_response(content)
-            tool_calls, json_start_index, json_end_index = _extract_tool_calls_json(content)
-            if not (function_calls := tool_calls["function_calls"]):
-                raise ValidationError(f"Function calls are required.")
+            document, json_start_index, json_end_index = (
+                _extract_tool_calls_json(content)
+            )
+            function_calls = document['function_calls']
+            if not function_calls:
+                raise ValidationError("Function calls are required.")
+            blocks = []
+            remaining_text = (
+                content[:json_start_index] + content[json_end_index + 1:]
+            ).strip('`').removeprefix('json').strip()
+            if remaining_text:
+                blocks.append({'type': 'text', 'text': remaining_text})
             for call in function_calls:
-                name = call["name"]
-                arguments = call["arguments"]
-                tool = tools[name]
+                name = call['name']
+                if name not in tools:
+                    raise ValidationError(f"Unknown tool '{name}'")
+                arguments = call['arguments']
                 if not isinstance(arguments, dict):
-                    logger.debug(json.dumps(tool_calls, indent=4))
-                    raise ValidationError(f"Arguments for '{name}' are not a dict")
+                    raise ValidationError(
+                        f"Arguments for '{name}' are not a dict"
+                    )
+                tool = tools[name]
                 arguments = _normalize_tool_arguments(arguments, tool)
-                call["arguments"] = arguments
                 try:
                     tool.model_validate(arguments)
-                except Exception as ve:
-                    raise ValidationError(f"Invalid arguments for tool '{name}': {ve}")
-            resp_msg = {
-                'role': 'assistant',
-                'tool_calls': [
-                    {
-                        'id': f"call_{uuid.uuid4().hex}",
-                        'function': {
-                            'name': row['name'],
-                            'arguments': json.dumps(row['arguments'])
-                        }
-                    }
-                    for row in tool_calls['function_calls']
-                ],
-                'content': (content[:json_start_index] + content[json_end_index+1:]).strip('`').removeprefix('json').strip()
-            }
-            return resp_msg
-        except (ValidationError,KeyError) as e:
-            if retry:
-                if logger.isEnabledFor(logging.INFO):
-                    logger.info(f"ValidationError: {e}, retry")
-                feedback = list(_feedback or [])
-                failed_content = resp_msg.get('content') or resp_msg.get('reasoning_content') or ''
-                if failed_content:
-                    feedback.append({"role": "assistant", "content": failed_content})
-                feedback.append({
-                    "role": "user",
-                    "content": f"ERROR: {e}. You MUST respond ONLY with a JSON object containing \"function_calls\"."
+                except Exception as e:
+                    raise ValidationError(
+                        f"Invalid arguments for tool '{name}': {e}"
+                    )
+                blocks.append({
+                    'type': 'tool_call',
+                    'id': f"call_{uuid.uuid4().hex}",
+                    'name': name,
+                    'args': arguments,
                 })
-                return self.tool_call_shim(messages, tools, retry-1, _feedback=feedback)
-            raise
+            return {'role': 'assistant', 'content': blocks}
+        except (ValidationError, KeyError) as e:
+            if not retry:
+                raise
+            if logger.isEnabledFor(logging.INFO):
+                logger.info(f"ValidationError: {e}, retry")
+            feedback = list(_feedback or [])
+            if resp_msg.get('content'):
+                feedback.append(resp_msg)
+            feedback.append({
+                'role': 'user',
+                'content': [{
+                    'type': 'text',
+                    'text': (
+                        f'ERROR: {e}. You MUST respond ONLY with a JSON '
+                        'object containing "function_calls".'
+                    ),
+                }],
+            })
+            return self.tool_call_shim(
+                messages, tools, retry - 1, attempt, feedback
+            )
 
 
-    def call(self, messages, tools=None):
-        if tools is None:
-            return self.text_call(messages)
-        elif self.native:
-            if self.model_config['api_type'] == "gemini" and any(
-                msg.get("role") == "assistant" and any(
-                    not tc.get("thoughtSignature")
-                    for tc in msg.get("tool_calls", [])
-                )
-                for msg in messages
-            ):
-                return self.tool_call_shim(messages, tools)
-            return self.tool_call_native(messages, tools)
-        else:
-            return self.tool_call_shim(messages, tools)
+
 
 
     def conversation(self, system_prompt):

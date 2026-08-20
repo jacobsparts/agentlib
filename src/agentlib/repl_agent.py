@@ -742,39 +742,37 @@ class REPLMixin:
         session. The message appears as if emitted via emit().
         """
         # Check if we should append to last REPL output
-        if getattr(self, '_last_was_repl_output', False) and self.conversation.messages:
-            last_msg = self.conversation.messages[-1]
+        stored = self.conversation.stored_messages()
+        if getattr(self, '_last_was_repl_output', False) and stored:
+            last_msg = stored[-1]
             if last_msg.get("role") == "user":
-                # Append as output of the previous emit() call
-                # Add trailing \n since this simulates print() output from emit()
                 prev = last_msg["content"]
                 sep = "" if prev.endswith("\n") else "\n"
-                last_msg["content"] = prev + sep + content + "\n"
-                last_msg["_user_content"] = content
-
-                # Also update _stdout with the appended content
+                updates = {
+                    "content": prev + sep + content + "\n",
+                    "_user_content": content,
+                }
                 if '_stdout' in last_msg:
                     prev_stdout = last_msg['_stdout']
                     sep_stdout = "" if prev_stdout.endswith("\n") else "\n"
-                    last_msg['_stdout'] = prev_stdout + sep_stdout + content + "\n"
-
-                # If new content has images or audio, append them too
+                    updates['_stdout'] = prev_stdout + sep_stdout + content + "\n"
                 if 'images' in kwargs:
-                    last_msg['images'] = last_msg.get('images', []) + kwargs['images']
+                    updates['images'] = last_msg.get('images', []) + kwargs['images']
                 if 'audio' in kwargs:
-                    last_msg['audio'] = last_msg.get('audio', []) + kwargs['audio']
+                    updates['audio'] = last_msg.get('audio', []) + kwargs['audio']
                 if '_attachments' in kwargs:
-                    attachments = last_msg.get('_attachments', {})
+                    attachments = dict(last_msg.get('_attachments', {}))
                     attachments.update(kwargs['_attachments'])
-                    last_msg['_attachments'] = attachments
+                    updates['_attachments'] = attachments
                 if '_attachment_refs' in kwargs:
-                    refs = last_msg.get('_attachment_refs', {})
+                    refs = dict(last_msg.get('_attachment_refs', {}))
                     refs.update(kwargs['_attachment_refs'])
-                    last_msg['_attachment_refs'] = refs
+                    updates['_attachment_refs'] = refs
+                segments = list(last_msg.get("_render_segments", []))
+                segments.append({"type": "input", "content": content})
+                updates["_render_segments"] = segments
 
-                last_msg.setdefault("_render_segments", []).append(
-                    {"type": "input", "content": content}
-                )
+                self.conversation.update_message(last_msg, **updates)
 
                 if hasattr(self, '_on_append_last_user_message'):
                     self._on_append_last_user_message(last_msg, content, kwargs)
@@ -785,15 +783,13 @@ class REPLMixin:
         # Fall back to normal message append
         self._last_was_repl_output = False
         result = super().usermsg(content, **kwargs)
-        new_msg = self.conversation.messages[-1]
+        new_msg = self.conversation.stored_messages()[-1]
         if new_msg.get("role") == "user":
             if kwargs.get('_user_content') is not None:
                 seg = {"type": "input", "content": kwargs['_user_content']}
             else:
-                # Prefer _stdout (unfiltered REPL output) over content (which may
-                # have emit chunks filtered out for the LLM).
                 seg = {"type": "stdout", "content": kwargs.get('_stdout') or content}
-            new_msg["_render_segments"] = [seg]
+            self.conversation.update_message(new_msg, _render_segments=[seg])
         return result
 
     def _ensure_setup(self) -> None:
@@ -962,10 +958,7 @@ Call help(function_name) for parameter descriptions.
             try:
                 for syntax_retry in range(max_syntax_retries):
                     try:
-                        if hasattr(self.llm_client, 'text_call'):
-                            resp = self.llm_client.text_call(messages)
-                        else:
-                            resp = self.llm_client.call(messages, tools=None)
+                        resp = self.conversation.call(messages)
                     except KeyboardInterrupt:
                         # User interrupted LLM call - subprocess may also have received SIGINT
                         # Wait briefly for subprocess to handle signal, then drain
@@ -1031,7 +1024,7 @@ Call help(function_name) for parameter descriptions.
                 # Record the terminal assistant message before returning
                 if getattr(self, "complete", False) and getattr(self, "_final_result", None) is not None:
                     resp["_final_result"] = self._final_result
-                self.conversation.messages.append(resp)
+                self.conversation.append_message(resp)
                 if hasattr(self, '_on_assistant_message_committed'):
                     self._on_assistant_message_committed(resp)
                 if hasattr(self, '_complete_value'):
@@ -1046,7 +1039,7 @@ Call help(function_name) for parameter descriptions.
             # Commit successful response to conversation
             if getattr(self, "complete", False) and getattr(self, "_final_result", None) is not None:
                 resp["_final_result"] = self._final_result
-            self.conversation.messages.append(resp)
+            self.conversation.append_message(resp)
             if hasattr(self, '_on_assistant_message_committed'):
                 self._on_assistant_message_committed(resp)
 

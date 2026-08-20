@@ -53,7 +53,7 @@ def test_ephemeral_not_added_to_history_or_cleared_by_llm_call():
 
     conv.llm()
 
-    assert client.calls[0][0][-1]["content"] == "temporary context\n\nquestion"
+    assert client.calls[0][0][-1]["content"] == [{"type": "text", "text": "temporary context\n\nquestion"}]
     assert conv.messages[1]["content"] == "question"
     assert conv.ephemeral == "temporary context"
 
@@ -171,3 +171,34 @@ def test_base_agent_switch_model_replaces_client_and_conversation_client(monkeyp
     assert agent.llm_client.model_name == "new-model"
     assert agent.conversation.llm_client is agent.llm_client
     assert agent.conversation.llm_client is not old_client
+
+
+def test_convo_native_and_conversation_wrapper():
+    from agentlib.conversation import Convo
+
+    client = DummyClient()
+    convo = Convo(client, "canonical system")
+    convo.usermsg("existing")
+    conv = Conversation(client, "ignored", convo=convo)
+
+    assert conv.stored_messages() == [
+        {"role": "system", "content": "canonical system"},
+        {"role": "user", "content": "existing"},
+    ]
+
+    user = conv.append_message({"role": "user", "content": "legacy user", "_synthetic": True})
+    conv.update_message(user, _event_seq=9)
+
+    assert convo.stored_messages()[-1] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "legacy user"}],
+        "_synthetic": True,
+        "_event_seq": 9,
+    }
+
+    # Direct Convo modification is immediately visible in Conversation without sync
+    canonical_user = convo.usermsg("direct to convo")
+    assert conv.stored_messages()[-1] == {"role": "user", "content": "direct to convo"}
+
+    convo.pop_message()
+    assert conv.stored_messages()[-1] == {"role": "user", "content": "legacy user", "_synthetic": True, "_event_seq": 9}

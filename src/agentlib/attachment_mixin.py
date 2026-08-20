@@ -96,7 +96,7 @@ class AttachmentMixin:
     def list_attachments(self) -> dict[str, str]:
         """Get currently active attachments."""
         active = {}
-        for msg in self.conversation.messages:
+        for msg in self.conversation.stored_messages():
             for name, content in msg.get('_attachments', {}).items():
                 active[name] = content
         active.update(self._pending_attachments)
@@ -104,12 +104,15 @@ class AttachmentMixin:
 
     def _invalidate_attachment(self, name: str):
         """Remove an attachment from all messages."""
-        for msg in self.conversation.messages:
+        for msg in self.conversation.stored_messages():
             attachments = msg.get('_attachments')
             if attachments and name in attachments:
-                del attachments[name]
-                if not attachments:
-                    del msg['_attachments']
+                updated_attachments = dict(attachments)
+                del updated_attachments[name]
+                if updated_attachments:
+                    self.conversation.update_message(msg, _attachments=updated_attachments)
+                else:
+                    self.conversation.remove_message_fields(msg, '_attachments')
 
     def _render_attachment(self, name: str, content: str) -> str:
         """Render an attachment as a delimited block."""

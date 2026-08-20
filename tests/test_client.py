@@ -89,53 +89,52 @@ def test_native_tool_validation_retry_uses_temporary_feedback(monkeypatch):
     from agentlib.client import LLMClient
 
     client = LLMClient("sonnet")
-    client.concurrency_lock = type("NoopLock", (), {
-        "__enter__": lambda self: None,
-        "__exit__": lambda self, exc_type, exc, tb: False,
-    })()
-
-    ToolSpec = create_model("Think", __config__=ConfigDict(extra="forbid"), notes=(str, ...))
+    ToolSpec = create_model(
+        "Think",
+        __config__=ConfigDict(extra="forbid"),
+        notes=(str, ...),
+    )
     ToolSpec.__doc__ = "Think tool."
-
     calls = []
 
     def fake_call(messages, tools):
         calls.append(messages)
-        if len(calls) == 1:
-            return {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{
-                    "function": {
-                        "name": "think",
-                        "arguments": json.dumps({"notes": "ok", "reasoning": "extra"}),
-                    }
-                }],
-            }
+        arguments = (
+            {"notes": "ok", "reasoning": "extra"}
+            if len(calls) == 1
+            else {"notes": "ok"}
+        )
         return {
             "role": "assistant",
-            "content": "",
-            "tool_calls": [{
-                "function": {
-                    "name": "think",
-                    "arguments": json.dumps({"notes": "ok"}),
-                }
+            "content": [{
+                "type": "tool_call",
+                "id": "call_1",
+                "name": "think",
+                "args": arguments,
             }],
         }
 
     monkeypatch.setattr(client, "_call", fake_call)
 
-    result = client.tool_call_native([{"role": "user", "content": "do it"}], {"think": ToolSpec}, retry=1)
+    result = client.tool_call_native(
+        [{"role": "user", "content": [{"type": "text", "text": "do it"}]}],
+        {"think": ToolSpec},
+        retry=1,
+    )
 
-    assert json.loads(result["tool_calls"][0]["function"]["arguments"]) == {"notes": "ok"}
+    assert result["content"][0]["args"] == {"notes": "ok"}
     assert len(calls) == 2
-    assert calls[0] == [{"role": "user", "content": "do it"}]
-    assert calls[1][0] == {"role": "user", "content": "do it"}
+    assert calls[0] == [{
+        "role": "user",
+        "content": [{"type": "text", "text": "do it"}],
+    }]
+    assert calls[1][0] == calls[0][0]
     assert calls[1][1]["role"] == "assistant"
-    assert '"reasoning": "extra"' in calls[1][1]["content"]
+    assert calls[1][1]["content"][0]["args"]["reasoning"] == "extra"
     assert calls[1][2]["role"] == "user"
-    assert "ERROR: Invalid arguments for tool 'think'" in calls[1][2]["content"]
-    assert "valid tool call only" in calls[1][2]["content"]
+    feedback = calls[1][2]["content"][0]["text"]
+    assert "ERROR: Invalid arguments for tool 'think'" in feedback
+    assert "valid tool call only" in feedback
 
 
 def _container_tool():
@@ -177,39 +176,45 @@ def test_tool_call_normalizes_json_stringified_containers(monkeypatch, native):
     client = LLMClient("sonnet")
     tool = _container_tool()
     arguments = _stringified_containers()
+    messages = [{
+        "role": "user",
+        "content": [{"type": "text", "text": "submit"}],
+    }]
     if native:
         monkeypatch.setattr(client, "_call", lambda messages, tools: {
             "role": "assistant",
-            "content": "",
-            "tool_calls": [{
-                "function": {
-                    "name": "submit",
-                    "arguments": json.dumps(arguments),
-                }
+            "content": [{
+                "type": "tool_call",
+                "id": "call_1",
+                "name": "submit",
+                "args": arguments,
             }],
         })
         result = client.tool_call_native(
-            [{"role": "user", "content": "submit"}],
+            messages,
             {"submit": tool},
             retry=0,
         )
     else:
         monkeypatch.setattr(client, "_call", lambda messages: {
             "role": "assistant",
-            "content": json.dumps({
-                "function_calls": [{
-                    "name": "submit",
-                    "arguments": arguments,
-                }]
-            }),
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "function_calls": [{
+                        "name": "submit",
+                        "arguments": arguments,
+                    }]
+                }),
+            }],
         })
         result = client.tool_call_shim(
-            [{"role": "user", "content": "submit"}],
+            messages,
             {"submit": tool},
             retry=0,
         )
 
-    normalized = json.loads(result["tool_calls"][0]["function"]["arguments"])
+    normalized = result["content"][-1]["args"]
     tool.model_validate(normalized)
     assert isinstance(normalized["fact"], dict)
     assert isinstance(normalized["tags"], list)
@@ -225,37 +230,47 @@ def test_emulated_tool_calls_receive_unique_ids_and_ids_stay_off_wire(monkeypatc
     from agentlib.client import LLMClient
 
     client = LLMClient("sonnet")
-    client.concurrency_lock = type("NoopLock", (), {
-        "__enter__": lambda self: None,
-        "__exit__": lambda self, exc_type, exc, tb: False,
-    })()
-
     ToolSpec = create_model("Lookup", value=(int, ...))
     ToolSpec.__doc__ = "Look up a value."
 
     monkeypatch.setattr(client, "_call", lambda messages: {
         "role": "assistant",
-        "content": json.dumps({
-            "function_calls": [
-                {"name": "lookup", "arguments": {"value": 1}},
-                {"name": "lookup", "arguments": {"value": 2}},
-            ]
-        }),
+        "content": [{
+            "type": "text",
+            "text": json.dumps({
+                "function_calls": [
+                    {"name": "lookup", "arguments": {"value": 1}},
+                    {"name": "lookup", "arguments": {"value": 2}},
+                ]
+            }),
+        }],
     })
 
     result = client.tool_call_shim(
-        [{"role": "user", "content": "look these up"}],
+        [{
+            "role": "user",
+            "content": [{"type": "text", "text": "look these up"}],
+        }],
         {"lookup": ToolSpec},
         retry=0,
     )
 
-    ids = [call["id"] for call in result["tool_calls"]]
-    assert all(call_id.startswith("call_") and len(call_id) == 37 for call_id in ids)
+    calls = [
+        block
+        for block in result["content"]
+        if block["type"] == "tool_call"
+    ]
+    ids = [call["id"] for call in calls]
+    assert all(
+        call_id.startswith("call_") and len(call_id) == 37
+        for call_id in ids
+    )
     assert len(set(ids)) == 2
 
     prepared_call = client.prepare_message(result)
-    assert all(call_id not in prepared_call["content"] for call_id in ids)
-    assert json.loads(prepared_call["content"]) == {
+    prepared_text = prepared_call["content"][0]["text"]
+    assert all(call_id not in prepared_text for call_id in ids)
+    assert json.loads(prepared_text) == {
         "function_calls": [
             {"name": "lookup", "arguments": {"value": 1}},
             {"name": "lookup", "arguments": {"value": 2}},
@@ -265,10 +280,13 @@ def test_emulated_tool_calls_receive_unique_ids_and_ids_stay_off_wire(monkeypatc
     prepared_result = client.prepare_message({
         "role": "tool",
         "name": "lookup",
-        "content": "result",
+        "content": [{"type": "text", "text": "result"}],
         "tool_call_id": ids[0],
     })
-    assert prepared_result == {"role": "user", "content": "lookup: result"}
+    assert prepared_result == {
+        "role": "user",
+        "content": [{"type": "text", "text": "lookup: result"}],
+    }
 
 
 def test_context_budget_does_not_enforce_without_learned_token_ratio():
@@ -360,7 +378,8 @@ def test_usage_normalization_handles_uncached_input_with_separate_cache_tokens()
     ],
 )
 def test_client_preserves_private_message_metadata_until_transport(monkeypatch, api_type, method_name):
-    from agentlib.client import LLMClient, legacy_to_transport_messages
+    from agentlib.client import LLMClient
+    from agentlib.conversation import Conversation
 
     client = LLMClient("sonnet")
     client.model_config = {
@@ -390,14 +409,15 @@ def test_client_preserves_private_message_metadata_until_transport(monkeypatch, 
     monkeypatch.setattr(client, "_validate_context_budget", fake_validate)
     monkeypatch.setattr(client, method_name, fake_provider_call)
 
-    client._call([private_message])
+    canonical_input = [Conversation(client, "")._to_canonical(private_message)]
+    client._call(canonical_input)
 
     # Dispatch preserves private metadata so transports can consume it.
-    assert captured["messages"] == legacy_to_transport_messages([private_message])
+    assert captured["messages"] == canonical_input
     assert captured["tools"] is None
     # Sizing ignores private metadata.
     assert captured["input_bytes"] == client._input_bytes(
-        legacy_to_transport_messages([{"role": "user", "content": "visible"}]),
+        [{"role": "user", "content": [{"type": "text", "text": "visible"}]}],
         None,
     )
     assert client._public_messages(captured["messages"]) == [
@@ -420,8 +440,10 @@ def test_public_messages_helper_strips_underscore_keys():
 
 
 def test_canonical_transport_adapters_and_block_types():
-    from agentlib.client import legacy_to_transport_messages, transport_to_legacy_message
+    from agentlib.client import LLMClient
+    from agentlib.conversation import Conversation
 
+    conv = Conversation(LLMClient("sonnet"), "")
     legacy_messages = [
         {"role": "system", "content": "system prompt"},
         {
@@ -450,7 +472,7 @@ def test_canonical_transport_adapters_and_block_types():
         },
     ]
 
-    transport = legacy_to_transport_messages(legacy_messages)
+    transport = [conv._to_canonical(m) for m in legacy_messages]
     assert len(transport) == 4
     assert transport[0]["role"] == "system"
     assert transport[0]["content"] == [{"type": "text", "text": "system prompt"}]
@@ -471,7 +493,7 @@ def test_canonical_transport_adapters_and_block_types():
     # Check native decoded args
     assert transport[2]["content"][1]["args"] == {"cmd": "ls", "count": 2}
 
-    # Test transport_to_legacy_message lossy projection
+    # Test _to_legacy lossy projection
     canonical_response = {
         "role": "assistant",
         "content": [
@@ -482,7 +504,7 @@ def test_canonical_transport_adapters_and_block_types():
         ],
         "provider_metadata": {"stop_reason": "tool_calls"},
     }
-    legacy_resp = transport_to_legacy_message(canonical_response)
+    legacy_resp = conv._to_legacy(canonical_response, response=True)
     assert legacy_resp["role"] == "assistant"
     assert legacy_resp["_stop_reason"] == "tool_calls"
     assert legacy_resp["content"] == "# thought step\n# line 2\ndone"
@@ -493,24 +515,26 @@ def test_canonical_transport_adapters_and_block_types():
     }]
 
     # Returned attachments must raise NotImplementedError
-    with pytest.raises(NotImplementedError, match="Legacy Conversation cannot represent returned attachments"):
-        transport_to_legacy_message({
+    with pytest.raises(NotImplementedError, match="Legacy Conversation cannot store attachment responses"):
+        conv._to_legacy({
             "role": "assistant",
             "content": [{"type": "attachment", "media_type": "image/png", "data_type": "bytes", "data": b"png"}],
-        })
+        }, response=True)
 
 
 def test_unknown_types_raise_not_implemented():
-    from agentlib.client import LLMClient, legacy_to_transport_messages, transport_to_legacy_message
+    from agentlib.client import LLMClient
+    from agentlib.conversation import Conversation
 
+    conv = Conversation(LLMClient("sonnet"), "")
     with pytest.raises(NotImplementedError, match="Unknown legacy content type"):
-        legacy_to_transport_messages([{
+        conv._to_canonical({
             "role": "user",
             "content": [{"type": "unsupported_legacy_type"}],
-        }])
+        })
 
     with pytest.raises(NotImplementedError, match="Unknown transport content type"):
-        transport_to_legacy_message({
+        conv._to_legacy({
             "role": "assistant",
             "content": [{"type": "unsupported_transport_type"}],
         })
@@ -530,20 +554,20 @@ def test_unknown_types_raise_not_implemented():
 
 
 def test_attachment_ingress_from_images_and_audio(tmp_path):
-    from agentlib.client import BadRequestError, LLMClient, legacy_to_transport_messages
+    from agentlib.client import BadRequestError, LLMClient
+    from agentlib.conversation import Conversation
 
+    conv = Conversation(LLMClient("sonnet"), "")
     png_bytes = b"\x89PNG\r\n\x1a\nfake_png_data"
     jpeg_bytes = b"\xff\xd8\xfffake_jpeg_data"
     wav_bytes = b"RIFFfake_wav_data"
 
-    messages = legacy_to_transport_messages([
-        {
-            "role": "user",
-            "content": "analyze files",
-            "images": [png_bytes, jpeg_bytes],
-            "audio": [wav_bytes],
-        }
-    ])
+    messages = [conv._to_canonical({
+        "role": "user",
+        "content": "analyze files",
+        "images": [png_bytes, jpeg_bytes],
+        "audio": [wav_bytes],
+    })]
 
     assert len(messages[0]["content"]) == 4
     assert messages[0]["content"][0] == {"type": "text", "text": "analyze files"}
@@ -553,11 +577,11 @@ def test_attachment_ingress_from_images_and_audio(tmp_path):
 
     # Invalid image format
     with pytest.raises(BadRequestError, match="Unsupported image format"):
-        legacy_to_transport_messages([{"role": "user", "content": "x", "images": [b"bad_image_data"]}])
+        conv._to_canonical({"role": "user", "content": "x", "images": [b"bad_image_data"]})
 
     # Invalid audio format
     with pytest.raises(BadRequestError, match="Unsupported audio format"):
-        legacy_to_transport_messages([{"role": "user", "content": "x", "audio": [b"bad_audio_data"]}])
+        conv._to_canonical({"role": "user", "content": "x", "audio": [b"bad_audio_data"]})
 
     # Provider media validation
     completions_client = LLMClient("sonnet")
@@ -575,7 +599,7 @@ def test_attachment_ingress_from_images_and_audio(tmp_path):
     with pytest.raises(BadRequestError, match="Audio input is not supported by OpenAI Responses API"):
         responses_client.validate_media_type("audio/wav")
 
-    gemini_client = LLMClient("gemini-3.6-flash")
+    gemini_client = LLMClient("google/gemini-3.6-flash")
     gemini_client.model_config["api_type"] = "gemini"
     # Gemini accepts audio
     gemini_client.validate_media_type("audio/wav")
@@ -595,7 +619,7 @@ def test_gemini_thought_signatures_and_shim_fallback():
     class Calc(BaseModel):
         num: int
 
-    client = LLMClient("gemini-3.6-flash", native=True)
+    client = LLMClient("google/gemini-3.6-flash", native=True)
     client.model_config["api_type"] = "gemini"
 
     # Response with thoughtSignature decodes to canonical provider_metadata and legacy tool_calls
@@ -631,11 +655,12 @@ def test_gemini_thought_signatures_and_shim_fallback():
                 call["provider_metadata"] = {"thought_signature": part["thoughtSignature"]}
             blocks.append(call)
 
-    from agentlib.client import transport_to_legacy_message
-    legacy = transport_to_legacy_message({"role": "assistant", "content": blocks})
+    from agentlib.conversation import Conversation
+    conv = Conversation(client, "")
+    legacy = conv._to_legacy({"role": "assistant", "content": blocks})
     assert legacy["tool_calls"][0]["thoughtSignature"] == "sig-456"
 
-    # History lacking thoughtSignature triggers shim fallback in call()
+    # History lacking thoughtSignature triggers shim fallback in Conversation.call()
     historical_messages = [
         {"role": "user", "content": "run"},
         {
@@ -648,8 +673,11 @@ def test_gemini_thought_signatures_and_shim_fallback():
         },
     ]
     shim_called = []
-    client.tool_call_shim = lambda msgs, tools, **kw: shim_called.append(True) or {"role": "assistant", "content": "shim"}
-    client.call(historical_messages, {"calc": Calc})
+    client.tool_call_shim = lambda msgs, tools, **kw: shim_called.append(True) or {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "shim"}],
+    }
+    conv.call(historical_messages, {"calc": Calc})
     assert shim_called == [True]
 
 
@@ -660,23 +688,42 @@ def test_orphaned_tool_use_cleaned_up_before_transport():
     messages = [
         {
             "role": "assistant",
-            "content": "calling tool",
-            "tool_calls": [
-                {"id": "call_orphaned", "function": {"name": "foo", "arguments": "{}"}},
-                {"id": "call_answered", "function": {"name": "bar", "arguments": "{}"}},
+            "content": [
+                {"type": "text", "text": "calling tool"},
+                {
+                    "type": "tool_call",
+                    "id": "call_orphaned",
+                    "name": "foo",
+                    "args": {},
+                },
+                {
+                    "type": "tool_call",
+                    "id": "call_answered",
+                    "name": "bar",
+                    "args": {},
+                },
             ],
         },
         {
             "role": "tool",
             "tool_call_id": "call_answered",
             "name": "bar",
-            "content": "bar result",
+            "content": [{"type": "text", "text": "bar result"}],
         },
     ]
 
     cleaned = client._strip_orphaned_tool_use(messages)
-    assert len(cleaned[0]["tool_calls"]) == 1
-    assert cleaned[0]["tool_calls"][0]["id"] == "call_answered"
+    calls = [
+        block
+        for block in cleaned[0]["content"]
+        if block["type"] == "tool_call"
+    ]
+    assert calls == [{
+        "type": "tool_call",
+        "id": "call_answered",
+        "name": "bar",
+        "args": {},
+    }]
 
 
 def test_responses_api_output_validation_and_reasoning():
