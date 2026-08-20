@@ -139,6 +139,8 @@ def test_native_tool_validation_retry_uses_temporary_feedback(monkeypatch):
 
 
 def _container_tool():
+    from typing import Optional
+
     from pydantic import BaseModel, create_model
 
     class Fact(BaseModel):
@@ -149,6 +151,9 @@ def _container_tool():
         fact=(Fact, ...),
         tags=(list[str], ...),
         note=(str, ...),
+        optional_fact=(Optional[Fact], None),
+        optional_tags=(Optional[list[str]], None),
+        optional_note=(Optional[str], None),
     )
     tool.__doc__ = "Submit structured facts."
     return tool
@@ -159,6 +164,9 @@ def _stringified_containers():
         "fact": json.dumps({"sources": ["source"]}),
         "tags": json.dumps(["tag"]),
         "note": "{}",
+        "optional_fact": "null",
+        "optional_tags": "null",
+        "optional_note": "null",
     }
 
 
@@ -206,6 +214,9 @@ def test_tool_call_normalizes_json_stringified_containers(monkeypatch, native):
     assert isinstance(normalized["fact"], dict)
     assert isinstance(normalized["tags"], list)
     assert isinstance(normalized["note"], str)
+    assert normalized["optional_fact"] is None
+    assert normalized["optional_tags"] is None
+    assert normalized["optional_note"] == "null"
 
 
 def test_emulated_tool_calls_receive_unique_ids_and_ids_stay_off_wire(monkeypatch):

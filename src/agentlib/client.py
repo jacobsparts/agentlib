@@ -536,7 +536,9 @@ def _normalize_json_containers(value, schema, root):
             target = target[part]
         schema = target
 
+    nullable = False
     if 'anyOf' in schema:
+        nullable = any(item.get('type') == 'null' for item in schema['anyOf'])
         variants = [item for item in schema['anyOf'] if item.get('type') != 'null']
         if len(variants) == 1:
             schema = variants[0]
@@ -551,8 +553,10 @@ def _normalize_json_containers(value, schema, root):
         try:
             decoded = json.loads(value)
         except json.JSONDecodeError:
-            decoded = None
-        if (
+            decoded = object()
+        if nullable and decoded is None:
+            value = None
+        elif (
             expected == 'object' and isinstance(decoded, dict)
             or expected == 'array' and isinstance(decoded, list)
         ):
