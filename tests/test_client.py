@@ -289,6 +289,50 @@ def test_emulated_tool_calls_receive_unique_ids_and_ids_stay_off_wire(monkeypatc
     }
 
 
+def test_prepare_message_normalizes_legacy_string_content_blocks():
+    from agentlib.client import LLMClient
+
+    client = LLMClient("sonnet")
+
+    assert client.prepare_message({
+        "role": "assistant",
+        "content": "plain response",
+    }) == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "plain response"}],
+    }
+    prepared = client.prepare_message({
+        "role": "assistant",
+        "content": [
+            "prefix",
+            {"type": "text", "text": "canonical"},
+            {
+                "type": "tool_call",
+                "id": "call_1",
+                "name": "lookup",
+                "args": {"value": 1},
+            },
+        ],
+    })
+    assert prepared["role"] == "assistant"
+    assert prepared["content"][:2] == [
+        {"type": "text", "text": "prefix"},
+        {"type": "text", "text": "canonical"},
+    ]
+    assert json.loads(prepared["content"][2]["text"]) == {
+        "function_calls": [{
+            "name": "lookup",
+            "arguments": {"value": 1},
+        }],
+    }
+
+    with pytest.raises(TypeError, match="dicts or strings, got int"):
+        client.prepare_message({
+            "role": "assistant",
+            "content": [123],
+        })
+
+
 def test_context_budget_does_not_enforce_without_learned_token_ratio():
     from agentlib.client import LLMClient
 

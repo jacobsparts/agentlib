@@ -1520,9 +1520,20 @@ class LLMClient:
             conn.close()
 
     def prepare_message(self, message):
+        raw_content = message.get('content', [])
+        if isinstance(raw_content, str):
+            raw_content = [raw_content]
+
         content = []
         tool_calls = []
-        for block in message.get('content', []):
+        for block in raw_content:
+            if isinstance(block, str):
+                block = {'type': 'text', 'text': block}
+            elif not isinstance(block, dict):
+                raise TypeError(
+                    f"Message content blocks must be dicts or strings, got "
+                    f"{type(block).__name__}"
+                )
             if block.get('type') == 'tool_call':
                 tool_calls.append({
                     'name': block['name'],
