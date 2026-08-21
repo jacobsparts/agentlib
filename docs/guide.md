@@ -18,6 +18,64 @@ class MyAgent(BaseAgent):
         self.respond(result)  # Ends run loop, returns result to caller
 ```
 
+## One-off calls
+
+Use `one_shot()` when no conversation state or agent tool loop is needed:
+
+```python
+from agentlib import one_shot
+
+text = one_shot(
+    "google/gemini-3.6-flash",
+    system="Answer concisely.",
+    user="Summarize this.",
+)
+```
+
+The `system` prompt is optional. With `user` shorthand and no tools,
+`one_shot()` joins truthy final text blocks with `"\n"` and returns a string.
+
+Pass canonical messages when you need multimodal input, conversation history,
+or the unparsed canonical response:
+
+```python
+messages = [{
+    "role": "user",
+    "content": [{"type": "text", "text": "Summarize this."}],
+}]
+response = one_shot("google/gemini-3.6-flash", messages=messages)
+```
+
+`messages` is mutually exclusive with `system` and `user`. One of `messages`
+or `user` is required.
+
+Tools are a mapping of names to Pydantic models:
+
+```python
+from pydantic import BaseModel
+
+class Classification(BaseModel):
+    category: str
+    confidence: float
+
+response = one_shot(
+    "google/gemini-3.6-flash",
+    system="Classify the request.",
+    user="Where is my order?",
+    tools={"classify": Classification},
+)
+tool_call = next(
+    block
+    for block in response["content"]
+    if block["type"] == "tool_call" and block["name"] == "classify"
+)
+result = Classification.model_validate(tool_call["args"])
+```
+
+When `messages` or `tools` is provided, `one_shot()` returns the unparsed
+canonical assistant message. It makes one logical request and does not execute
+tools or run an agent loop.
+
 ## Key Concepts
 
 ### Model Selection

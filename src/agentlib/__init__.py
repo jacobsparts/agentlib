@@ -8,7 +8,7 @@ if _user_mixins.is_dir() and str(_user_mixins) not in sys.path:
     sys.path.append(str(_user_mixins))
 
 from .core import BaseAgent
-from .client import ValidationError, BadRequestError
+from .client import ValidationError, BadRequestError, one_shot
 from .llm_registry import register_provider, register_model, ModelNotFoundError
 from .tool_mixin import ToolMixin
 from .mcp_mixin import MCPMixin
@@ -20,6 +20,7 @@ from .tools.subshell import SubShell, STILL_RUNNING
 from .tools.subrepl import SubREPL
 from .cli import CLIMixin, CLIAgent
 from .repl_agent import REPLAgent
+from .repl_agent_legacy import REPLAgentLegacy
 from .repl_events import ReplEvent
 __all__ = [
     "BaseAgent",
@@ -36,6 +37,7 @@ __all__ = [
     "STILL_RUNNING",
     "ValidationError",
     "BadRequestError",
+    "one_shot",
     "ModelNotFoundError",
     "register_provider",
     "register_model",
@@ -43,6 +45,7 @@ __all__ = [
     "CLIMixin",
     "CLIAgent",
     "REPLAgent",
+    "REPLAgentLegacy",
     "ReplEvent",
 ]
 

@@ -545,6 +545,38 @@ def _gemini_schema_has_unsupported_fieldtypes(schema):
     return visit(schema)
 
 
+def one_shot(model, messages=None, system=None, user=None, tools=None):
+    """Make one model request without creating a conversation or agent."""
+    if messages is not None:
+        if system is not None or user is not None:
+            raise ValueError(
+                "messages is mutually exclusive with system and user"
+            )
+        return LLMClient(model).call(messages, tools=tools)
+
+    if user is None:
+        raise ValueError("one of messages or user is required")
+
+    request = []
+    if system is not None:
+        request.append({
+            "role": "system",
+            "content": [{"type": "text", "text": system}],
+        })
+    request.append({
+        "role": "user",
+        "content": [{"type": "text", "text": user}],
+    })
+    response = LLMClient(model).call(request, tools=tools)
+    if tools is not None:
+        return response
+    return '\n'.join(
+        block["text"]
+        for block in response.get("content", [])
+        if block.get("type") == "text" and block.get("text")
+    )
+
+
 class LLMClient:
     usage_tracker = UsageTracker()
 
