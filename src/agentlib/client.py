@@ -1808,7 +1808,8 @@ class LLMClient:
                     else str(e)[:1000] + '...'
                 ).replace("\n", " ")
                 logger.error(
-                    f"tool_call_native {type(e).__name__}: {err}"
+                    f"tool_call_native {type(e).__name__}: {err}",
+                    exc_info=True,
                 )
                 if attempt >= retry:
                     raise

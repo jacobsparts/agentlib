@@ -70,6 +70,7 @@ def _emit_event(event_type: str, **payload) -> None:
 
 from agentlib.agent import BaseAgent, _CompleteException
 from agentlib.client import BadRequestError
+from agentlib.conversation import Convo
 from agentlib.repl_events import (
     ReplEvent,
     direct_call_name,
@@ -733,64 +734,99 @@ class REPLMixin:
 
     interactive: bool = False  # Legacy flag, kept for compatibility
 
-    def usermsg(self, content, **kwargs):
-        """
-        Add a user message, appending to REPL output if continuing a session.
+    @property
+    def conversation(self) -> Convo:
+        """Return the canonical ordered-block conversation owned by this REPL."""
+        try:
+            return self._conversation
+        except AttributeError:
+            system = self._build_system_prompt()
+            assert system, "system must be defined"
+            self._conversation = Convo(self.llm_client, system)
+            if hasattr(self, "_configure_conversation"):
+                self._configure_conversation(self._conversation)
+            return self._conversation
 
-        When the last message was REPL output (from a previous turn), new user
-        messages are appended to maintain the illusion of a continuous REPL
-        session. The message appears as if emitted via emit().
-        """
-        # Check if we should append to last REPL output
-        stored = self.conversation.stored_messages()
-        if getattr(self, '_last_was_repl_output', False) and stored:
-            last_msg = stored[-1]
-            if last_msg.get("role") == "user":
-                prev = last_msg["content"]
-                sep = "" if prev.endswith("\n") else "\n"
-                updates = {
-                    "content": prev + sep + content + "\n",
-                    "_user_content": content,
-                }
-                if '_stdout' in last_msg:
-                    prev_stdout = last_msg['_stdout']
-                    sep_stdout = "" if prev_stdout.endswith("\n") else "\n"
-                    updates['_stdout'] = prev_stdout + sep_stdout + content + "\n"
-                if 'images' in kwargs:
-                    updates['images'] = last_msg.get('images', []) + kwargs['images']
-                if 'audio' in kwargs:
-                    updates['audio'] = last_msg.get('audio', []) + kwargs['audio']
-                if '_attachments' in kwargs:
-                    attachments = dict(last_msg.get('_attachments', {}))
-                    attachments.update(kwargs['_attachments'])
-                    updates['_attachments'] = attachments
-                if '_attachment_refs' in kwargs:
-                    refs = dict(last_msg.get('_attachment_refs', {}))
-                    refs.update(kwargs['_attachment_refs'])
-                    updates['_attachment_refs'] = refs
-                segments = list(last_msg.get("_render_segments", []))
-                segments.append({"type": "input", "content": content})
-                updates["_render_segments"] = segments
+    @staticmethod
+    def _message_blocks(content: Any) -> list[dict]:
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        if isinstance(content, list):
+            return list(content)
+        return [{"type": "text", "text": json.dumps(content)}]
 
-                self.conversation.update_message(last_msg, **updates)
-
-                if hasattr(self, '_on_append_last_user_message'):
-                    self._on_append_last_user_message(last_msg, content, kwargs)
-
-                self._last_was_repl_output = False
-                return
-
-        # Fall back to normal message append
-        self._last_was_repl_output = False
-        result = super().usermsg(content, **kwargs)
-        new_msg = self.conversation.stored_messages()[-1]
-        if new_msg.get("role") == "user":
-            if kwargs.get('_user_content') is not None:
-                seg = {"type": "input", "content": kwargs['_user_content']}
-            else:
-                seg = {"type": "stdout", "content": kwargs.get('_stdout') or content}
-            self.conversation.update_message(new_msg, _render_segments=[seg])
+    def _projected_messages(self) -> list[dict]:
+        """Project REPL-only memory attachments into canonical text blocks."""
+        projected = self.conversation.projected_messages()
+        result = []
+        for message in projected:
+            attachments = message.get("_attachments") or {}
+            if not attachments:
+                result.append(message)
+                continue
+            out = dict(message)
+            blocks = []
+            for block in message.get("content", []):
+                if block.get("type") != "text":
+                    blocks.append(block)
+                    continue
+                text = block.get("text", "")
+                for name, attachment in attachments.items():
+                    text = text.replace(f"[Attachment: {name}]", attachment)
+                blocks.append({**block, "text": text})
+            out["content"] = blocks
+            result.append(out)
         return result
+
+    @staticmethod
+    def _assistant_code(message: dict) -> str:
+        """Project executable assistant blocks to Python without legacy envelopes."""
+        source = []
+        for block in message.get("content", []):
+            kind = block.get("type")
+            if kind == "text":
+                source.append(block.get("text", ""))
+            elif kind == "commentary":
+                text = block.get("text", "")
+                source.append("# " + text.replace("\n", "\n# "))
+            elif kind == "reasoning":
+                continue
+            elif kind in ("tool_call", "attachment"):
+                raise NotImplementedError(
+                    f"REPLAgent cannot execute assistant {kind!r} blocks"
+                )
+            else:
+                raise NotImplementedError(
+                    f"Unknown assistant content block type: {kind!r}"
+                )
+        return "\n".join(part for part in source if part).strip()
+
+    @staticmethod
+    def _with_corrected_code(message: dict, code: str) -> dict:
+        corrected = dict(message)
+        corrected["content"] = [
+            *(
+                block
+                for block in message.get("content", [])
+                if block.get("type") == "reasoning"
+            ),
+            {"type": "text", "text": code},
+        ]
+        return corrected
+
+    def usermsg(self, content, **kwargs):
+        """Append a canonical user message without mutating prior history."""
+        blocks = self._message_blocks(content)
+        message = {"role": "user", "content": blocks, **kwargs}
+        if kwargs.get('_user_content') is not None:
+            segment = {"type": "input", "content": kwargs['_user_content']}
+        else:
+            segment = {
+                "type": "stdout",
+                "content": kwargs.get('_stdout') or content,
+            }
+        message["_render_segments"] = [segment]
+        return self.conversation.append_message(message)
 
     def _ensure_setup(self) -> None:
         """Initialize the ToolREPL."""
@@ -946,7 +982,7 @@ Call help(function_name) for parameter descriptions.
         for turn in range(max_turns):
             # Get REPL each turn to handle session restart (re-injects tools if needed)
             repl = self._get_tool_repl()
-            messages = self.conversation._messages()
+            messages = self._projected_messages()
 
             # Fire execute hook once at start of turn (before any attempts)
             if hasattr(self, 'on_repl_execute'):
@@ -974,8 +1010,7 @@ Call help(function_name) for parameter descriptions.
                     except BadRequestError:
                         raise
 
-                    content = (resp.get('content') or '').strip()
-                    resp['content'] = content
+                    content = self._assistant_code(resp)
                     if not content:
                         break
 
@@ -983,7 +1018,7 @@ Call help(function_name) for parameter descriptions.
 
                     # Apply silent corrections to conversation (both sides see corrected code)
                     if corrected_code != content:
-                        resp['content'] = corrected_code
+                        resp = self._with_corrected_code(resp, corrected_code)
                         content = corrected_code
 
                     if not pure_syntax_error:
@@ -1007,9 +1042,14 @@ Call help(function_name) for parameter descriptions.
                         "If you need to communicate text, do it from Python, for example with print(...) or the appropriate provided Python function.\n\n"
                         "Return only valid Python code."
                     )
-                    messages = self.conversation._messages() + [
-                        {"role": "assistant", "content": content},
-                        {"role": "user", "content": f"{output}\n{hint}"}
+                    messages = self._projected_messages() + [
+                        resp,
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": f"{output}\n{hint}"}
+                            ],
+                        },
                     ]
                 else:
                     # All retries exhausted
@@ -1059,15 +1099,11 @@ Call help(function_name) for parameter descriptions.
                 kwargs['_stdout'] = output
 
             if output_for_llm.strip():
-                self._last_was_repl_output = False  # Clear before usermsg check
                 self.usermsg(output_for_llm, **kwargs)
             else:
-                self._last_was_repl_output = False
                 self.usermsg("# [no output]", **kwargs)
 
             if self.complete:
-                # Mark that last message is REPL output - next user message appends
-                self._last_was_repl_output = True
                 if hasattr(self, '_complete_value'):
                     value = self._complete_value
                     del self._complete_value
