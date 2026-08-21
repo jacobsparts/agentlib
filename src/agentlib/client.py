@@ -1323,8 +1323,14 @@ class LLMClient:
             if usage := response_json.get('usage'):
                 self.usage_tracker.log(self.model_name, usage)
                 self._update_input_tokens_per_byte(self._current_input_bytes, usage)
+            response_content = response_json.get('content')
+            if not isinstance(response_content, list):
+                raise RuntimeError(
+                    f"content missing or invalid in Messages response: "
+                    f"{response_json}"
+                )
             blocks = []
-            for content_block in response_json.get('content', []):
+            for content_block in response_content:
                 kind = content_block['type']
                 if kind == 'text':
                     blocks.append({'type': 'text', 'text': content_block['text']})
