@@ -70,7 +70,7 @@ def _emit_event(event_type: str, **payload) -> None:
 
 from agentlib.agent import BaseAgent, _CompleteException
 from agentlib.client import BadRequestError
-from agentlib.conversation import Convo
+from agentlib.conversation import Convo, _content_blocks
 from agentlib.repl_events import (
     ReplEvent,
     direct_call_name,
@@ -749,11 +749,7 @@ class REPLMixin:
 
     @staticmethod
     def _message_blocks(content: Any) -> list[dict]:
-        if isinstance(content, str):
-            return [{"type": "text", "text": content}]
-        if isinstance(content, list):
-            return list(content)
-        return [{"type": "text", "text": json.dumps(content)}]
+        return _content_blocks(content)
 
     def _projected_messages(self) -> list[dict]:
         """Project REPL-only memory attachments into canonical text blocks."""

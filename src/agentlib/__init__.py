@@ -20,7 +20,6 @@ from .tools.subshell import SubShell, STILL_RUNNING
 from .tools.subrepl import SubREPL
 from .cli import CLIMixin, CLIAgent
 from .repl_agent import REPLAgent
-from .repl_agent_legacy import REPLAgentLegacy
 from .repl_events import ReplEvent
 __all__ = [
     "BaseAgent",
@@ -45,7 +44,6 @@ __all__ = [
     "CLIMixin",
     "CLIAgent",
     "REPLAgent",
-    "REPLAgentLegacy",
     "ReplEvent",
 ]
 
