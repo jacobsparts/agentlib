@@ -27,6 +27,30 @@ class ToolLoopAgent(BaseAgent):
         self.respond(value)
 
 
+def test_tool_free_agent_uses_plain_llm_call():
+    class ToolFreeAgent(BaseAgent):
+        model = "test"
+        system = "test"
+
+    class FakeConversation:
+        def __init__(self):
+            self.tools = "not called"
+
+        def llm(self, tools=None):
+            self.tools = tools
+            return {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "plain response"}],
+            }
+
+    agent = ToolFreeAgent()
+    conversation = FakeConversation()
+    agent._conversation = conversation
+
+    assert agent.text() == "plain response"
+    assert conversation.tools is None
+
+
 def test_native_tool_call_runs_end_to_end_with_canonical_client(monkeypatch):
     agent = ToolLoopAgent()
     agent.llm_client.native = True

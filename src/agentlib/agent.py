@@ -251,7 +251,7 @@ class BaseAgent(metaclass=AgentMeta):
             return self._conversation
 
     def llm(self):
-        return self.conversation.llm(self.toolspecs)
+        return self.conversation.llm(self.toolspecs or None)
 
     @staticmethod
     def _text_content(message):
