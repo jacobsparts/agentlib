@@ -1,14 +1,25 @@
 import json
 
 
+def _content_blocks(content):
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    if (
+        isinstance(content, list)
+        and content
+        and all(
+            isinstance(block, dict) and isinstance(block.get("type"), str)
+            for block in content
+        )
+    ):
+        return content
+    return [{"type": "text", "text": json.dumps(content)}]
+
+
 class Convo:
     def __init__(self, llm_client, system_prompt):
         self.llm_client = llm_client
-        content = (
-            system_prompt
-            if isinstance(system_prompt, list)
-            else [{"type": "text", "text": system_prompt}]
-        )
+        content = _content_blocks(system_prompt)
         self._messages = [{"role": "system", "content": content}]
         self.ephemeral = ""
         self._prompt_cache = []
@@ -122,15 +133,15 @@ class Convo:
         return resp_msg
 
     def usermsg(self, content, **kwargs):
-        if isinstance(content, str):
-            content = [{"type": "text", "text": content}]
-        elif not isinstance(content, list):
-            content = [{"type": "text", "text": json.dumps(content)}]
-        return self.append_message({"role": "user", "content": content, **kwargs})
+        return self.append_message({
+            "role": "user",
+            "content": _content_blocks(content),
+            **kwargs,
+        })
 
     def toolmsg(self, content, **kwargs):
-        if isinstance(content, str):
-            content = [{"type": "text", "text": content}]
-        elif not isinstance(content, list):
-            content = [{"type": "text", "text": json.dumps(content)}]
-        return self.append_message({"role": "tool", "content": content, **kwargs})
+        return self.append_message({
+            "role": "tool",
+            "content": _content_blocks(content),
+            **kwargs,
+        })

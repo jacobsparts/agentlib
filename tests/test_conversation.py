@@ -1,3 +1,5 @@
+import json
+
 from agentlib.conversation import Convo
 
 
@@ -277,6 +279,36 @@ def test_attachment_mixin_preserves_canonical_blocks():
         {"type": "text", "text": "question"},
         attachment_block,
     ]
+
+
+def test_toolmsg_serializes_list_payload_instead_of_treating_rows_as_blocks():
+    conv = Convo(DummyClient(), "system")
+    rows = [{"ticketid": 123, "title": "Yanwen pricing"}]
+
+    message = conv.toolmsg(
+        rows,
+        name="search_ticket_bundle",
+        tool_call_id="call_1",
+    )
+
+    assert message == {
+        "role": "tool",
+        "content": [{
+            "type": "text",
+            "text": json.dumps(rows),
+        }],
+        "name": "search_ticket_bundle",
+        "tool_call_id": "call_1",
+    }
+
+
+def test_toolmsg_preserves_explicit_canonical_blocks():
+    conv = Convo(DummyClient(), "system")
+    blocks = [{"type": "text", "text": "result"}]
+
+    message = conv.toolmsg(blocks, tool_call_id="call_1")
+
+    assert message["content"] is blocks
 
 
 def test_base_agent_switch_model_replaces_client_and_conversation_client(monkeypatch):
