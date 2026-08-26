@@ -515,9 +515,21 @@ class Convo:
         messages.extend(additional_messages)
         return self.llm_client.call(messages, **kwargs)
 
+    def llm(self, tools=None):
+        resp_msg = self.call(tools=tools)
+        self.append_message(resp_msg)
+        return resp_msg
+
     def usermsg(self, content, **kwargs):
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
         elif not isinstance(content, list):
             content = [{"type": "text", "text": json.dumps(content)}]
         return self.append_message({"role": "user", "content": content, **kwargs})
+
+    def toolmsg(self, content, **kwargs):
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        elif not isinstance(content, list):
+            content = [{"type": "text", "text": json.dumps(content)}]
+        return self.append_message({"role": "tool", "content": content, **kwargs})

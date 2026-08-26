@@ -183,6 +183,31 @@ def test_base_agent_propagates_emulated_tool_call_id_to_result():
     )]
 
 
+def test_convo_toolmsg_stores_canonical_blocks():
+    conv = Convo(DummyClient(), "system")
+
+    conv.toolmsg("ok", name="finish", tool_call_id="call_1")
+
+    assert conv.stored_messages()[-1] == {
+        "role": "tool",
+        "content": [{"type": "text", "text": "ok"}],
+        "name": "finish",
+        "tool_call_id": "call_1",
+    }
+
+def test_convo_llm_appends_and_returns_response():
+    client = DummyClient()
+    conv = Convo(client, "system")
+    conv.usermsg("hi")
+
+    resp = conv.llm()
+
+    assert resp == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "ok"}],
+    }
+    assert conv.stored_messages()[-1] == resp
+
 def test_base_agent_switch_model_replaces_client_and_conversation_client(monkeypatch):
     from agentlib import BaseAgent
 
