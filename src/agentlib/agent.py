@@ -253,8 +253,19 @@ class BaseAgent(metaclass=AgentMeta):
     def llm(self):
         return self.conversation.llm(self.toolspecs)
 
+    @staticmethod
+    def _text_content(message):
+        content = message.get("content", [])
+        if isinstance(content, str):
+            return content
+        return "\n".join(
+            block["text"]
+            for block in content
+            if block.get("type") == "text" and block.get("text")
+        )
+
     def text(self):
-        return self.llm()['content']
+        return self._text_content(self.llm())
 
     def usermsg(self, *args, **kwargs):
         return self.conversation.usermsg(*args, **kwargs)
@@ -276,30 +287,47 @@ class BaseAgent(metaclass=AgentMeta):
 
     def run_loop(self, max_turns):
         self.complete = False
-        for i in range(max_turns):
+        for _ in range(max_turns):
             resp_msg = self.llm()
-            for tool_call in resp_msg["tool_calls"]:
-                if tool_call['function']['name'] == "panic":
-                    resp_msg["tool_calls"] = [tool_call]
-                    break
-            for tool_call in resp_msg["tool_calls"]:
-                function_name = tool_call['function']['name']
-                function_args = json.loads(tool_call['function']['arguments'])
+            tool_calls = [
+                block
+                for block in resp_msg.get("content", [])
+                if block.get("type") == "tool_call"
+            ]
+            panic = next(
+                (block for block in tool_calls if block.get("name") == "panic"),
+                None,
+            )
+            if panic is not None:
+                resp_msg["content"] = [
+                    block
+                    for block in resp_msg.get("content", [])
+                    if block.get("type") != "tool_call" or block is panic
+                ]
+                tool_calls = [panic]
+            for tool_call in tool_calls:
+                function_name = tool_call["name"]
+                function_args = tool_call["args"]
                 try:
                     tool_response = self.toolcall(function_name, function_args)
                 except _CompleteException:
-                    pass
+                    tool_response = None
                 if hasattr(self, '_complete_value'):
                     tool_response = self._complete_value
                     self.complete = True
                     del self._complete_value
                 if logger.isEnabledFor(logging.INFO):
-                    logger.info(f"{function_name}: {tool_response}")
-                self.toolmsg(tool_response if tool_response is not None else "OK", name=function_name, tool_call_id=tool_call.get('id',''))
+                    logger.info("%s: %s", function_name, tool_response)
+                self.toolmsg(
+                    tool_response if tool_response is not None else "OK",
+                    name=function_name,
+                    tool_call_id=tool_call.get("id", ""),
+                )
                 if self.complete:
                     return tool_response
-        else:
-            raise self.TurnLimitError(f"{type(self).__name__} turn limit of {max_turns} exceeded")
+        raise self.TurnLimitError(
+            f"{type(self).__name__} turn limit of {max_turns} exceeded"
+        )
 
     def run(self, msg, max_turns=10):
         self.usermsg(msg)

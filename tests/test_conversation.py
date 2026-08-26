@@ -158,10 +158,11 @@ def test_base_agent_propagates_emulated_tool_call_id_to_result():
         def llm(self):
             return {
                 "role": "assistant",
-                "content": "",
-                "tool_calls": [{
+                "content": [{
+                    "type": "tool_call",
                     "id": "call_0123456789abcdef0123456789abcdef",
-                    "function": {"name": "finish", "arguments": "{}"},
+                    "name": "finish",
+                    "args": {},
                 }],
             }
 
@@ -181,6 +182,40 @@ def test_base_agent_propagates_emulated_tool_call_id_to_result():
             "tool_call_id": "call_0123456789abcdef0123456789abcdef",
         },
     )]
+
+
+def test_base_agent_factory_returns_convo():
+    from agentlib import BaseAgent
+
+    class TestAgent(BaseAgent):
+        system = "system"
+
+    client = DummyClient()
+    client.conversation = lambda system: Convo(client, system)
+    agent = TestAgent()
+    agent._llm_client = client
+
+    assert isinstance(agent.conversation, Convo)
+
+
+def test_convo_projects_attachments_per_text_block_without_mutating_storage():
+    conv = Convo(DummyClient(), "system")
+    conv.usermsg(
+        [
+            {"type": "text", "text": "[Attachment: config]"},
+            {"type": "text", "text": "question"},
+        ],
+        _attachments={"config": "rendered config"},
+    )
+
+    projected = conv.projected_messages()[-1]
+
+    assert projected["role"] == "user"
+    assert projected["content"] == [
+        {"type": "text", "text": "rendered config"},
+        {"type": "text", "text": "question"},
+    ]
+    assert conv.stored_messages()[-1]["content"][0]["text"] == "[Attachment: config]"
 
 
 def test_convo_toolmsg_stores_canonical_blocks():
@@ -207,6 +242,42 @@ def test_convo_llm_appends_and_returns_response():
         "content": [{"type": "text", "text": "ok"}],
     }
     assert conv.stored_messages()[-1] == resp
+
+def test_attachment_mixin_preserves_canonical_blocks():
+    from agentlib import AttachmentMixin, BaseAgent
+
+    class TestAgent(AttachmentMixin, BaseAgent):
+        system = "system"
+
+    agent = TestAgent()
+    agent._conversation = Convo(DummyClient(), "system")
+    attachment_block = {
+        "type": "attachment",
+        "media_type": "image/png",
+        "data_type": "bytes",
+        "data": b"png",
+    }
+    agent.attach("config", "rendered config")
+
+    message = agent.usermsg([
+        {"type": "text", "text": "question"},
+        attachment_block,
+    ])
+
+    assert message["content"] == [
+        {"type": "text", "text": "[Attachment: config]"},
+        {"type": "text", "text": "question"},
+        attachment_block,
+    ]
+    assert agent.conversation.projected_messages()[-1]["content"] == [
+        {
+            "type": "text",
+            "text": agent._render_attachment("config", "rendered config"),
+        },
+        {"type": "text", "text": "question"},
+        attachment_block,
+    ]
+
 
 def test_base_agent_switch_model_replaces_client_and_conversation_client(monkeypatch):
     from agentlib import BaseAgent

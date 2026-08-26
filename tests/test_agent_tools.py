@@ -56,7 +56,7 @@ def test_native_tool_call_runs_end_to_end_with_canonical_client(monkeypatch):
     assert captured["tools"][0]["function"]["name"] == "finish"
     assistant = next(
         message
-        for message in reversed(agent.conversation.convo.stored_messages())
+        for message in reversed(agent.conversation.stored_messages())
         if message["role"] == "assistant"
     )
     assert assistant["content"] == [{
@@ -96,7 +96,7 @@ def test_shim_tool_call_runs_end_to_end_with_canonical_client(monkeypatch):
     assert "Available functions" in request["content"][1]["text"]
     assistant = next(
         message
-        for message in reversed(agent.conversation.convo.stored_messages())
+        for message in reversed(agent.conversation.stored_messages())
         if message["role"] == "assistant"
     )
     stored_call = assistant["content"][0]

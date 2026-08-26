@@ -3,7 +3,7 @@ AttachmentMixin - Mixin that adds persistent context attachments to agents.
 
 Attachments are named pieces of content that persist in the conversation context.
 They can be added, updated, or removed. Content is injected via placeholders in
-message content, replaced at render time by Conversation._messages().
+message content, replaced per text block by Convo.projected_messages().
 
 Example:
     from agentlib import BaseAgent, AttachmentMixin
@@ -128,10 +128,17 @@ class AttachmentMixin:
                 self._render_placeholder(name)
                 for name in self._pending_attachments
             )
-            content = placeholders + "\n\n" + (content if isinstance(content, str) else json.dumps(content))
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content}]
+            elif not isinstance(content, list):
+                content = [{"type": "text", "text": json.dumps(content)}]
+            content = [
+                {"type": "text", "text": placeholders},
+                *content,
+            ]
             # Merge with any existing _attachments
             existing = kwargs.get('_attachments', {})
             existing.update(self._pending_attachments)
             kwargs['_attachments'] = existing
             self._pending_attachments.clear()
-        super().usermsg(content, **kwargs)
+        return super().usermsg(content, **kwargs)

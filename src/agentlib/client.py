@@ -97,7 +97,7 @@ class DeadlineHTTPSConnection(_DeadlineConnectionMixin, http.client.HTTPSConnect
 from .utils import JSON_INDENT, UsageTracker
 from .llm_registry import get_model_config
 from .provider_admission import ProviderAdmission
-from .conversation import Conversation
+from .conversation import Convo
 from .streaming import wrap_chat_completions_streaming_response
 
 # Define TCP keepalive constants for cross-platform compatibility
@@ -932,7 +932,7 @@ class LLMClient:
 
                 # Truncated response: feed it back and retry with doubled max_tokens.
                 # Keeps doubling until prompt + output would exceed context_window.
-                # Retry messages stay local — they never reach the Conversation history.
+                # Retry messages stay local — they never reach the Convo history.
                 if stop_reason in ('max_tokens', 'length', 'MAX_TOKENS') and context_window and current_max_tokens and usage:
                     prompt_tokens = usage.get('prompt_tokens', 0)
                     next_max_tokens = current_max_tokens * 2
@@ -1966,4 +1966,4 @@ class LLMClient:
 
 
     def conversation(self, system_prompt):
-        return Conversation(self, system_prompt)
+        return Convo(self, system_prompt)

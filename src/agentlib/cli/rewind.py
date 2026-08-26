@@ -14,7 +14,6 @@ from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .altmode import AltMode
-    from ..conversation import Conversation
 
 
 @dataclass

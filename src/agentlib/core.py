@@ -12,5 +12,4 @@ if pydantic.__version__ < '2':
 
 from .utils import JSON_INDENT
 from .client import LLMClient, ValidationError, BadRequestError
-from .conversation import Conversation
 from .agent import BaseAgent

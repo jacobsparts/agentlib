@@ -6,7 +6,7 @@
 |--------|-------------|
 | `agent.py` | `BaseAgent`, `@tool` decorator, `AgentMeta` metaclass |
 | `client.py` | `LLMClient` - unified API for LLM providers |
-| `conversation.py` | Conversation state management |
+| `conversation.py` | Canonical block-message Convo state management |
 | `llm_registry.py` | Model/provider registration |
 | `config.py` | User configuration loading |
 | `core.py` | Core re-exports |

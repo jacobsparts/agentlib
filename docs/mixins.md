@@ -143,7 +143,7 @@ See [python_tools.md](python_tools.md) for `PythonToolMixin`, `PythonToolRespons
 
 ## AttachmentMixin (Persistent Context)
 
-Adds named attachments that persist in conversation context. Content is injected via placeholders in message content, replaced at render time by `Conversation._messages()`.
+Adds named attachments that persist in conversation context. Content is injected via placeholders in message content, replaced at render time by `Convo.projected_messages()`.
 
 ```python
 from agentlib import BaseAgent, AttachmentMixin
@@ -167,7 +167,7 @@ with MyAgent() as agent:
 - `detach(name)` - Remove attachment from context
 - `list_attachments()` - Get currently active attachments
 
-**How it works:** Attachments are buffered and flushed into the next user message as `_attachments` metadata. The message content contains `[Attachment: name]` placeholders that `Conversation._messages()` replaces with the rendered content at LLM call time.
+**How it works:** Attachments are buffered and flushed into the next user message as `_attachments` metadata. The message content contains `[Attachment: name]` placeholders that `Convo.projected_messages()` replaces with the rendered content at LLM call time.
 
 **Invalidation:** When an attachment is updated or detached, the old content is removed from the message. Only the small placeholder `[Attachment: name]` remains as a breadcrumb.
 
