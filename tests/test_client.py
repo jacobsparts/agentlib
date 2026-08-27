@@ -506,6 +506,27 @@ def test_usage_normalization_handles_uncached_input_with_separate_cache_tokens()
     assert usage["reasoning_tokens"] == 384
 
 
+def test_usage_normalization_does_not_double_count_hybrid_cache_fields():
+    from agentlib.utils import UsageTracker
+
+    tracker = UsageTracker()
+    usage = tracker._normalize(
+        "omniroute/glm-5.3-flash",
+        {
+            "prompt_tokens": 7108,
+            "prompt_tokens_details": {"cached_tokens": 6656},
+            "completion_tokens": 512,
+            "total_tokens": 7620,
+            "completion_tokens_details": {"reasoning_tokens": 346},
+            "cache_read_input_tokens": 6656,
+        },
+    )
+
+    assert usage["prompt_tokens"] == 452
+    assert usage["cached_tokens"] == 6656
+    assert usage["completion_tokens"] == 166
+    assert usage["reasoning_tokens"] == 346
+
 @pytest.mark.parametrize(
     "api_type,method_name",
     [

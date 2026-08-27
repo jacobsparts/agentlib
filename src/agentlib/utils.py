@@ -36,11 +36,16 @@ class UsageTracker:
         return 0
 
     def _prompt_and_cached_tokens(self, usage):
+        # OpenAI-style payloads report the cached subset inside the prompt total
+        # (prompt_tokens_details.cached_tokens). Some proxies also attach
+        # Anthropic-style cache fields describing the same cache; adding those
+        # on top double-counts, so OpenAI-style details take precedence.
         cached_tokens = self._coalesce_paths(usage, [
             'native_tokens_cached',
             ('prompt_tokens_details', 'cached_tokens'),
         ])
-        cached_tokens += (usage.get('cache_read_input_tokens') or 0) + (usage.get('cache_creation_input_tokens') or 0)
+        if not cached_tokens:
+            cached_tokens = (usage.get('cache_read_input_tokens') or 0) + (usage.get('cache_creation_input_tokens') or 0)
         reported_prompt_tokens = self._coalesce_paths(usage, [
             'native_tokens_prompt',
             'prompt_tokens',
