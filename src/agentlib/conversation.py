@@ -1,6 +1,51 @@
 import json
 
 
+def _attachment(media_type, data):
+    return {
+        "type": "attachment",
+        "media_type": media_type,
+        "data_type": "bytes",
+        "data": data,
+    }
+
+
+def _image_attachment(data):
+    from .client import BadRequestError
+
+    if not isinstance(data, bytes):
+        raise BadRequestError("Image attachment must be bytes")
+    media_type = {
+        b"\xff\xd8\xff": "image/jpeg",
+        b"\x89PN": "image/png",
+    }.get(data[:3])
+    if media_type is None:
+        raise BadRequestError("Unsupported image format")
+    return _attachment(media_type, data)
+
+
+def _audio_attachment(data):
+    from .client import BadRequestError
+
+    if not isinstance(data, bytes):
+        raise BadRequestError("Audio attachment must be bytes")
+    if data[:4] == b"RIFF":
+        media_type = "audio/wav"
+    elif data[:4] == b"fLaC":
+        media_type = "audio/flac"
+    elif data[:4] == b"OggS":
+        media_type = "audio/ogg"
+    elif data[:4] == b"FORM":
+        media_type = "audio/aiff"
+    elif data[:3] == b"ID3" or data[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        media_type = "audio/mp3"
+    elif data[:2] in (b"\xff\xf1", b"\xff\xf9"):
+        media_type = "audio/aac"
+    else:
+        raise BadRequestError(f"Unsupported audio format (magic: {data[:4].hex()})")
+    return _attachment(media_type, data)
+
+
 def _content_blocks(content):
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
@@ -133,9 +178,12 @@ class Convo:
         return resp_msg
 
     def usermsg(self, content, **kwargs):
+        blocks = _content_blocks(content)
+        blocks.extend(_image_attachment(data) for data in kwargs.pop("images", ()) or ())
+        blocks.extend(_audio_attachment(data) for data in kwargs.pop("audio", ()) or ())
         return self.append_message({
             "role": "user",
-            "content": _content_blocks(content),
+            "content": blocks,
             **kwargs,
         })
 
