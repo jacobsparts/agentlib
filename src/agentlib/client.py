@@ -888,6 +888,7 @@ class LLMClient:
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.model_config['api_key']}",
+                **self.model_config["headers"],
             }
             body = json.dumps(req)
             request_path = self.model_config.get('request_path', self.model_config['path'])
@@ -1175,6 +1176,7 @@ class LLMClient:
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f"Bearer {self.model_config['api_key']}",
+            **self.model_config['headers'],
         }
         try:
             request_path = self.model_config.get(
