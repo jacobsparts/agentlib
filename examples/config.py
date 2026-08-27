@@ -13,10 +13,12 @@ register_provider("local",
     timeout=300,
     tools=False,
     api_type="completions",
+    headers={"X-Proxy-Token": "..."},
 )
 
 register_model("local", "llama-3.3-70b",
     aliases="llama",
+    headers={"X-Route": "llama"},
     input_cost=0.0,
     output_cost=0.0,
 )

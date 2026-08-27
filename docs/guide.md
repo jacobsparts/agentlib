@@ -84,6 +84,7 @@ tools or run an agent loop.
 - **Anthropic**: `anthropic/claude-sonnet-4-5`
 - Set via env vars: `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
 - **Custom models**: Create `~/.agentlib/config.py` to register providers/models and configure agents (see `examples/config.py`)
+- **Custom headers**: Pass `headers={...}` to providers or models; model values override provider values. Headers apply to `completions` and `responses` transports only.
 
 ### Tool Decorator
 ```python
