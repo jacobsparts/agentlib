@@ -18,8 +18,10 @@ class UsageTracker:
             atexit.register(self.print_stats)
 
     def log(self, model_name, usage):
+        normalized = self._normalize(model_name, usage)
         with self.lock:
-            self.history.append((model_name, usage))
+            self.history.append((model_name, normalized))
+        return normalized
 
     def _coalesce_paths(self, obj, paths):
         for path in paths:
@@ -117,9 +119,8 @@ class UsageTracker:
             'completion_tokens': 0, 'reasoning_tokens': 0, 'cost': 0.0
         })
         for model_name, usage in self.history:
-            normalized = self._normalize(model_name, usage)
-            for k in normalized:
-                totals[model_name][k] += normalized[k]
+            for k in usage:
+                totals[model_name][k] += usage[k]
         return totals
 
     def print_stats(self):

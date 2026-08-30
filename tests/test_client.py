@@ -455,8 +455,8 @@ def test_input_token_ratio_updates_from_prompt_plus_cached_tokens():
 
     client = LLMClient("sonnet")
     client.usage_tracker.input_tokens_per_byte = {}
-    client._update_input_tokens_per_byte(
-        1_000,
+    usage = client.usage_tracker._normalize(
+        client.model_name,
         {
             "prompt_tokens": 200,
             "prompt_tokens_details": {"cached_tokens": 50},
@@ -464,6 +464,7 @@ def test_input_token_ratio_updates_from_prompt_plus_cached_tokens():
             "completion_tokens_details": {"reasoning_tokens": 10},
         },
     )
+    client._update_input_tokens_per_byte(1_000, usage)
 
     assert client.usage_tracker.input_tokens_per_byte[client.model_name] == pytest.approx(0.2)
 
@@ -473,8 +474,8 @@ def test_input_token_ratio_handles_uncached_input_with_separate_cache_tokens():
 
     client = LLMClient("sonnet")
     client.usage_tracker.input_tokens_per_byte = {}
-    client._update_input_tokens_per_byte(
-        1_000,
+    usage = client.usage_tracker._normalize(
+        client.model_name,
         {
             "input_tokens": 110,
             "cache_read_input_tokens": 3716,
@@ -482,6 +483,7 @@ def test_input_token_ratio_handles_uncached_input_with_separate_cache_tokens():
             "output_tokens_details": {"thinking_tokens": 384},
         },
     )
+    client._update_input_tokens_per_byte(1_000, usage)
 
     assert client.usage_tracker.input_tokens_per_byte[client.model_name] == pytest.approx(3.826)
 

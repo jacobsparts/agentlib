@@ -615,11 +615,7 @@ class LLMClient:
     def _update_input_tokens_per_byte(self, input_bytes, usage):
         if not usage or not input_bytes:
             return
-        ratio_usage = usage
-        if transform := self.model_config.get('token_transform'):
-            ratio_usage = transform(ratio_usage)
-        prompt_tokens, cached_tokens = self.usage_tracker._prompt_and_cached_tokens(ratio_usage)
-        input_tokens = prompt_tokens + cached_tokens
+        input_tokens = usage['prompt_tokens'] + usage['cached_tokens']
         if input_tokens <= 0:
             return
         ratios = getattr(self.usage_tracker, "input_tokens_per_byte", None)
@@ -928,8 +924,8 @@ class LLMClient:
                     'provider_metadata': {'stop_reason': stop_reason},
                 }
                 if usage:
-                    self.usage_tracker.log(self.model_name, usage)
-                    self._update_input_tokens_per_byte(self._current_input_bytes, usage)
+                    normalized_usage = self.usage_tracker.log(self.model_name, usage)
+                    self._update_input_tokens_per_byte(self._current_input_bytes, normalized_usage)
 
                 # Truncated response: feed it back and retry with doubled max_tokens.
                 # Keeps doubling until prompt + output would exceed context_window.
@@ -1200,8 +1196,8 @@ class LLMClient:
                 raise Exception(f"API Error {response.status}: {response_data}")
             response_json = json.loads(response_data)
             if usage := response_json.get('usage'):
-                self.usage_tracker.log(self.model_name, usage)
-                self._update_input_tokens_per_byte(self._current_input_bytes, usage)
+                normalized_usage = self.usage_tracker.log(self.model_name, usage)
+                self._update_input_tokens_per_byte(self._current_input_bytes, normalized_usage)
             return self._parse_responses_result(response_json)
         finally:
             conn.close()
@@ -1323,8 +1319,8 @@ class LLMClient:
                 raise Exception(f"API Error {response.status}: {response_data}")
             response_json = json.loads(response_data)
             if usage := response_json.get('usage'):
-                self.usage_tracker.log(self.model_name, usage)
-                self._update_input_tokens_per_byte(self._current_input_bytes, usage)
+                normalized_usage = self.usage_tracker.log(self.model_name, usage)
+                self._update_input_tokens_per_byte(self._current_input_bytes, normalized_usage)
             response_content = response_json.get('content')
             if not isinstance(response_content, list):
                 raise RuntimeError(
@@ -1513,8 +1509,8 @@ class LLMClient:
                 raise Exception(f"API Error {response.status}: {response_data}")
             response_json = json.loads(response_data)
             if usage := response_json.get('usageMetadata'):
-                self.usage_tracker.log(self.model_name, usage)
-                self._update_input_tokens_per_byte(self._current_input_bytes, usage)
+                normalized_usage = self.usage_tracker.log(self.model_name, usage)
+                self._update_input_tokens_per_byte(self._current_input_bytes, normalized_usage)
             if not response_json.get('candidates'):
                 raise Exception(f"candidates missing from response: {response_json}")
             candidate = response_json['candidates'][0]
