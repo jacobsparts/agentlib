@@ -787,7 +787,9 @@ class REPLMixin:
                 source.append("# " + text.replace("\n", "\n# "))
             elif kind == "reasoning":
                 continue
-            elif kind in ("tool_call", "attachment"):
+            elif kind == "attachment":
+                source.append("print('Assistant generated an attachment; this REPL cannot display it.')")
+            elif kind == "tool_call":
                 raise NotImplementedError(
                     f"REPLAgent cannot execute assistant {kind!r} blocks"
                 )
