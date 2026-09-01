@@ -20,10 +20,15 @@ class ProviderConfig:
     tools: bool = False
     api_type: str = "completions"
     token_transform: object = None    # callable(usage_dict) -> usage_dict
+    requires_api_key: bool = True
     cost_transform: object = None     # callable(prompt, cached, completion, reasoning, in_cost, cached_cost, out_cost, rsn_cost) -> (in_cost, cached_cost, out_cost, rsn_cost)
     response_transform: object = None # callable(resp_msg, tools) -> resp_msg
     response_parser: object = None    # callable(response_json) -> (message, stop_reason, usage)
     headers: dict = field(default_factory=dict)
+
+    @property
+    def api_key(self):
+        return os.getenv(f"{self.provider.upper()}_API_KEY")
 
 @dataclass
 class ModelConfig:
@@ -51,6 +56,22 @@ class EndpointRegistry:
         self._providers = {}
         self._aliases = {}
 
+    def list_models(self):
+        aliases_by_model = {}
+        for alias, full_name in self._aliases.items():
+            aliases_by_model.setdefault(full_name, []).append(alias)
+        return [
+            {
+                "full_name": full_name,
+                "provider": model.provider.provider,
+                "alias": full_name.split("/", 1)[1],
+                "model": model.model,
+                "aliases": sorted(aliases_by_model.get(full_name, [])),
+            }
+            for full_name, model in sorted(self._models.items())
+            if not model.provider.requires_api_key or model.provider.api_key
+        ]
+
     def register_provider(self, name, **kwargs):
         kwargs['provider'] = name
         self._providers[name] = ProviderConfig(**kwargs)
@@ -71,36 +92,31 @@ class EndpointRegistry:
         return self._aliases.get(name, name)
 
     def get_model_config(self, name):
-        # Resolve alias if it exists
-        resolved_name = self._aliases.get(name, name)
-        
-        # Check if model exists
-        if resolved_name not in self._models:
-            # Provide helpful error message
-            available = list(self._models.keys()) + list(self._aliases.keys())
+        try:
+            model_obj = self._models[self._aliases.get(name, name)]
+        except KeyError:
             raise ModelNotFoundError(
-                f"Unknown model '{name}'. Available models and aliases:\n" +
-                "\n".join(f"  - {m}" for m in sorted(available))
+                f"Unknown model '{name}'\nAvailable models:\n"
+                + "\n".join(f"  - {model['full_name']}" for model in self.list_models())
             )
-        
-        model_obj = self._models[resolved_name]
-        _model = dict(model_obj.__dict__)
-        _provider = _model.pop('provider').__dict__
-        keys = _model.keys() | _provider.keys()
-        model_config = { k: v if (v := _model.get(k)) is not None else _provider.get(k) for k in keys }
-        model_config['headers'] = {**_provider['headers'], **_model['headers']}
-        model_config['path'] = _provider['path']
-        model_config['request_path'] = model_obj.request_path
-        env_var = f"{model_config['provider'].upper()}_API_KEY"
-        if not (api_key := os.getenv(env_var)):
-            raise Exception(f"{env_var} is not set.")
-        return {**model_config, 'api_key': api_key}
+        if model_obj.provider.requires_api_key and not model_obj.provider.api_key:
+            raise Exception(f"{model_obj.provider.provider.upper()}_API_KEY not set")
+        return {
+            **{k:v for k,v in model_obj.__dict__.items() if not k == 'provider'},
+            **{k:v for k,v in model_obj.provider.__dict__.items() if model_obj.__dict__.get(k) is None},
+            'provider': model_obj.provider.provider,
+            'headers': {**model_obj.provider.headers, **model_obj.headers},
+            'path': model_obj.provider.path,
+            'request_path': model_obj.request_path,
+            'api_key': model_obj.provider.api_key,
+        }
 
 registry = EndpointRegistry()
 register_provider = registry.register_provider
 register_model = registry.register_model
 get_model_config = registry.get_model_config
 resolve_model_name = registry.resolve_model_name
+list_models = registry.list_models
 
 # --- OpenAI ---
 register_provider("openai",
