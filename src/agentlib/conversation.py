@@ -61,6 +61,18 @@ def _content_blocks(content):
     return [{"type": "text", "text": json.dumps(content)}]
 
 
+def _canonical_message(message):
+    content = message.get("content")
+    if not isinstance(content, list):
+        raise TypeError("canonical message content must be a list of typed blocks")
+    if any(
+        not isinstance(block, dict) or not isinstance(block.get("type"), str)
+        for block in content
+    ):
+        raise TypeError("canonical message content must contain typed blocks")
+    return message
+
+
 class Convo:
     def __init__(self, llm_client, system_prompt):
         self.llm_client = llm_client
@@ -105,25 +117,32 @@ class Convo:
         return self._messages
 
     def replace_messages(self, messages):
-        self._messages = list(messages)
+        messages = list(messages)
+        for message in messages:
+            _canonical_message(message)
+        self._messages = messages
 
     def append_message(self, message):
-        self._messages.append(message)
+        self._messages.append(_canonical_message(message))
         return message
 
     def extend_messages(self, messages):
         messages = list(messages)
+        for message in messages:
+            _canonical_message(message)
         self._messages.extend(messages)
         return messages
 
     def insert_message(self, index, message):
-        self._messages.insert(index, message)
+        self._messages.insert(index, _canonical_message(message))
         return message
 
     def pop_message(self, index=-1):
         return self._messages.pop(index)
 
     def update_message(self, message, **changes):
+        updated = {**message, **changes}
+        _canonical_message(updated)
         message.update(changes)
         return message
 

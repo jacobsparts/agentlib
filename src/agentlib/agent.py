@@ -256,8 +256,6 @@ class BaseAgent(metaclass=AgentMeta):
     @staticmethod
     def _text_content(message):
         content = message.get("content", [])
-        if isinstance(content, str):
-            return content
         return "\n".join(
             block["text"]
             for block in content
