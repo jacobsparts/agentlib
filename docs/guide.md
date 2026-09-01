@@ -8,7 +8,7 @@
 from agentlib import BaseAgent
 
 class MyAgent(BaseAgent):
-    model = 'google/gemini-3.6-flash'
+    model = 'google/gemini-3.7-flash'
     system = "You are a helpful assistant. Use tools to accomplish tasks."
 
     @BaseAgent.tool
@@ -26,7 +26,7 @@ Use `one_shot()` when no conversation state or agent tool loop is needed:
 from agentlib import one_shot
 
 text = one_shot(
-    "google/gemini-3.6-flash",
+    "google/gemini-3.7-flash",
     system="Answer concisely.",
     user="Summarize this.",
 )
@@ -43,7 +43,7 @@ messages = [{
     "role": "user",
     "content": [{"type": "text", "text": "Summarize this."}],
 }]
-response = one_shot("google/gemini-3.6-flash", messages=messages)
+response = one_shot("google/gemini-3.7-flash", messages=messages)
 ```
 
 `messages` is mutually exclusive with `system` and `user`. One of `messages`
@@ -59,7 +59,7 @@ class Classification(BaseModel):
     confidence: float
 
 response = one_shot(
-    "google/gemini-3.6-flash",
+    "google/gemini-3.7-flash",
     system="Classify the request.",
     user="Where is my order?",
     tools={"classify": Classification},
@@ -79,9 +79,9 @@ tools or run an agent loop.
 ## Key Concepts
 
 ### Model Selection
-- **Google**: `google/gemini-3.1-pro`, `google/gemini-3.6-flash`
+- **Google**: `google/gemini-3.1-pro`, `google/gemini-3.7-flash`
 - **OpenAI**: `openai/gpt-5.6-luna-high`
-- **Anthropic**: `anthropic/claude-sonnet-4-5`
+- **Anthropic**: `anthropic/claude-sonnet-4-6`
 - Set via env vars: `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
 - **Custom models**: Create `~/.agentlib/config.py` to register providers/models and configure agents (see `examples/config.py`)
 - **Custom headers**: Pass `headers={...}` to providers or models; model values override provider values. Headers apply to `completions` and `responses` transports only.
@@ -139,7 +139,7 @@ Requires `AttachmentMixin`:
 from agentlib import BaseAgent, AttachmentMixin
 
 class MyAgent(AttachmentMixin, BaseAgent):
-    model = 'google/gemini-3.6-flash'
+    model = 'google/gemini-3.7-flash'
     system = "You are a helpful assistant."
     # attach/detach methods are now available
 ```
@@ -174,7 +174,7 @@ def clear_file(self, path: str = "File path"):
 ```
 
 **Features:**
-- `usermsg()`/`toolmsg()` return `None` (side effect only)
+- `usermsg()`/`toolmsg()` return the canonical message they append
 - `self.attach(name, content)` to attach data to a response
 - `self.detach(name)` to remove an attachment from context
 - Auto-formatted as `-------- BEGIN name --------` / `-------- END name ----------`
@@ -256,7 +256,7 @@ def submit(self, **payload):
 
 ```python
 class AnalystAgent(BaseAgent):
-    model = 'google/gemini-3.6-flash'
+    model = 'google/gemini-3.7-flash'
     system = "Analyze data and provide insights."
 
     @BaseAgent.tool
@@ -264,7 +264,7 @@ class AnalystAgent(BaseAgent):
         self.respond(analysis)
 
 class MainAgent(BaseAgent):
-    model = 'google/gemini-3.6-flash'
+    model = 'google/gemini-3.7-flash'
     system = "Make decisions based on analyst input."
 
     def __init__(self, sku):

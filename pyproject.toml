@@ -7,7 +7,7 @@ name            = "agentlib"
 version         = "0.2.1"
 description     = "A simple framework for building LLM-powered agents with tool support."
 readme          = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license         = "MIT"
 authors         = [{name = "Jacob Stoner", email = "jacob@jacobsparts.com"}]
 
