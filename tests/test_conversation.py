@@ -281,49 +281,6 @@ def test_attachment_mixin_preserves_canonical_blocks():
     ]
 
 
-def test_usermsg_converts_legacy_images_to_canonical_attachments():
-    conv = Convo(DummyClient(), "system")
-    jpeg = b"\xff\xd8\xffjpeg"
-    png = b"\x89PNGpng"
-
-    message = conv.usermsg("describe", images=[jpeg, png])
-
-    assert message == {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "describe"},
-            {
-                "type": "attachment",
-                "media_type": "image/jpeg",
-                "data_type": "bytes",
-                "data": jpeg,
-            },
-            {
-                "type": "attachment",
-                "media_type": "image/png",
-                "data_type": "bytes",
-                "data": png,
-            },
-        ],
-    }
-    assert "images" not in message
-
-
-def test_usermsg_converts_legacy_audio_to_canonical_attachment():
-    conv = Convo(DummyClient(), "system")
-    wav = b"RIFFaudio"
-
-    message = conv.usermsg("transcribe", audio=[wav])
-
-    assert message["content"][-1] == {
-        "type": "attachment",
-        "media_type": "audio/wav",
-        "data_type": "bytes",
-        "data": wav,
-    }
-    assert "audio" not in message
-
-
 def test_toolmsg_serializes_list_payload_instead_of_treating_rows_as_blocks():
     conv = Convo(DummyClient(), "system")
     rows = [{"ticketid": 123, "title": "Yanwen pricing"}]

@@ -918,3 +918,119 @@ def test_responses_api_output_validation_and_reasoning():
         "text": "final answer",
     }
 
+
+def test_parse_responses_result_extracts_input_file_and_input_image_attachments():
+    from agentlib.client import LLMClient
+
+    client = LLMClient("sonnet")
+    client.model_config["api_type"] = "responses"
+
+    parsed = client._parse_responses_result({
+        "output": [{
+            "type": "message",
+            "content": [
+                {"type": "output_text", "text": "here it is"},
+                {
+                    "type": "input_file",
+                    "file_id": "file-123",
+                    "media_type": "application/pdf",
+                },
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/img.png",
+                },
+            ],
+        }],
+        "status": "completed",
+    })
+
+    assert parsed["content"][0] == {"type": "text", "text": "here it is"}
+    assert parsed["content"][1] == {
+        "type": "attachment",
+        "media_type": "application/pdf",
+        "data_type": "provider_id",
+        "data": "file-123",
+    }
+    assert parsed["content"][2] == {
+        "type": "attachment",
+        "media_type": "image/jpeg",
+        "data_type": "url",
+        "data": "https://example.com/img.png",
+    }
+
+
+def test_gemini_inline_data_response_parses_to_canonical_attachment(monkeypatch):
+    import base64
+
+    from agentlib.client import LLMClient
+
+    response_payload = {
+        "candidates": [{
+            "content": {"parts": [{
+                "inlineData": {
+                    "mimeType": "image/png",
+                    "data": base64.b64encode(b"png-bytes").decode("ascii"),
+                },
+            }]},
+            "finishReason": "STOP",
+        }],
+    }
+
+    class Response:
+        status = 200
+
+        def read(self):
+            return json.dumps(response_payload).encode()
+
+    class Connection:
+        def __init__(self, *args, **kwargs):
+            self.sock = self
+
+        def connect(self):
+            pass
+
+        def setsockopt(self, *args):
+            pass
+
+        def request(self, method, path, body, headers):
+            pass
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "agentlib.client.DeadlineHTTPSConnection",
+        Connection,
+    )
+    client = LLMClient("google/gemini-3.6-flash")
+    client.model_config["api_type"] = "gemini"
+    client.model_config["api_key"] = "test-key"
+    client._current_input_bytes = None
+
+    response = client._call_gemini(
+        [{"role": "user", "content": [{"type": "text", "text": "show me"}]}],
+        None,
+    )
+
+    assert response["content"] == [{
+        "type": "attachment",
+        "media_type": "image/png",
+        "data_type": "bytes",
+        "data": b"png-bytes",
+    }]
+    assert response["provider_metadata"] == {"stop_reason": "STOP"}
+
+
+def test_attachment_helper_returns_canonical_block():
+    from agentlib.client import _attachment
+
+    assert _attachment("image/png", "bytes", b"png") == {
+        "type": "attachment",
+        "media_type": "image/png",
+        "data_type": "bytes",
+        "data": b"png",
+    }
+

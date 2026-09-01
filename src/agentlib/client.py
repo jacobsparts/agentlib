@@ -165,7 +165,8 @@ def _parse_completions_response(response_json):
     return choice.get('message', {}), choice.get('finish_reason'), response_json.get('usage')
 
 
-
+def _attachment(media_type, data_type, data):
+    return {"type": "attachment", "media_type": media_type, "data_type": data_type, "data": data}
 
 
 def _openai_compatible_message_to_transport_blocks(message):
@@ -194,7 +195,9 @@ def _openai_compatible_message_to_transport_blocks(message):
                     'data': item['file_id'],
                 })
             else:
-                raise NotImplementedError(f"Unknown legacy block in completions: {kind!r}")
+                raise NotImplementedError(
+                    f"Unsupported {kind!r} content part in OpenAI-compatible message"
+                )
     reasoning = (
         message.get('reasoning_content')
         or message.get('reasoning')
