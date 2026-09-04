@@ -25,10 +25,11 @@ class ProviderConfig:
     response_transform: object = None # callable(resp_msg, tools) -> resp_msg
     response_parser: object = None    # callable(response_json) -> (message, stop_reason, usage)
     headers: dict = field(default_factory=dict)
+    api_key: str = None
 
-    @property
-    def api_key(self):
-        return os.getenv(f"{self.provider.upper()}_API_KEY")
+    def __post_init__(self):
+        if self.api_key is None:
+            self.api_key = os.getenv(f"{self.provider.upper()}_API_KEY")
 
 @dataclass
 class ModelConfig:
