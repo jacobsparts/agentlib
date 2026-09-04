@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from agentlib import BaseAgent
 
 class Agent(BaseAgent):
-    model = 'google/gemini-3.6-flash'
+    model = 'google/gemini-3.7-flash'
 
 class TaskProcessingAgent(Agent):
     system = "You are a task processing agent. You will receive structured task data to schedule, store in a database, and retrieve when requested. You handle creating new tasks, listing all tasks, and filtering tasks by priority or date."

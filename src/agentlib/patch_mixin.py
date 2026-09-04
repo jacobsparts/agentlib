@@ -5,7 +5,7 @@ Example:
     from agentlib import BaseAgent, FilePatchMixin
 
     class MyAgent(FilePatchMixin, BaseAgent):
-        model = 'google/gemini-3.6-flash'
+        model = 'google/gemini-3.7-flash'
         system = "You are a helpful coding assistant."
         patch_preview = None  # Agent decides (default)
 

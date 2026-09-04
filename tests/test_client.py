@@ -644,7 +644,7 @@ def test_provider_media_validation_and_filepath_projection(tmp_path):
     with pytest.raises(BadRequestError, match="Audio input is not supported by OpenAI Responses API"):
         responses_client.validate_media_type("audio/wav")
 
-    gemini_client = LLMClient("google/gemini-3.6-flash")
+    gemini_client = LLMClient("google/gemini-3.7-flash")
     gemini_client.model_config["api_type"] = "gemini"
     # Gemini accepts audio
     gemini_client.validate_media_type("audio/wav")
@@ -714,7 +714,7 @@ def test_gemini_preserves_thought_signatures_in_canonical_messages(
         "agentlib.client.DeadlineHTTPSConnection",
         Connection,
     )
-    client = LLMClient("google/gemini-3.6-flash")
+    client = LLMClient("google/gemini-3.7-flash")
     client.model_config["api_type"] = "gemini"
     client.model_config["api_key"] = "test-key"
     client._current_input_bytes = None
@@ -790,7 +790,7 @@ def test_gemini_history_without_thought_signature_uses_shim():
     class Calc(BaseModel):
         num: int
 
-    client = LLMClient("google/gemini-3.6-flash", native=True)
+    client = LLMClient("google/gemini-3.7-flash", native=True)
     client.model_config["api_type"] = "gemini"
     historical_messages = [
         {
@@ -1005,7 +1005,7 @@ def test_gemini_inline_data_response_parses_to_canonical_attachment(monkeypatch)
         "agentlib.client.DeadlineHTTPSConnection",
         Connection,
     )
-    client = LLMClient("google/gemini-3.6-flash")
+    client = LLMClient("google/gemini-3.7-flash")
     client.model_config["api_type"] = "gemini"
     client.model_config["api_key"] = "test-key"
     client._current_input_bytes = None

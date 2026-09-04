@@ -5,7 +5,7 @@ Example:
     from agentlib import BaseAgent, MCPMixin
 
     class MyAgent(MCPMixin, BaseAgent):
-        model = 'google/gemini-3.6-flash'
+        model = 'google/gemini-3.7-flash'
         system = "You are a helpful assistant."
         mcp_servers = [
             ('fs', 'npx -y @mcp/server-filesystem /tmp'),

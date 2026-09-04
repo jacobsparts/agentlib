@@ -5,7 +5,7 @@ Example:
     from agentlib import BaseAgent, PythonToolMixin
 
     class MyAgent(PythonToolMixin, BaseAgent):
-        model = 'google/gemini-3.6-flash'
+        model = 'google/gemini-3.7-flash'
         system = "You are a helpful assistant."
 
         @BaseAgent.tool
@@ -211,7 +211,7 @@ class PythonToolResponseMixin(PythonToolMixin):
 
     Example:
         class CalcAgent(PythonToolResponseMixin, BaseAgent):
-            model = 'google/gemini-3.6-flash'
+            model = 'google/gemini-3.7-flash'
             system = "You are a calculator. Use python_execute_response to compute and return results."
     """
 
@@ -290,7 +290,7 @@ class PythonMCPMixin(PythonToolMixin):
         from agentlib import BaseAgent, PythonMCPMixin
 
         class MyAgent(PythonMCPMixin, BaseAgent):
-            model = 'google/gemini-3.6-flash'
+            model = 'google/gemini-3.7-flash'
             system = "You are a helpful assistant."
             repl_mcp_servers = [
                 ('fs', '/usr/bin/mcp-server-filesystem /tmp'),

@@ -15,7 +15,7 @@ Or create your own minimal assistant:
     from agentlib.cli import CLIAgent
 
     class MyBot(CLIAgent):
-        model = 'google/gemini-3.6-flash'
+        model = 'google/gemini-3.7-flash'
         system = "You are helpful."
 
     MyBot.main()
@@ -27,7 +27,7 @@ from agentlib.cli import CLIAgent
 class PythonHelper(CLIAgent):
     """A Python-focused assistant with a custom welcome message."""
 
-    model = 'google/gemini-3.6-flash'
+    model = 'google/gemini-3.7-flash'
     system = """You are a Python programming assistant. You can:
 - Execute Python code to answer questions
 - Help debug code
@@ -51,7 +51,7 @@ Use submit_response for text-only answers that don't need code execution."""
 class VerboseAssistant(CLIAgent):
     """An assistant that shows detailed tool execution."""
 
-    model = 'google/gemini-3.6-flash'
+    model = 'google/gemini-3.7-flash'
     system = "You are a helpful assistant. Use Python to solve problems when appropriate."
 
     welcome_message = (
