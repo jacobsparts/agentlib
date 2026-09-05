@@ -52,7 +52,7 @@ print(agent.run("Which five customers spent the most on paid orders this year?")
 - [Features](#features)  
 - [Quick Start](#quick-start)  
 - [How It Works](#how-it-works)  
-- [Supported LLM Providers](#supported-llm-providers)  
+- [Providers & Transports](#providers--transports)  
 - [Installation](#installation)  
 - [FAQ](#faq)  
 - [Contributing](#contributing)  
@@ -83,7 +83,7 @@ I treat AgentLib as a lightweight workhorse, a prototyping playground, and a stu
 • **Runtime tool mutation** – Dynamically adjust tool parameters, enums, or availability at any step, so the model only sees the options that matter.  
 • **Clean separation** – LLM orchestration lives in the core; your business logic lives in agents and tools.  
 • **Conversation management** – tracks multi-turn context and system prompts for you.  
-• **Provider-agnostic** – OpenAI, Anthropic, Google, X.AI, OpenRouter, or roll your own.  
+• **Provider-agnostic** – OpenAI, Anthropic, and Google built-in, plus easy plug-in for custom endpoints and gateways.  
 • **Tool call emulation** – Native or emulated tool calls with built-in validation and retry, bypassing inconsistent or poor constrained output performance.  
 • **Attachment system** – Inject files and data into conversations as dynamic context.  
 • **Multi-tool calls in a single LLM turn** – Fire several tools in one response.  
@@ -172,17 +172,44 @@ I kept the loop simple:
 
 ---
 
-## Supported LLM Providers
+## Providers & Transports
 
-| Provider | Env var key        |
-|----------|--------------------|
-| OpenAI   | `OPENAI_API_KEY`   |
-| Anthropic | `ANTHROPIC_API_KEY`   |
-| Google   | `GOOGLE_API_KEY`   |
-| X.AI     | `XAI_API_KEY`      |
-| OpenRouter | `OPENROUTER_API_KEY` |
+Built-in support covers the primary foundation model providers:
 
-Add more chat completions compatible endpoints with `register_provider` and `register_model`.  See `examples/config.py` and `llm_registry.py` for details.
+| Provider | Env Var | Supported Transports |
+|----------|---------|----------------------|
+| OpenAI | `OPENAI_API_KEY` | `completions`, `responses` |
+| Anthropic | `ANTHROPIC_API_KEY` | `messages` |
+| Google | `GOOGLE_API_KEY` | `gemini` |
+
+Four wire transports handle communication:
+- **`completions`** – Standard OpenAI-compatible `/v1/chat/completions` (OpenAI, OpenRouter, xAI, Groq, Ollama, vLLM).  
+- **`responses`** – OpenAI Responses API (`/v1/responses`).  
+- **`messages`** – Anthropic Messages API (`/v1/messages`).  
+- **`gemini`** – Google Generative Language API (`/v1beta`).  
+
+### Use Subscriptions via Gateways
+
+Most people prefer using their existing subscriptions over paying per-token API rates. AgentLib connects directly to model gateways:
+
+- **[cursor-gateway](https://github.com/jacobsparts/cursor-gateway)** — OpenAI-compatible Chat Completions (`completions` transport) powered by Cursor with synthetic tool calling.  
+- **[codex-gateway](https://github.com/jacobsparts/codex-gateway)** — OpenAI Responses API (`responses` transport) powered by Codex/ChatGPT OAuth with multi-account rotation.  
+
+Add custom providers, gateways, or local models in `~/.agentlib/config.py`:
+
+```python
+# Point at a local gateway or custom endpoint
+register_provider("cursor",
+    host="localhost",
+    port=8000,
+    path="/v1/chat/completions",
+    api_type="completions",
+    tools=True,
+)
+register_model("cursor", "claude-3.7-sonnet")
+```
+
+See `examples/config.py` and `src/agentlib/llm_registry.py` for full options (RPM limits, custom headers, token transforms, pricing).
 
 ---
 
