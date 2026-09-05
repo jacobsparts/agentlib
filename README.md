@@ -10,22 +10,37 @@
 > **💡 Tip:** I pair AgentLib with AI coding assistants like Claude Code. Drop `docs/guide.md` into your context and start building. Mixins add shell, Python execution, MCP, and CLI features. 
 
 ```python
+import sqlite3
 from agentlib import BaseAgent
 
-class FactorialAgent(BaseAgent):
+class DatabaseAgent(BaseAgent):
     model = "google/gemini-3.7-flash"
-    system = "You are a factorial calculation assistant. Use the tool to fulfill user requests."
-    
-    @BaseAgent.tool
-    def factorial(self, number: int = "Number to calculate factorial for"):
-        """Calculates a factorial."""
-        def fact(n):
-            return 1 if n == 0 else n * fact(n - 1)
-        self.respond(fact(number))  # Marks conversation done and returns result
+    system = """You answer questions about a SQLite database.
 
-agent = FactorialAgent()
-print(agent.run("What is the factorial of 20?"))
-# Output: 2432902008176640000
+Schema:
+  customers(id, name, region)
+  orders(id, customer_id, total, status, created_at)
+
+Use execute_query to gather the information needed to answer the user. When you have enough information, answer clearly and directly. If the requested information is unavailable, the request is ambiguous, or it cannot be fulfilled from this database, explain that instead of guessing."""
+
+    def __init__(self):
+        self.db = sqlite3.connect("file:sales.db?mode=ro", uri=True)
+        self.db.row_factory = sqlite3.Row
+
+    @BaseAgent.tool
+    def execute_query(self, sql: str = "The read-only SQLite query to execute"):
+        """Executes SQL and returns the resulting rows."""
+        if sql.lstrip().split(None, 1)[0].upper() not in {"SELECT", "WITH"}:
+            raise ValueError("Only read-only queries are allowed")
+        return [dict(row) for row in self.db.execute(sql)]
+
+    @BaseAgent.tool
+    def answer(self, response: str = "The answer to the user's request"):
+        """Returns the final answer to the user."""
+        self.respond(response)
+
+agent = DatabaseAgent()
+print(agent.run("Which five customers spent the most on paid orders this year?"))
 ```
 
 <!--ts-->
