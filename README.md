@@ -21,7 +21,10 @@ Schema:
   customers(id, name, region)
   orders(id, customer_id, total, status, created_at)
 
-Use execute_query to gather the information needed to answer the user. When you have enough information, answer clearly and directly. If the requested information is unavailable, the request is ambiguous, or it cannot be fulfilled from this database, explain that instead of guessing."""
+Use execute_query to gather the information needed to answer the user.
+When you have enough information, answer clearly and directly. If the
+requested information is unavailable, the request is ambiguous, or it
+cannot be fulfilled from this database, explain that instead of guessing."""
 
     def __init__(self):
         self.db = sqlite3.connect("file:sales.db?mode=ro", uri=True)
