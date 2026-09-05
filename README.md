@@ -1,13 +1,13 @@
 # AgentLib
 
-*A lightweight library for crafting and shipping LLM agents quickly, powered by Python signatures and Pydantic under the hood.*
+*A lightweight library I use to craft and ship LLM agents quickly—Python signatures and Pydantic do the heavy lifting.*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 &nbsp;
 ![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue)
 &nbsp;
 
-> **💡 Tip:** AgentLib works well with AI coding assistants like Claude Code. Add `docs/guide.md` to your context and start building. Mixins add shell, Python execution, MCP, and CLI features. 
+> **💡 Tip:** I pair AgentLib with AI coding assistants like Claude Code. Drop `docs/guide.md` into your context and start building. Mixins add shell, Python execution, MCP, and CLI features. 
 
 ```python
 from agentlib import BaseAgent
@@ -36,9 +36,9 @@ print(agent.run("What is the factorial of 20?"))
 - [How It Works](#how-it-works)  
 - [Supported LLM Providers](#supported-llm-providers)  
 - [Installation](#installation)  
-- [Roadmap](#roadmap)  
 - [FAQ](#faq)  
 - [Contributing](#contributing)  
+- [Related Projects](#related-projects)  
 - [License](#license)  
 <!--te-->
 
@@ -46,15 +46,15 @@ print(agent.run("What is the factorial of 20?"))
 
 ## Why AgentLib?
 
-AgentLib was born from necessity during a business crisis—sudden tariff changes required an adaptive pricing system immediately. We needed to iterate at unprecedented speed, so we built from first principles: a minimal foundation that went straight into production.
+I built AgentLib during a business crisis—sudden tariff changes, and I needed an adaptive pricing system *immediately*. There wasn't time for a framework tour. I started from first principles: a tiny Python-native core that went straight into production.
 
-The result:
+Years later, I still reach for it first:
 
-* **Production-proven.** Powers our live dynamic-pricing, product-classification, and customer-support automations.  
+* **Production-proven.** It powers my live dynamic-pricing, product-classification, and customer-support automations.  
 * **Fast iteration.** New tools or model swaps are often a one-line change.  
 * **Minimal deps.** Only `pydantic` (v1 & v2).  
 
-Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in minimalist agent design.
+I treat AgentLib as a lightweight workhorse, a prototyping playground, and a study in minimalist agent design. You're welcome to do the same.
 
 ---
 
@@ -62,15 +62,15 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 
 • **Python-native agent classes** – subclass `BaseAgent`, add methods, you're done.  
 • **Decorator-based tool registry** – function signature & docstring ⇒ tool schema; Pydantic validation happens behind the scenes.  
-• **Runtime tool mutation** – Dynamically adjust tool parameters, enums, or availability at any step, improving agent focus and performance by presenting only relevant options.  
+• **Runtime tool mutation** – Dynamically adjust tool parameters, enums, or availability at any step, so the model only sees the options that matter.  
 • **Clean separation** – LLM orchestration lives in the core; your business logic lives in agents and tools.  
 • **Conversation management** – tracks multi-turn context and system prompts for you.  
 • **Provider-agnostic** – OpenAI, Anthropic, Google, X.AI, OpenRouter, or roll your own.  
-• **Tool call emulation** – Enables both native and emulated tool calls with built-in validation and retry, bypassing inconsistent or poor constrained output performance.  
+• **Tool call emulation** – Native or emulated tool calls with built-in validation and retry, bypassing inconsistent or poor constrained output performance.  
 • **Attachment system** – Inject files and data into conversations as dynamic context.  
-• **Multi-tool calls in a single LLM turn** – Execute multiple tools efficiently in one response.  
+• **Multi-tool calls in a single LLM turn** – Fire several tools in one response.  
 • **Automatic retry with exponential back-off** – Built-in resilience for API failures and rate limits.  
-• **MCP integration** – Connect to Model Context Protocol servers for external tools and APIs.  
+• **MCP integration** – Optional mixin if you want Model Context Protocol servers as extra tools.  
 • **Shell & Python execution** – Give agents their own persistent bash shell or Python environment.  
 • **Code-first agent paradigm** – REPLAgent lets the LLM write Python directly instead of JSON tool calls—ideal for code-heavy tasks.  
 • **CLI builder** – Build interactive terminal assistants with markdown rendering and persistent history.  
@@ -79,6 +79,8 @@ Use AgentLib as a lightweight workhorse, a prototyping playground, or a study in
 ---
 
 ## Quick Start
+
+Three commands and you're in:
 
 ```bash
 # 1. Install
@@ -91,7 +93,7 @@ export ANTHROPIC_API_KEY=sk-...
 python examples/todo_agent.py
 ```
 
-Or copy–paste the snippet below into a new file:
+Or drop this into a new file:
 
 ```python
 from agentlib import BaseAgent
@@ -120,22 +122,18 @@ google/gemini-3.7-flash: In=342, Out=54, Rsn=61, Cost=$0.000
 ### Build an Interactive CLI Assistant
 
 ```python
-from agentlib import PythonMCPMixin, PythonToolResponseMixin
+from agentlib import PythonToolResponseMixin
 from agentlib.cli import CLIAgent
 
 class DataExtractor(
-    PythonMCPMixin,             # Python REPL with lightweight MCP client
     PythonToolResponseMixin,    # Direct code execution response
     CLIAgent,               # Interactive terminal interface
 ):
     model = "google/gemini-3.7-flash"
     system = """You are a data extraction specialist. You scrape websites, pull tables
-from PDFs, and transform messy data into clean formats. You have browser automation
-via puppeteer and Python with pandas, pdfplumber, beautifulsoup4, and openpyxl."""
+from PDFs, and transform messy data into clean formats. You have Python with pandas,
+pdfplumber, beautifulsoup4, and openpyxl."""
     welcome_message = "[bold]Data Extractor[/bold]\nGive me a URL or file. I'll get you the data."
-    repl_mcp_servers = [
-        ('browser', 'npx -y @anthropic/mcp-server-puppeteer'),
-    ]
 
 if __name__ == "__main__":
     DataExtractor.main()
@@ -144,6 +142,8 @@ if __name__ == "__main__":
 ---
 
 ## How It Works
+
+I kept the loop simple:
 
 1. **Define tools** with ordinary Python functions.  
 2. A metaclass decorator captures each function's signature & docstring, generating a JSON schema with Pydantic.  
@@ -184,12 +184,12 @@ AgentLib supports Python 3.10+ on Linux.  Untested on macOS and Windows.
 Yes—agents are normal Python classes, so you can instantiate or subclass them inside each other.
 
 **Is Pydantic mandatory?**  
-You don't need to import it directly; AgentLib uses it internally for validation generated from your function signatures.  However, you can use Pydantic models directly by passing them to the tool decorator, or you can pass a model generator function.
+You don't need to import it directly; I use it internally for validation generated from your function signatures.  However, you can use Pydantic models directly by passing them to the tool decorator, or you can pass a model generator function.
 
 **What about concurrency?**  
-AgentLib uses traditional concurrency internally—spawned processes for isolated execution environments (shell, REPL) and threading with select-based I/O for the MCP client. Public APIs are thread-safe, so you can safely call agents from multiple threads—which is exactly what we do in production. The select-based I/O is gevent-compatible when monkey-patched.
+I use traditional concurrency internally—spawned processes for isolated execution environments (shell, REPL) and threading with select-based I/O for the MCP client. Public APIs are thread-safe, so you can safely call agents from multiple threads—which is exactly what I do in production. The select-based I/O is gevent-compatible when monkey-patched.
 
-AgentLib never uses the ambient `multiprocessing` start method for workers it owns; it explicitly uses `spawn`. Do the same for application-owned workers that will create agents or call providers:
+I never use the ambient `multiprocessing` start method for workers AgentLib owns; I explicitly use `spawn`. Do the same for application-owned workers that will create agents or call providers:
 
 ```python
 import multiprocessing as mp
@@ -201,12 +201,21 @@ process.start()
 
 Do not use `fork` for agent workers. If AgentLib was imported before an external `fork`, creating provider-admission, shell, or REPL resources in that child fails fast with an actionable error rather than risking inherited locks, threads, queues, HTTP state, or SQLite locking failures.
 
-
 ---
 
 ## Contributing
 
 Issues, feature requests, and pull requests are welcome.  
+
+---
+
+## Related Projects
+
+Part of a family of developer tools I maintain for agentic coding and model gateways. [Code Agent](https://github.com/jacobsparts/code-agent) started life inside AgentLib—I split it into its own project as it grew, and it stands as a large-scale example of what you can build on this library:
+
+- **[Code Agent](https://github.com/jacobsparts/code-agent)** — A Python REPL-native coding agent designed around lean context, persistent execution state, and infinite context via lossless turn coalescing.  
+- **[codex-gateway](https://github.com/jacobsparts/codex-gateway)** — Pure-Python OpenAI Responses API-compatible gateway for Codex/ChatGPT OAuth accounts with quota management, account rotation, and automated resets.  
+- **[cursor-gateway](https://github.com/jacobsparts/cursor-gateway)** — Pure-Python OpenAI-compatible Chat Completions gateway that wraps the Cursor Agent API with synthetic checkpoints to provide real native tool calling and cache-friendly session routing.  
 
 ---
 
