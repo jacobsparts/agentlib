@@ -222,25 +222,6 @@ register_model("google","gemini-3.7-flash",
     output_cost=9.00,
 )
 
-# --- X.AI ---
-register_provider("xai",
-    host="api.x.ai",
-    path="/v1/chat/completions",
-    rpm=1000,
-    concurrency=50,
-    timeout=300,
-    tools=False,
-    api_type="completions",
-)
-register_model("xai","grok-4.5",
-    model="grok-4.5",
-    input_cost=2.0,
-    cached_cost=0.5,
-    output_cost=6.0,
-    context_window=500_000,
-    config={"reasoning_effort": "high"},
-)
-
 
 def cloudflare_response_parser(response_json):
     result = response_json.get('result', response_json)
