@@ -513,7 +513,7 @@ def test_usage_normalization_does_not_double_count_hybrid_cache_fields():
 
     tracker = UsageTracker()
     usage = tracker._normalize(
-        "omniroute/glm-5.3-flash",
+        "omniroute/deepseek-v4.1-flash",
         {
             "prompt_tokens": 7108,
             "prompt_tokens_details": {"cached_tokens": 6656},
