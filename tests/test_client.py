@@ -717,6 +717,7 @@ def test_gemini_preserves_thought_signatures_in_canonical_messages(
     client = LLMClient("google/gemini-3.7-flash")
     client.model_config["api_type"] = "gemini"
     client.model_config["api_key"] = "test-key"
+    client.model_config["preserve_reasoning"] = True
     client._current_input_bytes = None
 
     response = client._call_gemini(

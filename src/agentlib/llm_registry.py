@@ -18,6 +18,7 @@ class ProviderConfig:
     concurrency: int = None
     timeout: int = 900
     tools: bool = False
+    preserve_reasoning: bool = False
     api_type: str = "completions"
     token_transform: object = None    # callable(usage_dict) -> usage_dict
     requires_api_key: bool = True
@@ -37,6 +38,7 @@ class ModelConfig:
     provider: ProviderConfig
     path: str = None
     config: dict = field(default_factory=dict)
+    preserve_reasoning: object = None
     context_window: int = None
     max_input_tokens: int = None
     input_cost: float = None

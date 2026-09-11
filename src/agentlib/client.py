@@ -795,6 +795,7 @@ class LLMClient:
 
             content = []
             tool_calls = []
+            reasoning_content = []
             cache_breakpoint = (
                 bool(message.get('_prompt_cache_breakpoint'))
                 and self.model_config.get('explicit_prompt_cache')
@@ -810,7 +811,8 @@ class LLMClient:
                 elif kind == 'attachment':
                     content.append(self._openai_attachment(block))
                 elif kind == 'reasoning':
-                    continue
+                    if self.model_config.get('preserve_reasoning'):
+                        reasoning_content.append(block.get('text', ''))
                 elif kind == 'commentary':
                     content.append({'type': 'text', 'text': block['text']})
                 elif kind == 'tool_call':
@@ -838,6 +840,8 @@ class LLMClient:
                 out['content'] = ''
             if tool_calls:
                 out['tool_calls'] = tool_calls
+            if reasoning_content:
+                out['reasoning_content'] = '\n'.join(reasoning_content)
             if cache_breakpoint and content:
                 content[-1] = {
                     **content[-1],
@@ -1263,13 +1267,14 @@ class LLMClient:
                         'input': block['args'],
                     })
                 elif kind == 'reasoning':
-                    item = {'type': 'thinking', 'thinking': block.get('text', '')}
-                    metadata = block.get('provider_metadata') or {}
-                    if 'signature' in metadata:
-                        item['signature'] = metadata['signature']
-                    elif 'signature' in block:
-                        item['signature'] = block['signature']
-                    content.append(item)
+                    if self.model_config.get('preserve_reasoning'):
+                        item = {'type': 'thinking', 'thinking': block.get('text', '')}
+                        metadata = block.get('provider_metadata') or {}
+                        if 'signature' in metadata:
+                            item['signature'] = metadata['signature']
+                        elif 'signature' in block:
+                            item['signature'] = block['signature']
+                        content.append(item)
                 else:
                     raise NotImplementedError(
                         f"Unknown transport content type: {kind!r}"
@@ -1424,17 +1429,18 @@ class LLMClient:
                         part['thoughtSignature'] = block['thought_signature']
                     parts.append(part)
                 elif kind == 'reasoning':
-                    part = {'text': block.get('text', ''), 'thought': True}
-                    metadata = block.get('provider_metadata') or {}
-                    if 'thought_signature' in metadata:
-                        part['thoughtSignature'] = metadata['thought_signature']
-                    elif 'thoughtSignature' in metadata:
-                        part['thoughtSignature'] = metadata['thoughtSignature']
-                    elif 'thoughtSignature' in block:
-                        part['thoughtSignature'] = block['thoughtSignature']
-                    elif 'thought_signature' in block:
-                        part['thoughtSignature'] = block['thought_signature']
-                    parts.append(part)
+                    if self.model_config.get('preserve_reasoning'):
+                        part = {'text': block.get('text', ''), 'thought': True}
+                        metadata = block.get('provider_metadata') or {}
+                        if 'thought_signature' in metadata:
+                            part['thoughtSignature'] = metadata['thought_signature']
+                        elif 'thoughtSignature' in metadata:
+                            part['thoughtSignature'] = metadata['thoughtSignature']
+                        elif 'thoughtSignature' in block:
+                            part['thoughtSignature'] = block['thoughtSignature']
+                        elif 'thought_signature' in block:
+                            part['thoughtSignature'] = block['thought_signature']
+                        parts.append(part)
                 else:
                     raise NotImplementedError(
                         f"Unknown transport content type: {kind!r}"
