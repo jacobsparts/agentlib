@@ -47,6 +47,7 @@ class ModelConfig:
     reasoning_cost: float = None
     timeout: int = None
     tools: bool = None
+    force_tool_calls: bool = False
     headers: dict = field(default_factory=dict)
 
     @property

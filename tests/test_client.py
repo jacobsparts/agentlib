@@ -5,6 +5,100 @@ import pytest
 from agentlib.client import ValidationError, _extract_tool_calls_json, _preprocess_tool_call_response
 
 
+@pytest.mark.parametrize("api_type", ["completions", "responses", "messages", "gemini"])
+@pytest.mark.parametrize("force", [None, False, True])
+@pytest.mark.parametrize("with_tools", [False, True])
+def test_force_tool_calls_request_scope(monkeypatch, api_type, force, with_tools):
+    from agentlib.client import LLMClient
+
+    class Captured(Exception):
+        pass
+
+    requests = []
+
+    class Connection:
+        def __init__(self, *args, **kwargs):
+            self.sock = self
+
+        def connect(self):
+            pass
+
+        def setsockopt(self, *args):
+            pass
+
+        def close(self):
+            pass
+
+        def request(self, method, path, body, headers):
+            requests.append(json.loads(body))
+            raise Captured()
+
+    config = dict(model="test", api_type=api_type, host="example.test", port=443,
+                  path="/test", headers={}, api_key=None, config={})
+    if force is not None:
+        config["force_tool_calls"] = force
+    monkeypatch.setattr("agentlib.client.get_model_config", lambda name: config)
+    monkeypatch.setattr("agentlib.client.DeadlineHTTPSConnection", Connection)
+    client = LLMClient("test/model")
+    tools = [{"type": "function", "function": {
+        "name": "lookup", "description": "Look up", "parameters": {
+            "type": "object", "properties": {"value": {"type": "string"}}
+        }
+    }}] if with_tools else None
+    with pytest.raises(Captured):
+        getattr(client, "_call_" + api_type)([
+            {"role": "user", "content": [{"type": "text", "text": "hello"}]}
+        ], tools)
+    req = requests[0]
+    assert "force_tool_calls" not in req
+    if not with_tools:
+        assert "tool_choice" not in req
+        assert "toolConfig" not in req
+    elif api_type == "gemini":
+        assert req["toolConfig"]["functionCallingConfig"]["mode"] == ("ANY" if force else "AUTO")
+    elif api_type == "messages":
+        assert req["tool_choice"] == {"type": "any" if force else "auto"}
+    elif force:
+        assert req["tool_choice"] == "required"
+    elif api_type == "completions":
+        assert req["tool_choice"] == "auto"
+    else:
+        assert "tool_choice" not in req
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_model_force_tool_calls_field(force):
+    from agentlib.llm_registry import ModelConfig
+
+    assert ModelConfig(model="test", provider=None).force_tool_calls is False
+    assert ModelConfig(model="test", provider=None, force_tool_calls=force).force_tool_calls is force
+
+
+@pytest.mark.parametrize("api_type,native", [("completions", False), ("gemini", True)])
+def test_force_tool_calls_shim_sends_no_native_tools(monkeypatch, api_type, native):
+    from pydantic import create_model
+    from agentlib.client import LLMClient
+
+    config = dict(model="test", api_type=api_type, tools=native, force_tool_calls=True)
+    monkeypatch.setattr("agentlib.client.get_model_config", lambda name: config)
+    client = LLMClient("test/model")
+    tool = create_model("Lookup", value=(dict[str, str], ...))
+    tool.__doc__ = "Look up values."
+    calls = []
+
+    def call(messages, tools=None):
+        calls.append(tools)
+        return {"role": "assistant", "content": [{"type": "text", "text":
+            '{"function_calls":[{"name":"lookup","arguments":{"value":{}}}]}'
+        }]}
+
+    monkeypatch.setattr(client, "_call", call)
+    result = client.call([{"role": "user", "content": [{"type": "text", "text": "lookup"}]}],
+                         {"lookup": tool}, retry=0)
+    assert result["content"][-1]["type"] == "tool_call"
+    assert calls == [None]
+
+
 def test_one_shot_user_shorthand_returns_truthy_text_blocks(monkeypatch):
     from agentlib import client as client_module
     from agentlib.client import one_shot

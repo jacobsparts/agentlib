@@ -873,7 +873,7 @@ class LLMClient:
             if tools:
                 req.update({
                     "tools": tools,
-                    "tool_choice": "required",
+                    "tool_choice": "required" if self.model_config.get("force_tool_calls") else "auto",
                 })
             if self.model_config['port'] == 443:
                 conn = DeadlineHTTPSConnection(self.model_config['host'], timeout=self.timeout, deadline=self.timeout)
@@ -1068,6 +1068,8 @@ class LLMClient:
             req.setdefault('prompt_cache_options', {'mode': 'explicit'})
         if response_tools:
             req['tools'] = response_tools
+            if self.model_config.get('force_tool_calls'):
+                req['tool_choice'] = 'required'
         return req
 
     def _parse_responses_result(self, response_json):
@@ -1296,7 +1298,7 @@ class LLMClient:
                     "description": t['function']['description'],
                     "input_schema": t['function']['parameters'],
                 } for t in tools],
-                "tool_choice": {"type": "any"},
+                "tool_choice": {"type": "any" if self.model_config.get("force_tool_calls") else "auto"},
             })
         conn = DeadlineHTTPSConnection(self.model_config['host'], timeout=self.timeout, deadline=self.timeout)
         headers = {
@@ -1482,7 +1484,7 @@ class LLMClient:
                 "description": t['function']['description'],
                 "parameters": _gemini_transform_schema(t['function']['parameters']),
             } for t in tools]}]
-            req["toolConfig"] = {"functionCallingConfig": {"mode": "ANY"}}
+            req["toolConfig"] = {"functionCallingConfig": {"mode": "ANY" if self.model_config.get("force_tool_calls") else "AUTO"}}
         conn = DeadlineHTTPSConnection(self.model_config['host'], timeout=self.timeout, deadline=self.timeout)
         conn.connect()
         sock = conn.sock
