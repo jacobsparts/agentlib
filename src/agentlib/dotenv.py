@@ -57,9 +57,9 @@ def _decode_quoted(value):
         "\\r": "\r",
         "\\t": "\t",
     }
-    for escaped, replacement in escapes.items():
-        inner = inner.replace(escaped, replacement)
-    return inner
+    # Decode each source escape once. Replacing backslashes first would make
+    # a literal backslash followed by n/r/t look like a new escape sequence.
+    return re.sub(r"\\[\\\"'nrt]", lambda match: escapes[match.group(0)], inner)
 
 
 def dotenv_values(dotenv_path=None, encoding="utf-8"):
