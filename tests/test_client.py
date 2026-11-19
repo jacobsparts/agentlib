@@ -1002,11 +1002,17 @@ def test_responses_api_output_validation_and_reasoning():
     assert parsed["content"][0] == {
         "type": "reasoning",
         "text": "unencrypted reasoning",
+        "provider_metadata": {"responses_reasoning": {
+            "summary": [{"type": "text", "text": "unencrypted reasoning"}],
+        }},
     }
     assert parsed["content"][1] == {
         "type": "reasoning",
         "text": "encrypted reasoning",
-        "provider_metadata": {"encrypted_content": "enc-blob-123"},
+        "provider_metadata": {"responses_reasoning": {
+            "summary": [{"type": "text", "text": "encrypted reasoning"}],
+            "encrypted_content": "enc-blob-123",
+        }},
     }
     assert parsed["content"][2] == {
         "type": "text",

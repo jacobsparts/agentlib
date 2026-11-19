@@ -1023,13 +1023,20 @@ class LLMClient:
                 elif kind == 'attachment':
                     content.append(self._responses_attachment(block))
                 elif kind == 'reasoning':
-                    flush_content()
+                    if not self.model_config.get('preserve_reasoning'):
+                        continue
                     metadata = block.get('provider_metadata') or {}
-                    if 'encrypted_content' in metadata:
+                    reasoning = metadata.get('responses_reasoning')
+                    if reasoning is not None:
+                        flush_content()
                         message_items.append({
                             'type': 'reasoning',
-                            'encrypted_content': metadata['encrypted_content'],
                             'summary': [],
+                            **{
+                                key: reasoning[key]
+                                for key in ('id', 'content', 'summary', 'encrypted_content')
+                                if key in reasoning
+                            },
                         })
                 elif kind == 'tool_call':
                     flush_content()
@@ -1110,19 +1117,21 @@ class LLMClient:
                             f"Unknown Responses content type: {content_kind!r}"
                         )
             elif kind == 'reasoning':
-                reasoning_block = {
+                reasoning = {
+                    key: item[key]
+                    for key in ('id', 'content', 'summary', 'encrypted_content')
+                    if key in item
+                }
+                blocks.append({
                     'type': 'reasoning',
                     'text': '\n'.join(
                         part['text']
-                        for part in item.get('summary', [])
+                        for field in ('content', 'summary')
+                        for part in item.get(field) or []
                         if part.get('text')
                     ),
-                }
-                if 'encrypted_content' in item:
-                    reasoning_block['provider_metadata'] = {
-                        'encrypted_content': item['encrypted_content'],
-                    }
-                blocks.append(reasoning_block)
+                    'provider_metadata': {'responses_reasoning': reasoning},
+                })
             elif kind == 'output_text':
                 blocks.append({'type': 'text', 'text': item['text']})
             elif kind == 'function_call':
